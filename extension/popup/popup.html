@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FluxCatch</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="mark" aria-hidden="true">
+        <svg viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+          <rect x="10" y="10" width="108" height="108" rx="30" class="s-ink" fill="none" stroke-width="11"/>
+          <rect x="56" y="24" width="16" height="42" rx="8" class="c-accent"/>
+          <path d="M32 56 L64 88 L96 56 Z" class="c-primary"/>
+        </svg>
+      </div>
+      <div><h1>FluxCatch</h1><p id="statusText" role="status" aria-live="polite" aria-atomic="true">正在读取页面…</p></div>
+    </div>
+    <div class="toolbar">
+      <button id="scanButton" class="icon-btn" title="重新扫描" aria-label="重新扫描">↻</button>
+      <button id="settingsButton" class="icon-btn" title="设置" aria-label="设置">⚙</button>
+    </div>
+  </header>
+
+  <section class="control-row">
+    <div class="segmented" role="tablist" aria-label="FluxCatch 视图">
+      <button id="mediaTab" type="button" class="active" data-view="media" role="tab" aria-selected="true" aria-controls="mediaView" tabindex="0">媒体<span class="count" id="mediaCount">0</span></button>
+      <button id="jobsTab" type="button" data-view="jobs" role="tab" aria-selected="false" aria-controls="jobsView" tabindex="-1">任务<span class="count" id="jobCount">0</span></button>
+    </div>
+    <select id="filterSelect" aria-label="媒体类型">
+      <option value="all">全部</option>
+      <option value="video">视频</option>
+      <option value="audio">音频</option>
+      <option value="stream">流媒体</option>
+    </select>
+  </section>
+
+  <main class="body">
+    <section id="mediaView" class="view active" role="tabpanel" aria-labelledby="mediaTab" tabindex="0">
+      <div id="mediaList" class="media-list" aria-live="polite" aria-label="检测到的媒体"></div>
+      <div id="emptyState" class="empty">
+        <div class="radar" aria-hidden="true"><i class="core"></i><span class="ring r1"></span><span class="ring r2"></span><span class="ring r3"></span></div>
+        <div class="empty-copy" role="status" aria-live="polite" aria-atomic="true"><h2>少女祈祷中……</h2><p>播放视频后自动检测可下载的视频、音频与流媒体</p></div>
+        <button id="forceButton" type="button" class="dl-btn">⟳ 强制刷新检测</button>
+      </div>
+    </section>
+
+    <section id="jobsView" class="view" role="tabpanel" aria-labelledby="jobsTab" tabindex="0" hidden>
+      <div id="hostCard" class="host-card">
+        <span id="hostDot" class="dot" aria-hidden="true"></span>
+        <div role="status" aria-live="polite" aria-atomic="true"><strong id="hostTitle">高速下载功能</strong><small id="hostDetail">正在检查是否可用…</small></div>
+        <button id="pingButton" type="button" class="link">重试</button>
+      </div>
+      <div id="jobsList" class="jobs-list" aria-label="下载任务"></div>
+      <div id="jobAnnouncer" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
+      <div id="jobsEmpty" class="empty compact"><h2>暂无任务</h2><p>开始下载后可在这里查看实时速度与进度。</p></div>
+    </section>
+  </main>
+
+  <footer class="foot-actions">
+    <button id="workspaceButton" type="button" class="foot-btn">打开媒体工作台</button>
+    <button id="folderButton" type="button" class="foot-btn">打开下载目录</button>
+    <button id="clearButton" type="button" class="foot-btn" title="清空媒体检测与已结束任务">清空记录</button>
+  </footer>
+
+  <dialog id="downloadDialog" aria-labelledby="downloadDialogTitle" aria-describedby="dialogNote">
+    <form method="dialog" id="downloadForm">
+      <div class="dialog-head"><h2 id="downloadDialogTitle">下载设置</h2><button type="submit" value="cancel" class="close-button" aria-label="关闭">×</button></div>
+      <label>文件名<input id="filenameInput" autocomplete="off" maxlength="200" required></label>
+      <label>保存格式<select id="containerSelect"><option value="mp4">MP4</option><option value="mkv">MKV</option><option value="webm">WebM</option><option value="mp3">MP3（仅音频）</option></select></label>
+      <label id="variantLabel" hidden>清晰度<select id="variantSelect"></select></label>
+      <label class="check"><input id="nativeDirectInput" type="checkbox"><span>使用多连接高速下载</span></label>
+      <p id="dialogNote" class="dialog-note"></p>
+      <div class="dialog-actions"><button type="submit" value="cancel" class="secondary">取消</button><button type="submit" id="confirmDownload" value="default" class="primary">开始下载</button></div>
+    </form>
+  </dialog>
+
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

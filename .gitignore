@@ -1,0 +1,12 @@
+dist/
+__pycache__/
+*.py[cod]
+*.part
+*.part.json
+.DS_Store
+.venv/
+coverage/
+e2e/artifacts/
+e2e/.tmp/
+*.pem
+design/brand-v1/

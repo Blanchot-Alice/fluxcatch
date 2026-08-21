@@ -1,0 +1,7 @@
+{
+  "name": "io.github.blanchot_alice.fluxcatch",
+  "description": "FluxCatch local high-speed download engine",
+  "path": "HOST_PATH",
+  "type": "stdio",
+  "allowed_origins": ["chrome-extension://gpnojfocoanelgibidlhholjobljefab/"]
+}

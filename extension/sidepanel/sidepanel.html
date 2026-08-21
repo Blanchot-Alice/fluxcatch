@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FluxCatch 工作台</title>
+  <link rel="stylesheet" href="sidepanel.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="mark" aria-hidden="true">
+        <svg viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+          <rect x="10" y="10" width="108" height="108" rx="30" class="s-ink" fill="none" stroke-width="11"/>
+          <rect x="56" y="24" width="16" height="42" rx="8" class="c-accent"/>
+          <path d="M32 56 L64 88 L96 56 Z" class="c-primary"/>
+        </svg>
+      </span>
+      <span class="brand-copy"><strong>FluxCatch</strong><small>媒体工作台</small></span>
+    </div>
+    <button id="settingsButton" class="icon-button" type="button" aria-label="打开设置" title="打开设置">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.25A3.25 3.25 0 1 0 12 8.75a3.25 3.25 0 0 0 0 6.5Z"/><path d="M19.1 13.1a7.8 7.8 0 0 0 .05-1.1 7.8 7.8 0 0 0-.05-1.1l2-1.55-2-3.46-2.45.98a8.2 8.2 0 0 0-1.9-1.1L14.4 3.15h-4.8l-.35 2.62a8.2 8.2 0 0 0-1.9 1.1L4.9 5.89l-2 3.46 2 1.55A7.8 7.8 0 0 0 4.85 12c0 .37.02.74.05 1.1l-2 1.55 2 3.46 2.45-.98a8.2 8.2 0 0 0 1.9 1.1l.35 2.62h4.8l.35-2.62a8.2 8.2 0 0 0 1.9-1.1l2.45.98 2-3.46-2-1.55Z"/></svg>
+    </button>
+  </header>
+
+  <main>
+    <section class="page-context" aria-labelledby="pageTitle">
+      <div class="page-mark" aria-hidden="true"><span></span></div>
+      <div class="page-copy">
+        <h1 id="pageTitle">正在读取当前页面…</h1>
+        <p id="pageUrl">请稍候</p>
+      </div>
+      <button id="scanButton" class="quiet-button" type="button">重新扫描</button>
+    </section>
+
+    <section id="hostCard" class="host-card" aria-labelledby="hostTitle">
+      <span id="hostDot" class="status-dot" aria-hidden="true"></span>
+      <div class="host-copy" role="status" aria-live="polite" aria-atomic="true">
+        <h2 id="hostTitle">高速下载功能</h2>
+        <p id="hostDetail">正在检查是否可用…</p>
+      </div>
+      <button id="pingButton" class="text-button" type="button">重试</button>
+    </section>
+
+    <div id="globalError" class="notice error-notice" role="alert" hidden>
+      <div><strong>工作台暂时没有读到数据</strong><p id="errorText">请重试。</p></div>
+      <button id="retryButton" class="text-button" type="button">重试</button>
+    </div>
+
+    <section class="workspace-section" aria-labelledby="mediaHeading">
+      <header class="section-head">
+        <div>
+          <h2 id="mediaHeading">当前页面媒体</h2>
+          <p>检测到的可下载视频、音频与流媒体</p>
+        </div>
+        <span id="mediaCount" class="count" aria-label="0 个媒体">0</span>
+      </header>
+
+      <div id="mediaLoading" class="loading-state" aria-live="polite">
+        <span class="spinner" aria-hidden="true"></span><span>正在整理媒体…</span>
+      </div>
+      <ul id="mediaList" class="media-list" aria-live="polite" hidden></ul>
+      <div id="mediaEmpty" class="empty-state" role="status" aria-live="polite" hidden>
+        <div class="radar" aria-hidden="true"><i class="core"></i><span class="ring r1"></span><span class="ring r2"></span><span class="ring r3"></span></div>
+        <h3>少女祈祷中……</h3>
+        <p>播放视频后自动检测可下载的视频、音频与流媒体</p>
+      </div>
+    </section>
+
+    <section class="workspace-section jobs-section" aria-labelledby="jobsHeading">
+      <header class="section-head">
+        <div>
+          <h2 id="jobsHeading">下载任务</h2>
+          <p><span id="activeJobCount">0</span> 个任务正在进行</p>
+        </div>
+        <button id="clearCompletedButton" class="quiet-button" type="button" disabled>清理已结束任务</button>
+      </header>
+
+      <div id="jobsLoading" class="loading-state" aria-live="polite">
+        <span class="spinner" aria-hidden="true"></span><span>正在恢复任务…</span>
+      </div>
+      <ul id="jobsList" class="jobs-list" hidden></ul>
+      <div id="jobAnnouncer" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
+      <div id="jobsEmpty" class="empty-state compact" role="status" aria-live="polite" hidden>
+        <h3>暂无下载任务</h3>
+        <p>从扩展弹窗开始下载后，进度会持续保留在这里。</p>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <script type="module" src="sidepanel.js"></script>
+</body>
+</html>

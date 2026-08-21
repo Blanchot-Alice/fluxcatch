@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FluxCatch 设置</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <main>
+    <header class="opt-topbar">
+      <div class="brand">
+        <div class="mark" aria-hidden="true">
+          <svg viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+            <rect x="10" y="10" width="108" height="108" rx="30" class="s-ink" fill="none" stroke-width="11"/>
+            <rect x="56" y="24" width="16" height="42" rx="8" class="c-accent"/>
+            <path d="M32 56 L64 88 L96 56 Z" class="c-primary"/>
+          </svg>
+        </div>
+        <div><h1>FluxCatch 设置</h1><p>选择下载方式、保存格式与提醒偏好</p></div>
+      </div>
+    </header>
+    <form id="settingsForm">
+      <section class="opt-section">
+        <h2><span class="bar"></span>下载</h2>
+        <div class="opt-grid">
+          <div class="opt-field">
+            <label for="concurrentFragments">同时下载几个视频片段</label>
+            <input id="concurrentFragments" name="concurrentFragments" type="number" min="1" max="24" aria-describedby="concurrentFragmentsHelp">
+            <small id="concurrentFragmentsHelp" class="field-help">一个视频通常由许多小片段组成。这里设置一次同时下载几个片段；推荐 8。数值越大不一定越快，下载出错时可改为 4。</small>
+          </div>
+          <div class="opt-field">
+            <label for="concurrentRanges">大文件同时下载几部分</label>
+            <input id="concurrentRanges" name="concurrentRanges" type="number" min="1" max="24" aria-describedby="concurrentRangesHelp">
+            <small id="concurrentRangesHelp" class="field-help">开启“自动加速大文件”后，较大的 MP4、MP3 等文件会拆开下载。这里设置一次同时下载几部分；推荐 8。数值越大不一定越快，下载出错时可改为 4。</small>
+          </div>
+          <div class="opt-field">
+            <label for="outputContainer">下载文件保存格式</label>
+            <select id="outputContainer" name="outputContainer" aria-describedby="outputContainerHelp"><option value="mp4">MP4</option><option value="mkv">MKV</option><option value="webm">WebM</option></select>
+            <small id="outputContainerHelp" class="field-help">推荐 MP4，兼容性最好；合并流媒体或转换格式时生效。</small>
+          </div>
+          <div class="opt-field">
+            <label for="liveDuration">直播多久后自动停止（秒）</label>
+            <input id="liveDuration" name="liveDuration" type="number" min="0" max="86400" aria-describedby="liveDurationHelp">
+            <small id="liveDurationHelp" class="field-help">推荐 0（手动停止）；仅录制直播时生效。</small>
+          </div>
+        </div>
+        <label class="opt-check"><input id="saveAs" name="saveAs" type="checkbox"><span class="switch" aria-hidden="true"></span><span class="txt">每次下载前选择保存位置<small>开启后会弹出“另存为”窗口；关闭则保存到默认下载目录。</small></span></label>
+        <label class="opt-check"><input id="useNativeForDirect" name="useNativeForDirect" type="checkbox"><span class="switch" aria-hidden="true"></span><span class="txt">自动加速大文件<small>开启后，较大的 MP4、MP3 等文件会拆成多部分同时下载；关闭后由浏览器普通下载。</small></span></label>
+      </section>
+      <section class="opt-section">
+        <h2><span class="bar"></span>检测与命名</h2>
+        <div class="opt-grid">
+          <div class="opt-field"><label for="minimumKiB">最小媒体大小（KiB）</label><input id="minimumKiB" name="minimumKiB" type="number" min="0" max="102400"></div>
+          <div class="opt-field"><label for="filenameTemplate">文件名模板</label><input id="filenameTemplate" name="filenameTemplate" placeholder="{title} - {height}"></div>
+        </div>
+        <p class="hint">可用字段：<code>{title}</code> <code>{host}</code> <code>{kind}</code> <code>{height}</code> <code>{date}</code></p>
+        <div class="opt-field blocked-domains"><label for="blockedDomains">忽略域名（每行一个）</label><textarea id="blockedDomains" name="blockedDomains" rows="7" placeholder="ads.example.com"></textarea></div>
+      </section>
+      <section class="opt-section">
+        <h2><span class="bar"></span>界面</h2>
+        <label class="opt-check"><input id="showNotifications" name="showNotifications" type="checkbox"><span class="switch" aria-hidden="true"></span><span class="txt">下载完成或失败时提醒我<small>开启后会收到系统通知，无需一直打开扩展。</small></span></label>
+        <div class="permission-row">
+          <div><strong>高速下载功能</strong><small id="nativePermissionStatus" role="status" aria-live="polite">正在检查是否可用…</small></div>
+          <button id="nativePermissionButton" type="button" class="secondary-btn">开启高速下载功能</button>
+        </div>
+      </section>
+      <div class="opt-actions"><span id="saveStatus" class="save-status" role="status" aria-live="polite" aria-atomic="true"></span><button type="submit" class="save-btn">保存设置</button></div>
+    </form>
+  </main>
+  <script type="module" src="options.js"></script>
+</body>
+</html>

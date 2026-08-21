@@ -1,0 +1,42 @@
+{
+  "manifest_version": 3,
+  "name": "FluxCatch",
+  "description": "FluxCatch — Detect direct media, HLS and DASH streams and download them locally.",
+  "version": "0.2.3",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsi2KFFuIbrDvw0OwBEQLN+cyWH4ro4ES0kF05kH/gDj3rXErpl7CW4nouT/T2PDx/whV+rm9ThGs1z6MNqLgNvn4vcwYMdv9/4k3HnNMn1t3C0TmLethAAGIW1iC1M7UphNLrIA0UOseFA0kPqyHZthGEzX+Q3OrMnBBJwWQ9Uj3ERKXd4BlXdJWiQR3YT+qCXDv0DfcpAkB2caKa+EuxxWdIUIC2mEYKeb1H5+NuTCAoTgfPwVcL+3fnS/OnPqQ0z5rlL2ixkoSoM1gRi5xDDRrdrDE0EQm5WodzMYP7f0PrnIWwGSl1Ixot10hVscjDUdvBVvartBCXi4EqVeTbQIDAQAB",
+  "minimum_chrome_version": "116",
+  "permissions": [
+    "downloads",
+    "sidePanel",
+    "storage",
+    "webRequest"
+  ],
+  "optional_permissions": ["notifications", "nativeMessaging"],
+  "host_permissions": ["http://*/*", "https://*/*"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "FluxCatch",
+    "default_popup": "popup/popup.html"
+  },
+  "options_page": "options/options.html",
+  "side_panel": {
+    "default_path": "sidepanel/sidepanel.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content/content.js"],
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
