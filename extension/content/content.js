@@ -111,6 +111,7 @@
 
   function scan(root = document) {
     inspectPreviews(root);
+    scanSitePayloads(root);
     if (root instanceof HTMLMediaElement) inspectMedia(root);
     for (const element of root.querySelectorAll?.("video, audio") || []) inspectMedia(element);
     for (const source of root.querySelectorAll?.("source[src]") || []) {
@@ -119,6 +120,42 @@
     for (const link of root.querySelectorAll?.('meta[property="og:video"], meta[property="og:video:url"], meta[property="og:video:secure_url"], meta[property="og:audio"], link[rel="preload"][as="video"], link[rel="preload"][as="audio"]') || []) {
       const url = link.content || link.href;
       if (url) send({ url, mime: link.type || "", source: "metadata" });
+    }
+  }
+
+  // Instagram / X keep their direct media URLs inside JSON blobs in <script>
+  // tags; pull them out through the shared site-extract helper (loaded just
+  // before this file). Sent through the same CONTENT_MEDIA pipeline as every
+  // other observation, so background-side validation still applies.
+  function scanSitePayloads(root = document) {
+    const extract = globalThis.__fluxcatchSiteExtract;
+    if (!extract) return;
+    const scripts = [];
+    if (root instanceof HTMLScriptElement) scripts.push(root);
+    if (root.querySelectorAll) scripts.push(...root.querySelectorAll("script"));
+    for (const script of scripts) {
+      const text = script.textContent || "";
+      if (!text || text.length > 8_000_000 || !/video_versions|video_info/.test(text)) continue;
+      for (const video of extract.extractInstagramVideos(text)) {
+        send({
+          url: video.url,
+          mime: video.contentType || "video/mp4",
+          source: "site-payload",
+          width: video.width,
+          height: video.height,
+          title: document.title
+        });
+      }
+      for (const video of extract.extractTwitterVideos(text)) {
+        send({
+          url: video.url,
+          mime: video.contentType || "video/mp4",
+          source: "site-payload",
+          width: video.width,
+          height: video.height,
+          title: document.title
+        });
+      }
     }
   }
 

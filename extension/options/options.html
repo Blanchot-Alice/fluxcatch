@@ -58,12 +58,38 @@
         <div class="opt-field blocked-domains"><label for="blockedDomains">忽略域名（每行一个）</label><textarea id="blockedDomains" name="blockedDomains" rows="7" placeholder="ads.example.com"></textarea></div>
       </section>
       <section class="opt-section">
+        <h2><span class="bar"></span>站点适配器（实验性）</h2>
+        <label class="opt-check"><input id="youtubeEnabled" name="youtubeEnabled" type="checkbox"><span class="switch" aria-hidden="true"></span><span class="txt">启用 YouTube 下载<small>实验性：通过本机安装的 yt-dlp 引擎下载，画质与格式以本机 yt-dlp 为准。默认关闭；关闭时扩展在 YouTube 页面不显示任何界面，也不会处理任何数据。</small></span></label>
+        <div class="permission-row">
+          <div><strong>yt-dlp 引擎</strong><small id="ytdlpStatus" role="status" aria-live="polite">正在检查是否可用…</small></div>
+          <button id="ytdlpRefreshButton" type="button" class="secondary-btn">重新检查</button>
+        </div>
+        <details class="install-guide" id="ytdlpGuide">
+          <summary>安装 yt-dlp 的方法</summary>
+          <ol>
+            <li>打开「终端」（聚焦搜索输入 Terminal 回车）。</li>
+            <li>粘贴执行：<code>brew install yt-dlp</code>；没有 Homebrew 的话用 <code>python3 -m pip install --user yt-dlp</code>。</li>
+            <li>回到本页点击「重新检查」，状态变为已就绪即可下载。</li>
+          </ol>
+        </details>
+      </section>
+      <section class="opt-section">
         <h2><span class="bar"></span>界面</h2>
         <label class="opt-check"><input id="showNotifications" name="showNotifications" type="checkbox"><span class="switch" aria-hidden="true"></span><span class="txt">下载完成或失败时提醒我<small>开启后会收到系统通知，无需一直打开扩展。</small></span></label>
         <div class="permission-row">
           <div><strong>高速下载功能</strong><small id="nativePermissionStatus" role="status" aria-live="polite">正在检查是否可用…</small></div>
           <button id="nativePermissionButton" type="button" class="secondary-btn">开启高速下载功能</button>
         </div>
+        <details class="install-guide" id="nativeInstallGuide">
+          <summary>本地引擎（高速下载）安装方法</summary>
+          <ol>
+            <li>高速下载依赖本地引擎，随扩展仓库一起提供，装一次即可。</li>
+            <li>从源码使用时：打开「终端」，执行 <code>bash ~/Documents/CODEX.ME/fluxcatch/native-host/install-macos.sh</code>（路径按实际仓库位置调整）。</li>
+            <li>从 zip 包使用时：解压 native-host 包后，进入目录执行 <code>bash install-macos.sh</code>。</li>
+            <li>安装器会同时登记 Google Chrome 与 Chrome for Testing，无需手动选择。</li>
+            <li>完成后回到本页点击「开启高速下载功能」或扩展内的「重试」。</li>
+          </ol>
+        </details>
       </section>
       <div class="opt-actions"><span id="saveStatus" class="save-status" role="status" aria-live="polite" aria-atomic="true"></span><button type="submit" class="save-btn">保存设置</button></div>
     </form>

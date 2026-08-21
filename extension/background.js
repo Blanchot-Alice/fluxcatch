@@ -39,7 +39,7 @@ const JOB_STATUSES = new Set(["queued", "starting", "downloading", "remuxing", "
 const TERMINAL_JOB_STATUSES = new Set(["completed", "failed", "cancelled"]);
 const CONTENT_SOURCES = new Set([
   "content", "dom", "loadedmetadata", "durationchange", "mutation",
-  "source-element", "metadata"
+  "source-element", "metadata", "site-payload"
 ]);
 const CONTENT_MESSAGE_TYPES = new Set(["CONTENT_MEDIA", "PAGE_PREVIEW"]);
 const PAGE_PREVIEW_PRIORITIES = new Map([
@@ -51,6 +51,65 @@ const PAGE_PREVIEW_PRIORITIES = new Map([
   ["image_src", 460]
 ]);
 const POLICY_BLOCKED_DOMAINS = Object.freeze(["youtube.com", "youtu.be", "googlevideo.com"]);
+// Minimal site-adapter registry: page URL matchers give detected media their
+// site label, and tab completion fans out to per-site discovery. Bilibili
+// keeps its dedicated DASH machinery; YouTube is an experimental opt-in that
+// delegates the actual transfer to the local yt-dlp engine via the native
+// host; Instagram/X reuse the generic content-script + webRequest pipeline.
+const SITE_ADAPTERS = Object.freeze([
+  {
+    id: "bilibili",
+    label: "Bilibili",
+    pagePattern: /^https?:\/\/(?:www\.|m\.)?bilibili\.com\/(?:video|bangumi\/play)\//i
+  },
+  {
+    id: "youtube",
+    label: "YouTube",
+    experimental: true,
+    pagePattern: /^https?:\/\/(?:www\.|m\.|music\.)?youtube\.com\/watch\b/i
+  },
+  {
+    id: "instagram",
+    label: "Instagram",
+    pagePattern: /^https?:\/\/(?:www\.)?instagram\.com\/(?:p|reel|reels|tv)\/[A-Za-z0-9_-]+/i,
+    mediaHostPattern: /(?:^|\.)(?:cdninstagram\.com|fbcdn\.net)$/i
+  },
+  {
+    id: "twitter",
+    label: "X",
+    pagePattern: /^https?:\/\/(?:www\.|mobile\.)?(?:twitter|x)\.com\/[^/?#]+\/status\/\d+/i,
+    mediaHostPattern: /(?:^|\.)twimg\.com$/i
+  }
+]);
+
+function siteAdapterForPageUrl(url) {
+  const value = canonicalizeUrl(url);
+  if (!value) return null;
+  return SITE_ADAPTERS.find((adapter) => adapter.pagePattern.test(value)) || null;
+}
+
+function siteAdapterForMediaUrl(url) {
+  const value = canonicalizeUrl(url);
+  if (!value) return null;
+  let host = "";
+  try { host = new URL(value).hostname.toLowerCase(); } catch { return null; }
+  if (isBilibiliMediaUrl(value)) return SITE_ADAPTERS.find((adapter) => adapter.id === "bilibili");
+  return SITE_ADAPTERS.find((adapter) => adapter.mediaHostPattern?.test(host)) || null;
+}
+
+// Canonical watch URL for the page candidate handed to the local yt-dlp engine.
+function youtubeWatchUrl(url) {
+  const value = canonicalizeUrl(url);
+  if (!value) return null;
+  let parsed;
+  try { parsed = new URL(value); } catch { return null; }
+  const host = parsed.hostname.toLowerCase();
+  const id = host === "youtu.be" ? parsed.pathname.slice(1) : parsed.searchParams.get("v");
+  if (!id || !/^[\w-]{6,20}$/.test(id)) return null;
+  if (host === "youtu.be" || host.endsWith("youtube.com")) return `https://www.youtube.com/watch?v=${id}`;
+  return null;
+}
+
 const DEFAULT_SETTINGS = {
   concurrentFragments: 8,
   concurrentRanges: 8,
@@ -59,6 +118,7 @@ const DEFAULT_SETTINGS = {
   useNativeForDirect: false,
   minimumBytes: 500 * 1024,
   liveDuration: 0,
+  youtubeEnabled: false,
   blockedDomains: [],
   filenameTemplate: "{title}",
   showNotifications: false
@@ -105,6 +165,10 @@ chrome.webRequest.onBeforeSendHeaders.addListener(
     // response from the previous History API route must not be classified
     // against the URL that happens to be current when the response arrives.
     const bilibiliGeneration = isBilibiliMediaUrl(url) ? bilibiliTabToken(details.tabId) : null;
+    // First media bytes mean the player is live: kick off page discovery now
+    // so the API quality ladder lands before the user ever opens the popup.
+    // discoverBilibiliDash is TTL-guarded, so repeat calls stay cheap no-ops.
+    if (bilibiliGeneration) void triggerSiteDiscovery(details.tabId);
     const allowed = new Set(["accept", "authorization", "cookie", "origin", "referer", "user-agent"]);
     const headers = {};
     let capturedBytes = 0;
@@ -222,7 +286,17 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
     // fail their commit guards before asynchronous cleanup begins.
     invalidateBilibiliTabGeneration(tabId);
     void clearTabAfterRestore(tabId, true);
+    return;
   }
+  // Page finished loading: run site discovery immediately so the toolbar
+  // badge reflects detected media without waiting for the popup to open.
+  if (changeInfo.status === "complete") void triggerSiteDiscovery(tabId);
+});
+
+chrome.tabs.onActivated.addListener(({ tabId }) => {
+  // Chrome keeps per-tab badge text across service-worker restarts, but media
+  // restored from storage.session has no badge until something re-applies it.
+  void refreshTabBadge(tabId);
 });
 
 chrome.downloads.onChanged.addListener((delta) => {
@@ -260,12 +334,15 @@ async function handleMessage(message, sender) {
       // then let the in-flight promise publish through MEDIA_UPDATED instead
       // of making every popup wait on two remote requests.
       await settleWithin(discoverBilibiliDash(tabId), 900);
+      await maybeAddYouTubeCandidate(tabId);
+      const settings = await getSettings();
       const items = [...(tabMedia.get(tabId)?.values() || [])]
         .filter((item) => item.kind !== "segment" && !item.mergedInto)
         .filter((item) => item.kind !== "dash_pair" || isFreshBilibiliCandidate(item))
+        .filter((item) => item.kind !== "youtube" || settings.youtubeEnabled)
         .sort((a, b) => candidateScore(b) - candidateScore(a) || b.lastSeen - a.lastSeen)
         .map(withoutManifestText);
-      return { items, hostStatus, settings: await getSettings() };
+      return { items, hostStatus, settings };
     }
     case "GET_JOBS":
       return { jobs: jobsForUi(), hostStatus };
@@ -286,6 +363,7 @@ async function handleMessage(message, sender) {
       const tabId = validTabId(message.tabId);
       try { await chrome.tabs.sendMessage(tabId, { type: "REQUEST_SCAN" }); } catch { /* restricted page */ }
       await discoverBilibiliDash(tabId, true);
+      await maybeAddYouTubeCandidate(tabId);
       return {};
     }
     case "RELOAD_TAB": {
@@ -313,7 +391,14 @@ async function handleMessage(message, sender) {
         hostStatus = { connected: false, version: null, ffmpeg: false, capabilities: null, needsPermission: true, lastError: null };
         return { hostStatus };
       }
-      await ensureNativePort();
+      const port = await ensureNativePort();
+      // A live port answers with capabilities probed when its process started;
+      // yt-dlp may have been installed or upgraded since. Force a fresh ping
+      // round-trip so the UI's "重新检查" reports the machine's current state
+      // instead of a stale snapshot. The host re-probes yt-dlp on every ping.
+      if (nativePort === port && hostStatus.connected) {
+        try { await pingNativePort(port); } catch { /* a dead port has already reset hostStatus via onDisconnect */ }
+      }
       return { hostStatus };
     }
     case "CANCEL_JOB": {
@@ -446,7 +531,7 @@ async function discoverBilibiliDash(tabId, force = false) {
   const task = (async () => {
     const pageListUrl = new URL("https://api.bilibili.com/x/player/pagelist");
     pageListUrl.searchParams.set(video.key, video.value);
-    const pages = await fetchPublicJson(pageListUrl.href);
+    const pages = await fetchPublicJson(pageListUrl.href, { credentials: "include" });
     if (pages?.code !== 0 || !Array.isArray(pages.data) || !pages.data.length) return false;
     const page = pages.data[Math.min(video.page - 1, pages.data.length - 1)] || pages.data[0];
     const cid = Number(page?.cid);
@@ -457,7 +542,7 @@ async function discoverBilibiliDash(tabId, force = false) {
     playUrl.searchParams.set("qn", "127");
     playUrl.searchParams.set("fnval", "16");
     playUrl.searchParams.set("fourk", "1");
-    const play = await fetchPublicJson(playUrl.href);
+    const play = await fetchPublicJson(playUrl.href, { credentials: "include" });
     const dash = play?.code === 0 && play?.data?.dash;
     if (!dash || typeof dash !== "object") return false;
     const videoTracks = (Array.isArray(dash.video) ? dash.video : [])
@@ -491,14 +576,89 @@ async function discoverBilibiliDash(tabId, force = false) {
   return task;
 }
 
-async function fetchPublicJson(url) {
+// Fan out per-site discovery when a page finishes loading or starts playing.
+// Both underlying helpers are guarded (TTL / in-flight / settings), so calling
+// this repeatedly is a cheap no-op and never blocks the event listener.
+async function triggerSiteDiscovery(tabId) {
+  try {
+    await sessionReady;
+    await discoverBilibiliDash(tabId);
+    await maybeAddYouTubeCandidate(tabId);
+  } catch {
+    // Discovery is best-effort; the popup scan path retries on demand.
+  }
+}
+
+async function refreshTabBadge(tabId) {
+  try {
+    await sessionReady;
+    await updateBadge(tabId);
+  } catch {
+    // The tab may already be gone.
+  }
+}
+
+// The experimental YouTube adapter publishes one page candidate per watch URL.
+// The candidate only exists while the user keeps the toggle enabled in
+// settings; turning it off withdraws the candidate everywhere.
+async function maybeAddYouTubeCandidate(tabId) {
+  if (!Number.isInteger(tabId) || tabId < 0) return;
+  let tab;
+  try { tab = await chrome.tabs.get(tabId); } catch { return; }
+  const settings = await getSettings();
+  const watchUrl = settings.youtubeEnabled ? youtubeWatchUrl(tab?.url) : null;
+  const map = tabMedia.get(tabId);
+  if (!watchUrl) {
+    if (map) await removeYouTubeCandidatesFromTab(tabId, map);
+    return;
+  }
+  if (map?.has(`youtube:${watchUrl}`)) return;
+  await addCandidate(tabId, {
+    id: stableId(`youtube:${watchUrl}`),
+    kind: "youtube",
+    url: watchUrl,
+    mime: "video/mp4",
+    ext: "mp4",
+    title: cleanText(tab?.title, 240),
+    pageTitle: cleanText(tab?.title, 240),
+    tabUrl: watchUrl,
+    source: "site-adapter",
+    site: "youtube",
+    confidence: 1
+  });
+}
+
+async function removeYouTubeCandidatesFromTab(tabId, map) {
+  let removed = false;
+  for (const [key, item] of map) {
+    if (item.kind !== "youtube") continue;
+    map.delete(key);
+    removed = true;
+  }
+  if (!removed) return;
+  await persistSession();
+  await updateBadge(tabId);
+  broadcast({ type: "MEDIA_UPDATED", tabId, item: null });
+}
+
+async function dropYouTubeCandidates() {
+  for (const [tabId, map] of tabMedia) await removeYouTubeCandidatesFromTab(tabId, map);
+}
+
+// `credentials: "include"` lets the service-worker fetch reuse the browser's
+// bilibili.com cookie jar (the manifest already grants host permissions), so a
+// logged-in session receives its full DASH quality ladder instead of the
+// guest-tier 480p ceiling. Guests keep the anonymous tier because no cookie
+// is attached. Cookies only ever travel to the api.bilibili.com origin named
+// in the URL itself.
+async function fetchPublicJson(url, { credentials = "omit" } = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 3_000);
   timer?.unref?.();
   try {
     const response = await fetch(url, {
       method: "GET",
-      credentials: "omit",
+      credentials,
       cache: "no-store",
       redirect: "follow",
       signal: controller.signal
@@ -961,7 +1121,11 @@ async function addCandidate(tabId, input, commitGuard = null) {
   // upgraded.  Recheck here so caption/text-track manifests never become HLS
   // video rows even when input.kind was supplied by the page.
   if (isLikelySubtitleResource({ url, mime: input.mime })) return;
-  if (isPolicyBlocked(url, input.tabUrl)) return;
+  // The store-policy blocklist keeps generic media detection off YouTube. The
+  // opt-in experimental adapter is the one exception: its candidate is the
+  // watch page itself and the actual transfer is delegated to the locally
+  // installed yt-dlp engine, so no googlevideo URL ever flows through here.
+  if (isPolicyBlocked(url, input.tabUrl) && input.kind !== "youtube") return;
   const classified = classifyMedia({
     url,
     mime: input.mime,
@@ -1047,6 +1211,7 @@ async function addCandidate(tabId, input, commitGuard = null) {
     confidence: Math.max(Number(old?.confidence || 0), Number(input.confidence || classified?.confidence || 0.5)),
     source: input.source || old?.source || "unknown",
     sources: [...sources],
+    site: cleanText(input.site, 24) || old?.site || siteAdapterForMediaUrl(url)?.id || "",
     thumbnailUrl: preview?.thumbnailUrl || null,
     thumbnailSource: preview?.thumbnailSource || null,
     thumbnailFrameId: preview?.thumbnailFrameId ?? null,
@@ -1707,7 +1872,9 @@ async function startDownload(candidate, options, tabId) {
   if (!url) throw new Error("媒体地址无效");
   let dashPair = candidate.kind === "dash_pair" ? selectDashPairTracks(candidate, options.variantUrl) : null;
   if (dashPair) url = dashPair.video.url;
-  if (isPolicyBlocked(url, candidate?.tabUrl)) throw new Error("商店版本不支持从此平台下载");
+  // YouTube downloads only ever reach this branch through the explicit
+  // experimental opt-in; the page URL is handed to the local yt-dlp engine.
+  if (isPolicyBlocked(url, candidate?.tabUrl) && candidate?.kind !== "youtube") throw new Error("商店版本不支持从此平台下载");
   const settings = await getSettings();
   if (matchesBlockedDomain(url, settings.blockedDomains) || matchesBlockedDomain(candidate?.tabUrl, settings.blockedDomains)) {
     throw new Error("该域名已在 FluxCatch 设置中被忽略");
@@ -1726,7 +1893,7 @@ async function startDownload(candidate, options, tabId) {
   const pageTitle = candidate.pageTitle || candidate.title || "media";
   const requestedName = cleanText(options.filename, 200) || renderFilename(candidate, settings.filenameTemplate, pageTitle);
   const filename = sanitizeFilename(requestedName);
-  const advanced = candidate.kind === "hls" || candidate.kind === "dash" || candidate.kind === "dash_pair" || opts.extractAudio || opts.convert || opts.useNativeForDirect;
+  const advanced = candidate.kind === "hls" || candidate.kind === "dash" || candidate.kind === "dash_pair" || candidate.kind === "youtube" || opts.extractAudio || opts.convert || opts.useNativeForDirect;
 
   if (!advanced) {
     const id = await chrome.downloads.download({
@@ -2096,7 +2263,8 @@ async function updateBadge(tabId) {
   const count = [...(tabMedia.get(tabId)?.values() || [])].filter((item) => item.kind !== "segment" && !item.mergedInto).length;
   try {
     await chrome.action.setBadgeText({ tabId, text: count ? String(Math.min(count, 99)) : "" });
-    await chrome.action.setBadgeBackgroundColor({ tabId, color: count ? "#466F66" : "#66716D" });
+    await chrome.action.setBadgeBackgroundColor({ tabId, color: count ? "#7C6FA3" : "#66716D" });
+    try { await chrome.action.setBadgeTextColor({ tabId, color: "#FFFFFF" }); } catch { /* older builds */ }
     await chrome.action.setTitle({ tabId, title: count ? `FluxCatch — 检测到 ${count} 个媒体` : "FluxCatch — 暂未检测到媒体" });
   } catch {
     // The tab may have closed.
@@ -2112,7 +2280,7 @@ async function restoreSession() {
       const restored = new Map();
       for (const item of items.slice(0, MAX_ITEMS_PER_TAB)) {
         const url = canonicalizeUrl(item?.url);
-        if (!url || isLikelySubtitleResource({ url, mime: item?.mime }) || !["video", "audio", "hls", "dash", "segment"].includes(item?.kind)) continue;
+        if (!url || isLikelySubtitleResource({ url, mime: item?.mime }) || !["video", "audio", "hls", "dash", "segment", "youtube"].includes(item?.kind)) continue;
         const preview = previewFromCandidate(item);
         const manifest = item.kind === "hls" || item.kind === "dash";
         const sourceFilenames = uniqueCleanTexts([
@@ -2379,7 +2547,8 @@ function normalizeSettings(value) {
     liveDuration: boundedInt(value.liveDuration, 0, 24 * 3600, DEFAULT_SETTINGS.liveDuration),
     blockedDomains: normalizeDomains(value.blockedDomains),
     filenameTemplate: cleanText(value.filenameTemplate, 160) || DEFAULT_SETTINGS.filenameTemplate,
-    showNotifications: Boolean(value.showNotifications)
+    showNotifications: Boolean(value.showNotifications),
+    youtubeEnabled: Boolean(value.youtubeEnabled)
   };
 }
 

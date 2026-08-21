@@ -117,3 +117,12 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 
 @media(max-width:600px){.opt-grid{grid-template-columns:1fr}.permission-row{align-items:flex-start;flex-direction:column}.secondary-btn{width:100%}}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important;scroll-behavior:auto!important}}
+
+/* ===== 安装指引（可折叠） ===== */
+.install-guide{margin-top:10px;border:1px solid var(--border);border-radius:var(--r-control);background:var(--surfaceSubtle);padding:0}
+.install-guide summary{cursor:pointer;padding:9px 12px;font-size:11.5px;font-weight:650;color:var(--primary-strong);list-style:none;display:flex;align-items:center;gap:6px}
+.install-guide summary::before{content:"›";display:inline-block;transition:transform .15s;font-size:13px;line-height:1}
+.install-guide[open] summary::before{transform:rotate(90deg)}
+.install-guide ol{margin:0;padding:2px 14px 12px 32px;display:grid;gap:6px}
+.install-guide li{font-size:10.5px;color:var(--muted);line-height:1.6}
+.install-guide code{background:var(--surface);border:1px solid var(--border);padding:1px 5px;border-radius:4px;font-family:var(--mono);font-size:10px;overflow-wrap:anywhere}

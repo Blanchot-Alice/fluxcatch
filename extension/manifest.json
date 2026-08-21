@@ -28,7 +28,7 @@
   "content_scripts": [
     {
       "matches": ["http://*/*", "https://*/*"],
-      "js": ["content/content.js"],
+      "js": ["lib/site-extract.js", "content/content.js"],
       "run_at": "document_start",
       "all_frames": true
     }

@@ -1026,12 +1026,22 @@ class HostTests(unittest.TestCase):
             self.assertTrue(installed_host.is_file())
             self.assertEqual(installed_host.read_bytes(), HOST_PATH.read_bytes())
             self.assertEqual(installed_host.stat().st_mode & 0o777, 0o700)
-            self.assertIn(str(pathlib.Path(sys.executable).resolve()), launcher_text)
+            # The launcher must pin the stable interpreter path (the
+            # `command -v python3` symlink such as /opt/homebrew/bin/python3),
+            # never the versioned Cellar path it resolves to: a Homebrew
+            # python upgrade plus cleanup would orphan the latter.
+            stable_python = shutil.which("python3")
+            self.assertTrue(stable_python)
+            self.assertTrue(pathlib.Path(stable_python).is_absolute())
+            self.assertIn(stable_python, launcher_text)
+            resolved_python = str(pathlib.Path(stable_python).resolve())
+            if resolved_python != stable_python:
+                self.assertNotIn(resolved_python, launcher_text)
             self.assertIn(str(installed_host.resolve()), launcher_text)
             self.assertNotIn(str(HOST_PATH.resolve()), launcher_text)
             ffmpeg = shutil.which("ffmpeg")
             if ffmpeg:
-                self.assertIn(f"FLUXCATCH_FFMPEG={pathlib.Path(ffmpeg).resolve()}", launcher_text)
+                self.assertIn(f"FLUXCATCH_FFMPEG={ffmpeg}", launcher_text)
             self.assertNotIn("/usr/bin/env python3", launcher_text)
 
             subprocess.run(["bash", str(uninstall)], env=environment, check=True, capture_output=True, text=True)

@@ -17,6 +17,7 @@ test("MV3 worker registers network and message listeners during module load", as
   const onDownloadChanged = event();
   const onTabRemoved = event();
   const onTabUpdated = event();
+  const onTabActivated = event();
   const nativeOnMessage = event();
   const nativeOnDisconnect = event();
   const extensionId = "gpnojfocoanelgibidlhholjobljefab";
@@ -39,6 +40,7 @@ test("MV3 worker registers network and message listeners during module load", as
   const cancelledDownloads = [];
   const manifestFixtures = new Map();
   const manifestFetches = [];
+  const settingsState = {};
   const uiMessages = [];
   const badgeUpdates = [];
   const legacyRootUrl = "https://legacy.example.test/media/master.m3u8";
@@ -60,6 +62,12 @@ test("MV3 worker registers network and message listeners during module load", as
     text: ["#EXTM3U", "#EXTINF:6,", "https://legacy-segments.example.test/low-1.ts", "#EXT-X-ENDLIST"].join("\n")
   });
   const biliPageUrl = "https://www.bilibili.com/video/BV14N8G6pEAf/";
+  const biliAvPageUrl = "https://www.bilibili.com/video/av99999/";
+  const biliAvVideo = "https://upos-sz-mirror08c.bilivideo.cn/upgcxcode/77/88/88001-1-30080.m4s?deadline=1999999999&upsig=AV_1080_SECRET";
+  const biliAvAudio = "https://upos-sz-mirror08c.bilivideo.cn/upgcxcode/77/88/88001-1-30280.m4s?deadline=1999999999&upsig=AV_AUDIO_SECRET";
+  const youtubeWatchUrl = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
+  const instagramCdnUrl = "https://scontent.cdninstagram.com/v/t66.28340-6/10000000_4242424242424242_7777777777777777777_n.mp4?efg=eyJ1IjoxfQ&oe=67FFFFFF";
+  const twitterCdnUrl = "https://video.twimg.com/ext_tw_video/1899999999999999999/pu/vid/avc1/1280x720/abcdefghijklmnopqrstuv-rs=600?tag=12";
   const biliVideo480 = "https://upos-sz-mirrorcoso1.edge.mountaintoys.cn:4483/v1/resource/upgcxcode/12/34/41067939286-1-30032.m4s?deadline=1999999999&upsig=VIDEO_480_SECRET";
   const biliVideo480Hevc = "https://upos-sz-mirror08c.bilivideo.cn:8082/upgcxcode/12/34/41067939286-1-30132.m4s?deadline=1999999999&upsig=VIDEO_HEVC_SECRET";
   const biliVideo360 = "https://upos-sz-mirror08c.bilivideo.cn:8082/upgcxcode/12/34/41067939286-1-30016.m4s?deadline=1999999999&upsig=VIDEO_360_SECRET";
@@ -67,6 +75,25 @@ test("MV3 worker registers network and message listeners during module load", as
   const biliAudioFlac = "https://upos-sz-mirror08c.bilivideo.cn:8082/upgcxcode/12/34/41067939286-1-30251.m4s?deadline=1999999999&upsig=AUDIO_FLAC_SECRET";
   manifestFixtures.set("https://api.bilibili.com/x/player/pagelist?bvid=BV14N8G6pEAf", {
     text: JSON.stringify({ code: 0, data: [{ cid: 41067939286, page: 1, part: "Fixture" }] })
+  });
+  manifestFixtures.set("https://api.bilibili.com/x/player/pagelist?avid=99999", {
+    text: JSON.stringify({ code: 0, data: [{ cid: 88001, page: 1, part: "Auto Badge Fixture" }] })
+  });
+  manifestFixtures.set("https://api.bilibili.com/x/player/playurl?avid=99999&cid=88001&qn=127&fnval=16&fourk=1", {
+    text: JSON.stringify({
+      code: 0,
+      data: {
+        dash: {
+          duration: 92,
+          video: [
+            { id: 80, baseUrl: biliAvVideo, width: 1920, height: 1080, bandwidth: 2_600_000, codecs: "avc1.640828", mimeType: "video/mp4" }
+          ],
+          audio: [
+            { id: 30280, baseUrl: biliAvAudio, bandwidth: 128_000, codecs: "mp4a.40.2", mimeType: "audio/mp4" }
+          ]
+        }
+      }
+    })
   });
   manifestFixtures.set("https://api.bilibili.com/x/player/playurl?bvid=BV14N8G6pEAf&cid=41067939286&qn=127&fnval=16&fourk=1", {
     text: JSON.stringify({
@@ -95,7 +122,11 @@ test("MV3 worker registers network and message listeners during module load", as
     [24, { id: 24, title: "Mixed Bilibili Fixture", url: "https://www.bilibili.com/video/av24680/" }],
     [25, { id: 25, title: "SPA generation fixture", url: "https://www.bilibili.com/video/av11223/" }],
     [26, { id: 26, title: "Discovery generation fixture", url: biliPageUrl }],
-    [27, { id: 27, title: "Strict TTL fixture", url: "https://www.bilibili.com/video/av77889/" }]
+    [27, { id: 27, title: "Strict TTL fixture", url: "https://www.bilibili.com/video/av77889/" }],
+    [28, { id: 28, title: "YouTube Fixture - FluxCatch", url: `${youtubeWatchUrl}&t=42s` }],
+    [29, { id: 29, title: "Auto Badge Fixture - 哔哩哔哩", url: biliAvPageUrl }],
+    [30, { id: 30, title: "Instagram Fixture", url: "https://www.instagram.com/reel/Cxyz1234567/" }],
+    [31, { id: 31, title: "X Fixture", url: "https://x.com/fluxcatch/status/1899999999999999999" }]
   ]);
   const restoredJobs = Array.from({ length: 205 }, (_, index) => ({
     jobId: `old-${index}`,
@@ -219,6 +250,7 @@ test("MV3 worker registers network and message listeners during module load", as
     tabs: {
       onRemoved: onTabRemoved,
       onUpdated: onTabUpdated,
+      onActivated: onTabActivated,
       get: async (tabId) => tabFixtures.get(tabId) || {}
     },
     downloads: {
@@ -272,9 +304,11 @@ test("MV3 worker registers network and message listeners during module load", as
             settingsReadEntered?.();
             await new Promise((resolve) => { releaseSettingsRead = resolve; });
           }
-          return {};
+          return settingsState;
         },
-        set: async () => {}
+        set: async (value) => {
+          Object.assign(settingsState, structuredClone(value));
+        }
       }
     },
     permissions: { contains: async () => nativePermission },
@@ -293,6 +327,7 @@ test("MV3 worker registers network and message listeners during module load", as
   assert.equal(onConnect.listeners.length, 1);
   assert.equal(onTabRemoved.listeners.length, 1);
   assert.equal(onTabUpdated.listeners.length, 1);
+  assert.equal(onTabActivated.listeners.length, 1);
   assert.deepEqual(onHeadersReceived.listeners[0].args[0].types, ["media", "xmlhttprequest", "other"]);
 
   const extensionSender = { id: extensionId, url: `chrome-extension://${extensionId}/sidepanel/sidepanel.html` };
@@ -342,7 +377,7 @@ test("MV3 worker registers network and message listeners during module load", as
   assert.doesNotMatch(JSON.stringify(biliApiCandidate), biliSecrets);
   assert.doesNotMatch(JSON.stringify(sessionState.tabMedia), biliSecrets, "signed tracks are never written to storage.session");
   assert.doesNotMatch(JSON.stringify(uiMessages), biliSecrets, "MEDIA_UPDATED broadcasts contain metadata only");
-  assert.ok(manifestFetches.filter((item) => item.url.startsWith("https://api.bilibili.com/")).every((item) => item.credentials === "omit"));
+  assert.ok(manifestFetches.filter((item) => item.url.startsWith("https://api.bilibili.com/")).every((item) => item.credentials === "include"), "Bilibili playback APIs reuse the logged-in cookie jar so members get their full quality ladder");
 
   const biliApiProbe = await sendRuntimeMessage({
     type: "PROBE_MANIFEST",
@@ -1004,6 +1039,139 @@ test("MV3 worker registers network and message listeners during module load", as
     size: 5_800_000
   });
   await new Promise((resolve) => setTimeout(resolve, 0));
+
+  // ===== Badge realtime: Bilibili discovery fires on page completion, before
+  // any popup ever opens, and tab activation re-applies restored badges. =====
+  const badgeCountFor = (tabId) => badgeUpdates.filter((item) => item.tabId === 29).length;
+  const badgeBefore = badgeCountFor(29);
+  onTabUpdated.listeners[0].fn(29, { status: "complete" });
+  let autoBadge = null;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    autoBadge = badgeUpdates.filter((item) => item.tabId === 29).at(-1);
+    if (autoBadge?.text === "1") break;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.equal(autoBadge?.text, "1", "page completion alone sets the toolbar badge without opening the popup");
+  const autoBadgeMedia = await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 29 });
+  assert.equal(autoBadgeMedia.items.length, 1);
+  assert.equal(autoBadgeMedia.items[0].kind, "dash_pair");
+  assert.equal(autoBadgeMedia.items[0].height, 1080, "logged-in av discovery carries the full quality ladder fixture");
+  const activatedBefore = badgeCountFor(29);
+  onTabActivated.listeners[0].fn({ tabId: 29 });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.ok(badgeCountFor(29) > activatedBefore, "tab activation re-applies the badge from restored state");
+
+  // ===== YouTube experimental adapter: default off means zero trace; the
+  // toggle publishes one page candidate and delegates to the local engine. =====
+  const youtubeDefaultOff = await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 28 });
+  assert.deepEqual(youtubeDefaultOff.items, [], "YouTube stays invisible while the experimental toggle is off");
+  assert.equal((await sendRuntimeMessage({ type: "GET_SETTINGS" })).settings.youtubeEnabled, false);
+  const youtubeSave = await sendRuntimeMessage({ type: "SAVE_SETTINGS", settings: { youtubeEnabled: true } });
+  assert.equal(youtubeSave.settings.youtubeEnabled, true, "the toggle persists through storage.local");
+  onTabUpdated.listeners[0].fn(28, { status: "complete" });
+  let youtubeMedia = null;
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    youtubeMedia = await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 28 });
+    if (youtubeMedia.items.length) break;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.equal(youtubeMedia.items.length, 1, "enabling the toggle surfaces exactly one YouTube page candidate");
+  const youtubeCandidate = youtubeMedia.items[0];
+  assert.equal(youtubeCandidate.kind, "youtube");
+  assert.equal(youtubeCandidate.url, youtubeWatchUrl, "tracking parameters are stripped from the canonical watch URL");
+  assert.equal(youtubeCandidate.site, "youtube");
+  let youtubeBadge = null;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    youtubeBadge = badgeUpdates.filter((item) => item.tabId === 28).at(-1);
+    if (youtubeBadge?.text === "1") break;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.equal(youtubeBadge?.text, "1", "the YouTube candidate drives the badge too");
+  const youtubeStart = await sendRuntimeMessage({
+    type: "DOWNLOAD",
+    tabId: 28,
+    candidate: youtubeCandidate,
+    options: { filename: "YouTube Fixture.mp4" }
+  });
+  assert.equal(youtubeStart.ok, true);
+  assert.equal(youtubeStart.method, "native", "YouTube downloads always delegate to the local engine");
+  const youtubeNativeMessage = nativeOutgoing.find((message) => message.type === "download" && message.jobId === youtubeStart.jobId);
+  assert.equal(youtubeNativeMessage.mediaKind, "youtube");
+  assert.equal(youtubeNativeMessage.url, youtubeWatchUrl, "the host receives the watch page, never a googlevideo URL");
+  assert.deepEqual(youtubeNativeMessage.headers, {}, "no captured credentials travel with the page delegation");
+  nativeOnMessage.listeners[0].fn({ type: "complete", jobId: youtubeStart.jobId, filename: "YouTube Fixture.mp4", status: "completed", progress: 1, size: 9_800_000 });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const youtubeDisabled = await sendRuntimeMessage({ type: "SAVE_SETTINGS", settings: {} });
+  assert.equal(youtubeDisabled.settings.youtubeEnabled, false);
+  assert.deepEqual(
+    (await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 28 })).items,
+    [],
+    "turning the toggle off withdraws the published YouTube candidate immediately"
+  );
+  assert.equal(badgeUpdates.filter((item) => item.tabId === 28).at(-1)?.text, "", "the badge clears together with the withdrawn candidate");
+
+  // ===== Instagram / X adapters reuse the generic pipeline; private media
+  // downloads replay the cookie the page itself sent to the same CDN URL. =====
+  const beginInstagramMedia = (requestId, url) => {
+    onBeforeSendHeaders.listeners[0].fn({
+      requestId, tabId: 30, url, type: "media", documentId: "ig-document", frameId: 0,
+      initiator: "https://www.instagram.com",
+      requestHeaders: [
+        { name: "Cookie", value: "sessionid=IG_PRIVATE_COOKIE" },
+        { name: "Referer", value: "https://www.instagram.com/reel/Cxyz1234567/" },
+        { name: "User-Agent", value: "FluxCatch fixture UA" }
+      ]
+    });
+  };
+  const finishInstagramMedia = (requestId, url) => {
+    onHeadersReceived.listeners[0].fn({
+      requestId, tabId: 30, url, type: "media", documentId: "ig-document", frameId: 0,
+      responseHeaders: [
+        { name: "content-type", value: "video/mp4" },
+        { name: "content-length", value: "4200000" },
+        { name: "accept-ranges", value: "bytes" }
+      ]
+    });
+  };
+  beginInstagramMedia("ig-media-1", instagramCdnUrl);
+  finishInstagramMedia("ig-media-1", instagramCdnUrl);
+  let instagramMedia = null;
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    instagramMedia = await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 30 });
+    if (instagramMedia.items.length) break;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.equal(instagramMedia.items.length, 1, "Instagram CDN media becomes a candidate through the generic webRequest path");
+  assert.equal(instagramMedia.items[0].site, "instagram", "the site adapter registry labels the candidate");
+  const instagramStart = await sendRuntimeMessage({
+    type: "DOWNLOAD",
+    tabId: 30,
+    candidate: instagramMedia.items[0],
+    options: { filename: "Instagram Reel.mp4", useNativeForDirect: true }
+  });
+  assert.equal(instagramStart.ok, true);
+  const instagramNativeMessage = nativeOutgoing.find((message) => message.type === "download" && message.jobId === instagramStart.jobId);
+  assert.equal(instagramNativeMessage.headers.cookie, "sessionid=IG_PRIVATE_COOKIE", "the page cookie is replayed to the exact CDN URL that received it");
+
+  const xPayload = await sendRuntimeMessage({
+    type: "CONTENT_MEDIA",
+    data: { url: twitterCdnUrl, mime: "video/mp4", source: "site-payload", width: 1280, height: 720, title: "X Fixture" }
+  }, {
+    id: extensionId,
+    url: "https://x.com/fluxcatch/status/1899999999999999999",
+    frameId: 0,
+    tab: { id: 31, url: "https://x.com/fluxcatch/status/1899999999999999999", title: "X Fixture" }
+  });
+  assert.equal(xPayload.accepted, true);
+  let xMedia = null;
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    xMedia = await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 31 });
+    if (xMedia.items.length) break;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.equal(xMedia.items.length, 1, "extracted X payload media flows through the content-script pipeline");
+  assert.equal(xMedia.items[0].site, "twitter");
+  assert.equal(xMedia.items[0].height, 720);
 
   const nativeStart = await new Promise((resolve) => {
     onMessage.listeners[0].fn(

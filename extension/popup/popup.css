@@ -43,7 +43,7 @@
 }
 *{box-sizing:border-box;margin:0;padding:0}
 body{
-  width:372px;height:560px;display:flex;flex-direction:column;overflow:hidden;
+  width:372px;height:560px;display:flex;flex-direction:column;overflow:hidden;position:relative;
   font-family:var(--font);background:var(--canvas);color:var(--ink);
   transition:background .25s,color .25s;
 }
@@ -210,6 +210,16 @@ dialog::backdrop{background:rgba(20,24,22,.45);backdrop-filter:blur(2px)}
 .dl-btn:hover{background:var(--primaryHover)}
 
 button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--primary-strong);outline-offset:2px}
+
+/* ===== 顶栏图标：统一 16px 描边 SVG，视觉等大 ===== */
+.icon-btn svg{width:16px;height:16px;display:block;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+
+/* ===== 标语 ===== */
+.brand .tagline{letter-spacing:.2px}
+
+/* ===== 顶部胶囊提示（错误/成功反馈，不遮挡标语） ===== */
+#toast{position:absolute;top:10px;left:50%;transform:translate(-50%,-8px);max-width:calc(100% - 32px);padding:7px 14px;border-radius:999px;background:var(--ink);color:var(--canvas);font-size:11px;font-weight:600;line-height:1.45;box-shadow:var(--shadow-md);opacity:0;pointer-events:none;transition:opacity .18s ease,transform .18s ease;z-index:20}
+#toast.show{opacity:1;transform:translate(-50%,0)}
 
 @media (prefers-reduced-motion: reduce){
   *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important;scroll-behavior:auto!important}

@@ -68,7 +68,8 @@ test("popup tabs expose complete ARIA state and keyboard navigation", () => {
 });
 
 test("dynamic status, task history and progress are exposed without duplicate rows", () => {
-  assert.match(popupHtml, /id="statusText"[^>]+role="status"[^>]+aria-live="polite"/);
+  assert.match(popupHtml, /class="tagline"/);
+  assert.match(popupHtml, /id="toast"[^>]+role="status"[^>]+aria-live="polite"/);
   assert.match(popupHtml, /id="jobAnnouncer"[^>]+role="status"[^>]+aria-live="polite"/);
   assert.match(optionsHtml, /id="saveStatus"[^>]+role="status"[^>]+aria-live="polite"/);
   assert.match(popupJs, /setAttribute\("role", "progressbar"\)/);

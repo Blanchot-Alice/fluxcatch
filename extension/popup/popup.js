@@ -1,7 +1,8 @@
 import { MEDIA_EXTENSIONS, humanBytes, sanitizeFilename } from "../lib/media.js";
 import { loadPrivacySafeThumbnail } from "../lib/thumbnail.js";
 
-const state = { tabId: null, windowId: null, items: [], settings: {}, jobs: new Map(), selected: null, probes: new Map(), filter: "all", statusText: "当前页面", toastTimer: null, refreshSequence: 0 };
+const SITE_LABELS = { instagram: "Instagram", twitter: "X", youtube: "YouTube" };
+const state = { tabId: null, windowId: null, items: [], settings: {}, hostStatus: {}, jobs: new Map(), selected: null, probes: new Map(), filter: "all", toastTimer: null, refreshSequence: 0 };
 const $ = (selector) => document.querySelector(selector);
 const mediaList = $("#mediaList");
 const emptyState = $("#emptyState");
@@ -40,8 +41,6 @@ async function init() {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     state.tabId = tab?.id;
     state.windowId = tab?.windowId;
-    state.statusText = tab?.title || "当前页面";
-    $("#statusText").textContent = state.statusText;
     await refresh();
     await refreshJobs();
   } catch (error) {
@@ -72,6 +71,7 @@ function bindEvents() {
   }));
   $("#settingsButton").addEventListener("click", () => void chrome.runtime.openOptionsPage().catch((error) => showToast(error.message)));
   $("#pingButton").addEventListener("click", () => call({ type: "PING_HOST" }).then((result) => updateHost(result.hostStatus)).catch((error) => updateHost({ connected: false, lastError: error.message })));
+  $("#installHelpButton").addEventListener("click", () => void chrome.runtime.openOptionsPage().catch((error) => showToast(error?.message || "无法打开设置页")));
   const tabs = [...document.querySelectorAll('[role="tab"]')];
   for (const [index, button] of tabs.entries()) {
     button.addEventListener("click", () => switchView(button.dataset.view));
@@ -223,9 +223,14 @@ function openDownloadDialog(item, { probeWarning = false } = {}) {
   } else variantLabel.hidden = true;
   syncVariantVisibility();
   const protectedMedia = probe?.protection === "drm" || probe?.protected;
-  $("#confirmDownload").disabled = Boolean(protectedMedia);
-  $("#dialogNote").style.color = "";
-  $("#dialogNote").textContent = protectedMedia
+  const ytdlpReady = item.kind === "youtube" ? Boolean(state.hostStatus?.capabilities?.ytdlp?.available) : true;
+  $("#confirmDownload").disabled = Boolean(protectedMedia) || (item.kind === "youtube" && !ytdlpReady);
+  $("#dialogNote").style.color = item.kind === "youtube" && !ytdlpReady ? "var(--warning-strong)" : "";
+  $("#dialogNote").textContent = item.kind === "youtube"
+    ? ytdlpReady
+      ? "实验性功能：由本机安装的 yt-dlp 引擎下载，画质与格式以本机 yt-dlp 为准。"
+      : "实验性功能需要先安装 yt-dlp：请打开设置 → 站点适配器，按安装指引完成后再回来下载。"
+    : protectedMedia
     ? "检测到 DRM/内容保护，受保护内容暂不支持下载。"
     : probeWarning
       ? "未读取到清晰度选项，将自动选择并生成一个可直接播放的文件。"
@@ -259,7 +264,7 @@ async function submitDownload(event) {
   const confirm = $("#confirmDownload");
   try {
     confirm.disabled = true;
-    const advanced = isStreamKind(item) || options.extractAudio || options.convert || options.useNativeForDirect;
+    const advanced = isStreamKind(item) || item.kind === "youtube" || options.extractAudio || options.convert || options.useNativeForDirect;
     if (advanced) {
       const granted = await chrome.permissions.request({ permissions: ["nativeMessaging"] });
       if (!granted) throw new Error("请先允许使用高速下载功能，再继续下载");
@@ -368,11 +373,15 @@ function updateHost(status = {}) {
   const dot = $("#hostDot");
   dot.className = `dot ${status.connected ? "ok" : status.lastError ? "bad" : ""}`;
   $("#hostTitle").textContent = status.connected ? "高速下载功能已就绪" : "高速下载功能暂未就绪";
+  const installHelp = $("#installHelpButton");
+  // The connect attempt itself failed (engine missing / not registered):
+  // point the user at the install guidance instead of a bare error.
+  installHelp.hidden = Boolean(status.connected || status.needsPermission || !status.lastError);
   if (!status.connected) {
     $("#hostDetail").textContent = status.needsPermission
       ? "需要加速、合并或转换格式时会请你授权"
       : status.lastError
-        ? "暂时不可用；普通文件仍可直接下载"
+        ? "本地引擎尚未就绪；点「安装方法」查看一分钟安装指引"
         : "普通文件仍可直接下载";
     return;
   }
@@ -405,8 +414,10 @@ async function call(message) {
 }
 
 function mediaChips(item) {
+  if (item.kind === "youtube") return [{ text: "YouTube", cls: "hls" }, { text: "实验性", cls: "fmt" }];
   const stream = isStreamKind(item);
   const values = [{ text: streamTypeLabel(item), cls: stream ? "hls" : "fmt" }];
+  if (item.site && SITE_LABELS[item.site] && item.site !== "youtube") values.push({ text: SITE_LABELS[item.site], cls: "fmt" });
   if (item.height) values.push({ text: `${item.height}p`, cls: "hd" });
   if (!stream && item.contentLength) values.push({ text: humanBytes(item.contentLength), cls: "" });
   if (item.duration) values.push({ text: formatDuration(item.duration), cls: "" });
@@ -465,6 +476,9 @@ function el(tag, className) { const node = document.createElement(tag); if (clas
 async function runUiAction(action) { try { await action(); } catch (error) { showToast(friendlyErrorMessage(error?.message || "操作失败")); } }
 function showToast(message) {
   clearTimeout(state.toastTimer);
-  $("#statusText").textContent = String(message || "操作失败");
-  state.toastTimer = setTimeout(() => { $("#statusText").textContent = state.statusText; }, 1800);
+  const toast = $("#toast");
+  if (!toast) return;
+  toast.textContent = String(message || "操作失败");
+  toast.classList.add("show");
+  state.toastTimer = setTimeout(() => toast.classList.remove("show"), 1800);
 }

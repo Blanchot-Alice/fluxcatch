@@ -16,11 +16,15 @@
           <path d="M32 56 L64 88 L96 56 Z" class="c-primary"/>
         </svg>
       </div>
-      <div><h1>FluxCatch</h1><p id="statusText" role="status" aria-live="polite" aria-atomic="true">正在读取页面…</p></div>
+      <div><h1>FluxCatch</h1><p class="tagline">Keep What You See.</p></div>
     </div>
     <div class="toolbar">
-      <button id="scanButton" class="icon-btn" title="重新扫描" aria-label="重新扫描">↻</button>
-      <button id="settingsButton" class="icon-btn" title="设置" aria-label="设置">⚙</button>
+      <button id="scanButton" class="icon-btn" title="重新扫描" aria-label="重新扫描">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+      </button>
+      <button id="settingsButton" class="icon-btn" title="设置" aria-label="设置">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </button>
     </div>
   </header>
 
@@ -51,6 +55,7 @@
       <div id="hostCard" class="host-card">
         <span id="hostDot" class="dot" aria-hidden="true"></span>
         <div role="status" aria-live="polite" aria-atomic="true"><strong id="hostTitle">高速下载功能</strong><small id="hostDetail">正在检查是否可用…</small></div>
+        <button id="installHelpButton" type="button" class="link" hidden>安装方法</button>
         <button id="pingButton" type="button" class="link">重试</button>
       </div>
       <div id="jobsList" class="jobs-list" aria-label="下载任务"></div>
@@ -77,6 +82,7 @@
     </form>
   </dialog>
 
+  <div id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
   <script type="module" src="popup.js"></script>
 </body>
 </html>

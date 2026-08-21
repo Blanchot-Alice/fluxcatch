@@ -148,6 +148,74 @@ def probe_ffmpeg(path: str | None = None) -> FfmpegCapabilities:
     return capability
 
 
+@dataclass
+class YtDlpCapabilities:
+    path: str = ""
+    version: str = ""
+    probe_error: str = ""
+
+    @property
+    def available(self) -> bool:
+        return bool(self.path)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "available": self.available,
+            "path": self.path,
+            "version": self.version,
+            "probeError": self.probe_error,
+        }
+
+
+def probe_ytdlp(path: str | None = None) -> YtDlpCapabilities:
+    """Locate a user-installed yt-dlp once during host startup.
+
+    The experimental YouTube adapter deliberately delegates transfers to the
+    engine the user installed themselves; the extension never bundles or
+    downloads one. FLUXCATCH_YTDLP pins an explicit executable, otherwise the
+    usual PATH entries plus Homebrew/pip install locations are probed.
+    """
+    candidates: list[str] = []
+    if path:
+        candidates.append(path)
+    candidates.extend(["yt-dlp", "ytdlp"])
+    candidates.extend([
+        "/opt/homebrew/bin/yt-dlp",
+        "/usr/local/bin/yt-dlp",
+        str(Path.home() / ".local/bin/yt-dlp"),
+        str(Path.home() / "bin/yt-dlp"),
+    ])
+    executable = ""
+    for candidate in candidates:
+        found = shutil.which(candidate) if os.path.sep not in candidate else None
+        if not found:
+            resolved = str(Path(candidate).expanduser())
+            if Path(resolved).is_file() and os.access(resolved, os.X_OK):
+                found = resolved
+        if found:
+            executable = str(Path(found).resolve())
+            break
+    if not executable:
+        return YtDlpCapabilities(probe_error="yt-dlp was not found; install it with Homebrew or pip")
+    capability = YtDlpCapabilities(path=executable)
+    try:
+        version_result = subprocess.run(
+            [executable, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=FFMPEG_PROBE_TIMEOUT,
+            check=False,
+        )
+        version_text = (version_result.stdout or "").strip()
+        first_line = next((line.strip() for line in version_text.splitlines() if line.strip()), "")
+        if version_result.returncode != 0 or not first_line:
+            raise DownloadError(first_line or f"version probe exited {version_result.returncode}")
+        capability.version = first_line
+    except (OSError, subprocess.SubprocessError, DownloadError) as error:
+        capability.probe_error = str(error)
+    return capability
+
+
 def valid_url(value: Any) -> str:
     url = str(value or "")
     if any(ord(character) < 0x20 or ord(character) == 0x7F for character in url):
@@ -2259,6 +2327,116 @@ def run_ffmpeg(
             staging.unlink(missing_ok=True)
 
 
+YTDLP_PROGRESS_RE = re.compile(
+    r"\[download\]\s+(\d+(?:\.\d+)?)%\s+of\s+(?:~\s*)?([\d.]+)\s*(B|KiB|MiB|GiB|TiB)"
+)
+YTDLP_SIZE_MULTIPLIERS = {"B": 1, "KiB": 1024, "MiB": 1024**2, "GiB": 1024**3, "TiB": 1024**4}
+
+
+def parse_ytdlp_progress(line: str) -> tuple[float, int] | None:
+    """Parse a ``yt-dlp --newline`` progress line into (percent, total_bytes)."""
+    match = YTDLP_PROGRESS_RE.search(line)
+    if not match:
+        return None
+    percent = float(match.group(1))
+    total = int(float(match.group(2)) * YTDLP_SIZE_MULTIPLIERS[match.group(3)])
+    return percent, total
+
+
+def build_ytdlp_args(
+    executable: str,
+    url: str,
+    target: Path,
+    *,
+    container: str,
+    extract_audio: bool,
+) -> list[str]:
+    args = [executable, "--no-playlist", "--newline", "--no-warnings", "-o", str(target)]
+    if extract_audio:
+        args += ["-f", "ba/b", "-x", "--audio-format", "mp3", "--audio-quality", "2"]
+    else:
+        args += ["-f", "bv*+ba/b", "--merge-output-format", container]
+    args.append(url)
+    return args
+
+
+def youtube_download(
+    url: str,
+    target: Path,
+    container: str,
+    extract_audio: bool,
+    cancel: threading.Event,
+    progress: Progress,
+    executable: str | None,
+) -> Path:
+    """Delegate the transfer to the user-installed yt-dlp engine.
+
+    The extension never touches YouTube media URLs; it only forwards the watch
+    page URL here. Progress lines are parsed into the shared job protocol so
+    the popup shows the same progress bar as every other download.
+    """
+    if not executable:
+        raise DownloadError("YouTube 下载需要本机安装 yt-dlp，安装方法见 FluxCatch 设置页")
+    args = build_ytdlp_args(executable, url, target, container=container, extract_audio=extract_audio)
+    progress.status("downloading", "yt-dlp 正在解析视频")
+    process = subprocess.Popen(
+        args,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+
+    def watch_cancel() -> None:
+        if cancel.wait():
+            with contextlib.suppress(OSError):
+                process.terminate()
+
+    watcher = threading.Thread(target=watch_cancel, daemon=True)
+    watcher.start()
+    completed_bytes = 0
+    file_total = 0
+    prev_percent = 0.0
+    last_overall = 0
+    tail: list[str] = []
+    assert process.stdout is not None
+    for raw_line in process.stdout:
+        line = raw_line.strip()
+        if not line:
+            continue
+        tail.append(line)
+        del tail[:-12]
+        parsed = parse_ytdlp_progress(line)
+        if parsed:
+            percent, total = parsed
+            # yt-dlp downloads bestvideo and bestaudio as two separate files;
+            # a percent reset after a finished file banks the previous bytes.
+            if prev_percent >= 99.0 and percent < 50.0:
+                completed_bytes += file_total
+                last_overall = completed_bytes
+            prev_percent = percent
+            file_total = total
+            overall = completed_bytes + int(round(total * percent / 100.0))
+            if overall > last_overall:
+                progress.total = max(progress.total, completed_bytes + file_total)
+                progress.add(overall - last_overall, message="yt-dlp 正在下载")
+                last_overall = overall
+        elif "[Merger]" in line or "[ExtractAudio]" in line:
+            progress.status("remuxing", "正在合并音视频轨")
+    return_code = process.wait(timeout=60)
+    if cancel.is_set():
+        process.stdout.close()
+        raise Cancelled()
+    if return_code != 0:
+        detail = " | ".join(tail[-3:])[-400:]
+        process.stdout.close()
+        raise DownloadError(f"yt-dlp exited with code {return_code}: {detail}")
+    process.stdout.close()
+    if not target.is_file():
+        raise DownloadError("yt-dlp finished without producing the expected file")
+    return target
+
+
 class Host:
     def __init__(self) -> None:
         self.write_lock = threading.Lock()
@@ -2269,6 +2447,8 @@ class Host:
         self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="fluxcatch-job")
         self.ffmpeg_capabilities = probe_ffmpeg(os.environ.get("FLUXCATCH_FFMPEG") or None)
         self.ffmpeg = self.ffmpeg_capabilities.path or None
+        self.ytdlp_capabilities = probe_ytdlp(os.environ.get("FLUXCATCH_YTDLP") or None)
+        self.ytdlp = self.ytdlp_capabilities.path or None
         configured = os.environ.get("FLUXCATCH_DOWNLOAD_DIR")
         self.download_dir = Path(configured).expanduser() if configured else Path.home() / "Downloads" / "FluxCatch"
         self.download_dir.mkdir(parents=True, exist_ok=True)
@@ -2286,12 +2466,23 @@ class Host:
     def handle(self, message: dict[str, Any]) -> None:
         kind = message.get("type")
         if kind == "ping":
+            # yt-dlp is a user-installed moving target (brew/pip), unlike the
+            # ffmpeg path baked into the launcher at install time. Re-probe on
+            # every ping so a freshly installed engine is visible to the
+            # extension's "重新检查" without a host process restart.
+            self.ytdlp_capabilities = probe_ytdlp(os.environ.get("FLUXCATCH_YTDLP") or None)
+            self.ytdlp = self.ytdlp_capabilities.path or None
             self.send({
                 "type": "pong",
                 "requestId": message.get("requestId"),
                 "version": VERSION,
                 "ffmpeg": bool(self.ffmpeg),
-                "capabilities": {"ffmpeg": self.ffmpeg_capabilities.as_dict(), "dashPlanner": "static-v1", "dashPair": "direct-v1"},
+                "capabilities": {
+                    "ffmpeg": self.ffmpeg_capabilities.as_dict(),
+                    "ytdlp": self.ytdlp_capabilities.as_dict(),
+                    "dashPlanner": "static-v1",
+                    "dashPair": "direct-v1",
+                },
             })
             return
         if kind == "cancel":
@@ -2365,9 +2556,9 @@ class Host:
                     filename = f"{Path(filename).stem}.mp4"
             elif extract_audio:
                 filename = f"{Path(filename).stem}.mp3"
-            elif kind in {"hls", "dash"} or options.get("convert"):
+            elif kind in {"hls", "dash", "youtube"} or options.get("convert"):
                 filename = f"{Path(filename).stem}.{container}"
-            direct_resumable = kind not in {"hls", "dash", "dash_pair"} and not extract_audio and not options.get("convert")
+            direct_resumable = kind not in {"hls", "dash", "dash_pair", "youtube"} and not extract_audio and not options.get("convert")
             with self.targets_lock:
                 target = unique_path(
                     self.download_dir,
@@ -2464,6 +2655,16 @@ class Host:
                         )
                     except UnsupportedDashError as error:
                         raise _dash_demuxer_error(self.ffmpeg_capabilities, str(error)) from error
+            elif kind == "youtube":
+                target = youtube_download(
+                    url,
+                    target,
+                    container,
+                    extract_audio,
+                    cancel,
+                    progress,
+                    self.ytdlp,
+                )
             else:
                 raw_target = target
                 if extract_audio or options.get("convert"):
