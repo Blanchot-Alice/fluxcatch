@@ -7,7 +7,7 @@ npm run test:e2e
 ```
 
 GitHub Actions 在一次性 Linux runner 上显式设置
-`FLUXCATCH_E2E_NO_SANDBOX=1`，仅用于启动该次测试的临时 Chrome 配置；本地运行不会关闭 Chrome 沙箱。
+`FLUXCATCH_E2E_NO_SANDBOX=1`，仅用于启动该次测试的临时 Chrome 配置，并将共享内存写入临时目录；本地运行不会关闭 Chrome 沙箱。
 
 Set `CHROME_PATH` when Chrome for Testing is not in the Playwright cache or a standard macOS location.
 

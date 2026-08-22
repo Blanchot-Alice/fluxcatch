@@ -185,13 +185,25 @@ try {
     })()`, launched.httpOrigin);
     await control(`async () => { await chrome.tabs.update(${JSON.stringify(uiFixture.tabId)}, { active: true }); return true; }`);
     await auditNewExtensionPage("sidepanel", "sidepanel/sidepanel.html", 420, 820, `(async () => {
-      const deadline = Date.now() + 5000;
+      const deadline = Date.now() + ${CASE_TIMEOUT_MS};
       let button;
       while (!(button = document.querySelector(".media-download")) && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 50));
       }
       button?.click();
-      while (button?.disabled && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50));
+      let quickDownloadFinished = false;
+      while (Date.now() < deadline) {
+        const response = await chrome.runtime.sendMessage({ type: "GET_JOBS" });
+        const job = response?.jobs?.find((item) => item.method === "browser"
+          && item.filename === ${JSON.stringify(UI_DIRECT_FILENAME)});
+        if (job?.status === "failed") throw new Error(job.error || job.message || "Side Panel download failed");
+        if (job?.status === "completed") {
+          quickDownloadFinished = true;
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
       const thumbnail = document.querySelector(".media-thumbnail");
       return {
         title: document.title,
@@ -201,7 +213,7 @@ try {
         mediaHeading: document.querySelector("#mediaHeading")?.textContent,
         jobsHeading: document.querySelector("#jobsHeading")?.textContent,
         quickDownloadButtons: document.querySelectorAll(".media-download").length,
-        quickDownloadFinished: Boolean(button) && !button.disabled,
+        quickDownloadFinished,
         thumbnailCount: document.querySelectorAll(".media-thumbnail").length,
         thumbnailSrc: thumbnail?.src || "",
         thumbnailLoaded: Boolean(thumbnail?.complete && thumbnail?.naturalWidth > 0),
@@ -956,7 +968,8 @@ async function auditExtensionPage(name, client, width, height, expression, close
     if (name !== "sidepanel") await client.send("Page.bringToFront");
     const result = await evaluate(client, expression);
     item.result = result;
-    const screenshot = await client.send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false });
+    await delay(250);
+    const screenshot = await client.send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false }, CASE_TIMEOUT_MS * 2);
     if (name === "sidepanel" && result.thumbnailCount > 0 && !result.thumbnailLoaded) {
       await delay(100);
       result.thumbnailLoaded = await evaluate(client,
@@ -1369,7 +1382,7 @@ function launchChrome(executable, profile) {
   // GitHub-hosted Linux runners do not provide Chromium's setuid sandbox.
   // Keep the exception explicit and scoped to the disposable CI profile.
   if (process.platform === "linux" && process.env.FLUXCATCH_E2E_NO_SANDBOX === "1") {
-    args.splice(args.length - 1, 0, "--no-sandbox");
+    args.splice(args.length - 1, 0, "--no-sandbox", "--disable-dev-shm-usage");
   }
   const child = spawn(executable, args, { stdio: ["ignore", "ignore", "pipe"] });
   const stderr = [];
