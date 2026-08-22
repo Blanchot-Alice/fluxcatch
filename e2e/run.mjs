@@ -1366,6 +1366,11 @@ function launchChrome(executable, profile) {
     "--use-mock-keychain",
     "about:blank"
   ];
+  // GitHub-hosted Linux runners do not provide Chromium's setuid sandbox.
+  // Keep the exception explicit and scoped to the disposable CI profile.
+  if (process.platform === "linux" && process.env.FLUXCATCH_E2E_NO_SANDBOX === "1") {
+    args.splice(args.length - 1, 0, "--no-sandbox");
+  }
   const child = spawn(executable, args, { stdio: ["ignore", "ignore", "pipe"] });
   const stderr = [];
   report.chrome.arguments = args.map((arg) => {

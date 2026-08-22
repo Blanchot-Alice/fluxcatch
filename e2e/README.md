@@ -6,6 +6,9 @@ Run the dependency-free Chrome for Testing suite with:
 npm run test:e2e
 ```
 
+GitHub Actions 在一次性 Linux runner 上显式设置
+`FLUXCATCH_E2E_NO_SANDBOX=1`，仅用于启动该次测试的临时 Chrome 配置；本地运行不会关闭 Chrome 沙箱。
+
 Set `CHROME_PATH` when Chrome for Testing is not in the Playwright cache or a standard macOS location.
 
 The runner creates a fresh profile and loopback fixture server, verifies the runtime extension ID/name/version, renders the Options, popup, and Side Panel extension pages at fixed viewports, checks their critical controls/ARIA/tab behavior/overflow, and writes local screenshots. The Side Panel case renders a real detected media row, loads its preview through the credential-free thumbnail path, starts a Chrome direct download, waits for its terminal job state, and verifies the saved bytes and SHA-256. It then clears and binds each detection case to a distinct tab and makes strict assertions for direct media, HLS, and DASH detection.
