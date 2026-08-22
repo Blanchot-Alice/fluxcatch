@@ -155,10 +155,17 @@ try {
   const uiFixture = await prepareUiFixtureTab();
   try {
     await auditNewExtensionPage("popup", "popup/popup.html", 372, 560, `(async () => {
-      const deadline = Date.now() + 5000;
+      const deadline = Date.now() + ${CASE_TIMEOUT_MS};
       let thumbnail;
       while (!(thumbnail = document.querySelector(".media-thumbnail")) && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      if (thumbnail) {
+        thumbnail.loading = "eager";
+        thumbnail.scrollIntoView({ block: "nearest" });
+        try {
+          await Promise.race([thumbnail.decode(), new Promise((resolve) => setTimeout(resolve, 1000))]);
+        } catch { /* The state assertion below reports decode failures. */ }
       }
       while (thumbnail && (!thumbnail.complete || thumbnail.naturalWidth === 0) && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 50));
@@ -205,6 +212,13 @@ try {
       }
       await new Promise((resolve) => setTimeout(resolve, 100));
       const thumbnail = document.querySelector(".media-thumbnail");
+      if (thumbnail) {
+        thumbnail.loading = "eager";
+        thumbnail.scrollIntoView({ block: "nearest" });
+        try {
+          await Promise.race([thumbnail.decode(), new Promise((resolve) => setTimeout(resolve, 1000))]);
+        } catch { /* The state assertion below reports decode failures. */ }
+      }
       return {
         title: document.title,
         brand: document.querySelector(".brand-copy strong")?.textContent,
