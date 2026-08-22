@@ -6,8 +6,7 @@ Run the dependency-free Chrome for Testing suite with:
 npm run test:e2e
 ```
 
-GitHub Actions 在一次性 Linux runner 上显式设置
-`FLUXCATCH_E2E_NO_SANDBOX=1`，仅用于启动该次测试的临时 Chrome 配置，并将共享内存写入临时目录；本地运行不会关闭 Chrome 沙箱。
+GitHub Actions 在固定的 `macos-14` runner 上运行同一套测试，Chrome for Testing 版本与 `CHROME_PATH` 均由工作流显式固定。
 
 Set `CHROME_PATH` when Chrome for Testing is not in the Playwright cache or a standard macOS location.
 
