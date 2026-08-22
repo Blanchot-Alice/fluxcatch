@@ -5,6 +5,10 @@ const nativePermissionStatus = document.querySelector("#nativePermissionStatus")
 const ytdlpRefreshButton = document.querySelector("#ytdlpRefreshButton");
 const ytdlpStatus = document.querySelector("#ytdlpStatus");
 const ytdlpGuide = document.querySelector("#ytdlpGuide");
+const EXTERNAL_TOOL_NETWORK_ENABLED = false;
+// Unknown, ungranted and disconnected states all start closed.  Only an
+// explicit capability from a connected host may enable the switch.
+let ytdlpNetworkDisabled = true;
 
 document.addEventListener("DOMContentLoaded", load);
 form.addEventListener("submit", save);
@@ -27,11 +31,13 @@ async function load() {
     form.concurrentFragments.value = s.concurrentFragments;
     form.concurrentRanges.value = s.concurrentRanges;
     form.outputContainer.value = s.outputContainer;
-    form.liveDuration.value = s.liveDuration;
+    form.liveDuration.value = 0;
     form.minimumKiB.value = Math.round(s.minimumBytes / 1024);
     form.filenameTemplate.value = s.filenameTemplate;
     form.blockedDomains.value = (s.blockedDomains || []).join("\n");
-    for (const key of ["saveAs", "useNativeForDirect", "youtubeEnabled"]) form[key].checked = Boolean(s[key]);
+    for (const key of ["saveAs", "useNativeForDirect", "allowPrivateNetworkMedia", "autoEnrichSiteQuality", "youtubeEnabled"]) {
+      form[key].checked = Boolean(s[key]);
+    }
     form.showNotifications.checked = Boolean(s.showNotifications) && await chrome.permissions.contains({ permissions: ["notifications"] });
     await refreshNativeAccess();
     await refreshYtdlp();
@@ -74,6 +80,7 @@ async function refreshNativeAccess() {
 }
 
 async function refreshYtdlp() {
+  ytdlpNetworkDisabled = true;
   try {
     const response = await chrome.runtime.sendMessage({ type: "PING_HOST" });
     if (!response?.ok) throw new Error(response?.error || "暂时未能检查 yt-dlp");
@@ -84,18 +91,28 @@ async function refreshYtdlp() {
       ytdlpStatus.textContent = "本地引擎未连接，暂时无法检查 yt-dlp（安装方法见下方）";
     } else {
       const ytdlp = host.capabilities?.ytdlp || {};
-      ytdlpStatus.textContent = ytdlp.available
-        ? `已就绪${ytdlp.version ? ` · 版本 ${ytdlp.version}` : ""}`
-        : "未检测到 yt-dlp（安装方法见下方）";
+      const ytdlpNetworkAllowed = EXTERNAL_TOOL_NETWORK_ENABLED
+        && host.connected === true
+        && ytdlp.available === true
+        && ytdlp.networkDisabled === false;
+      ytdlpNetworkDisabled = !ytdlpNetworkAllowed;
+      ytdlpStatus.textContent = !EXTERNAL_TOOL_NETWORK_ENABLED || ytdlp.networkDisabled === true
+        ? "0.2.4 暂停外部引擎联网，等待受控网络代理"
+        : ytdlpNetworkAllowed
+          ? `已就绪${ytdlp.version ? ` · 版本 ${ytdlp.version}` : ""}`
+          : "外部下载能力尚未通过安全检查，当前保持关闭";
     }
   } catch (error) {
     ytdlpStatus.textContent = error?.message || "检查失败，请确认本地引擎已安装后重试";
   }
+  form.youtubeEnabled.disabled = ytdlpNetworkDisabled;
+  if (ytdlpNetworkDisabled) form.youtubeEnabled.checked = false;
+  ytdlpGuide.hidden = ytdlpNetworkDisabled;
   syncYtdlpGuide();
 }
 
 function syncYtdlpGuide() {
-  ytdlpGuide.open = form.youtubeEnabled.checked && /未检测到|未连接/.test(ytdlpStatus.textContent);
+  ytdlpGuide.open = !ytdlpNetworkDisabled && form.youtubeEnabled.checked && /未检测到|未连接/.test(ytdlpStatus.textContent);
 }
 
 async function save(event) {
@@ -115,13 +132,15 @@ async function save(event) {
     concurrentFragments: Number(form.concurrentFragments.value),
     concurrentRanges: Number(form.concurrentRanges.value),
     outputContainer: form.outputContainer.value,
-    liveDuration: Number(form.liveDuration.value),
+    liveDuration: 0,
     minimumBytes: Number(form.minimumKiB.value) * 1024,
     filenameTemplate: form.filenameTemplate.value,
     blockedDomains: form.blockedDomains.value.split(/\r?\n/),
     saveAs: form.saveAs.checked,
     useNativeForDirect: form.useNativeForDirect.checked,
-    youtubeEnabled: form.youtubeEnabled.checked,
+    allowPrivateNetworkMedia: form.allowPrivateNetworkMedia.checked,
+    autoEnrichSiteQuality: form.autoEnrichSiteQuality.checked,
+    youtubeEnabled: form.youtubeEnabled.checked && !ytdlpNetworkDisabled,
     showNotifications
   };
   try {

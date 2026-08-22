@@ -3,11 +3,13 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 HOST="$ROOT/host.py"
+NETWORK_POLICY="$ROOT/fluxcatch_network_policy.py"
 APP_SUPPORT="$HOME/Library/Application Support"
 HOST_NAME="io.github.blanchot_alice.fluxcatch"
 RUNTIME_DIR="$APP_SUPPORT/FluxCatch"
 HOST_DIR="$RUNTIME_DIR/native-host"
 INSTALLED_HOST="$HOST_DIR/host.py"
+INSTALLED_NETWORK_POLICY="$HOST_DIR/fluxcatch_network_policy.py"
 LAUNCHER="$HOST_DIR/launcher"
 PYTHON_COMMAND="$(command -v python3 || true)"
 FFMPEG_COMMAND="$(command -v ffmpeg || true)"
@@ -55,19 +57,20 @@ for destination in "${DESTINATIONS[@]}"; do
   DEST_ARGS+=("$destination/$HOST_NAME.json")
 done
 
-"$PYTHON_EXECUTABLE" - "$ROOT/$HOST_NAME.json.in" "$HOST" "$INSTALLED_HOST" "$LAUNCHER" "$PYTHON_COMMAND" "$FFMPEG_COMMAND" "${DEST_ARGS[@]}" <<'PY'
+"$PYTHON_EXECUTABLE" - "$ROOT/$HOST_NAME.json.in" "$HOST" "$NETWORK_POLICY" "$INSTALLED_HOST" "$INSTALLED_NETWORK_POLICY" "$LAUNCHER" "$PYTHON_COMMAND" "$FFMPEG_COMMAND" "${DEST_ARGS[@]}" <<'PY'
 import json, os, pathlib, shlex, sys, tempfile
 
-template, source_host, installed_host, launcher, python = map(pathlib.Path, sys.argv[1:6])
-ffmpeg = pathlib.Path(sys.argv[6]) if sys.argv[6] else None
-destinations = [pathlib.Path(item) for item in sys.argv[7:]]
+template, source_host, source_policy, installed_host, installed_policy, launcher, python = map(pathlib.Path, sys.argv[1:8])
+ffmpeg = pathlib.Path(sys.argv[8]) if sys.argv[8] else None
+destinations = [pathlib.Path(item) for item in sys.argv[9:]]
 
-host_tmp = installed_host.with_name(f".{installed_host.name}.tmp")
-host_tmp.write_bytes(source_host.read_bytes())
-host_tmp.chmod(0o700)
-with host_tmp.open("rb") as stream:
-    os.fsync(stream.fileno())
-os.replace(host_tmp, installed_host)
+for source, destination in ((source_host, installed_host), (source_policy, installed_policy)):
+    temporary = destination.with_name(f".{destination.name}.tmp")
+    temporary.write_bytes(source.read_bytes())
+    temporary.chmod(0o700)
+    with temporary.open("rb") as stream:
+        os.fsync(stream.fileno())
+    os.replace(temporary, destination)
 
 # Both the interpreter and FFmpeg are pinned by their stable Homebrew symlink
 # paths (e.g. /opt/homebrew/bin/python3, /opt/homebrew/bin/ffmpeg) rather than
@@ -98,11 +101,12 @@ for destination in destinations:
     print(f"Installed native host manifest: {destination}")
 print(f"Launcher uses: {python}")
 print(f"Installed host copy: {installed_host.resolve()}")
+print(f"Installed network policy: {installed_policy.resolve()}")
 print(f"FFmpeg: {ffmpeg if ffmpeg else 'not found during installation'}")
 PY
 
 echo ""
 echo "Extension ID: gpnojfocoanelgibidlhholjobljefab"
-echo "(The manifest key pins this ID for unpacked, zipped and store builds,"
-echo " so one allowed_origins entry covers every install channel.)"
+echo "This package registers the current development build only."
+echo "A future Chrome Web Store build must ship a manifest generated for its official Item ID."
 echo "Reload FluxCatch at chrome://extensions after installation."

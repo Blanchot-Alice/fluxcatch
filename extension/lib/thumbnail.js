@@ -1,3 +1,5 @@
+import { requireNetworkRequest } from "./network-policy.js";
+
 const DEFAULT_MAX_THUMBNAIL_BYTES = 8 * 1024 * 1024;
 const OBJECT_URL_REVOKE_TIMEOUT_MS = 15_000;
 
@@ -6,9 +8,9 @@ function normalizeThumbnailUrl(value) {
   try {
     const url = new URL(value.trim());
     if (url.protocol !== "http:" && url.protocol !== "https:") return "";
-    // Never allow credentials embedded in a preview URL to reach the server.
-    url.username = "";
-    url.password = "";
+    // Reject instead of silently rewriting. A page must not use extension
+    // privileges to turn an embedded-credential URL into a second request.
+    if (url.username || url.password) return "";
     url.hash = "";
     return url.href;
   } catch {
@@ -50,21 +52,36 @@ function cancelResponseBody(response) {
 
 export async function fetchThumbnailBlob(value, {
   fetchImpl = globalThis.fetch,
-  maxBytes = DEFAULT_MAX_THUMBNAIL_BYTES
+  maxBytes = DEFAULT_MAX_THUMBNAIL_BYTES,
+  pageUrl = "",
+  observedMediaUrls = [],
+  adapterImageHosts = [],
+  allowedThumbnailOrigins = [],
+  networkScope = "public_only",
+  provenance = "dom_metadata"
 } = {}) {
   const url = normalizeThumbnailUrl(value);
   if (!url) throw new Error("invalid_thumbnail_url");
+  const policy = { purpose: "thumbnail", provenance, networkScope, pageUrl, observedMediaUrls, adapterImageHosts, allowedThumbnailOrigins };
+  const allowedUrl = requireNetworkRequest({ ...policy, url });
 
-  const response = await fetchImpl(url, {
+  const response = await fetchImpl(allowedUrl, {
     method: "GET",
     credentials: "omit",
     referrerPolicy: "no-referrer",
     cache: "force-cache",
-    redirect: "follow"
+    redirect: "error"
   });
   if (!response.ok) {
     cancelResponseBody(response);
     throw new Error(`thumbnail_http_${response.status}`);
+  }
+  if (response.url && response.url !== allowedUrl) {
+    cancelResponseBody(response);
+    // redirect:"error" should make fetch reject before this point. Treat any
+    // implementation that still reports a different final URL as a protocol
+    // violation rather than re-authorizing it under a broader purpose.
+    throw new Error("thumbnail_redirect_rejected");
   }
 
   const contentType = (response.headers.get("content-type") || "")
@@ -89,12 +106,13 @@ export async function fetchThumbnailBlob(value, {
 export function loadPrivacySafeThumbnail(value, fallback, {
   className = "media-thumbnail",
   fetchImpl = globalThis.fetch,
-  maxBytes = DEFAULT_MAX_THUMBNAIL_BYTES
+  maxBytes = DEFAULT_MAX_THUMBNAIL_BYTES,
+  ...policy
 } = {}) {
   const url = normalizeThumbnailUrl(value);
   if (!url) return fallback;
 
-  void fetchThumbnailBlob(url, { fetchImpl, maxBytes }).then((blob) => {
+  void fetchThumbnailBlob(url, { fetchImpl, maxBytes, ...policy }).then((blob) => {
     if (!fallback.isConnected) return;
     const objectUrl = URL.createObjectURL(blob);
     let settled = false;

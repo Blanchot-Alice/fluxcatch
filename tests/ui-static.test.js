@@ -41,7 +41,7 @@ test("download settings explain their effect in user-facing language", () => {
     ["concurrentFragments", "concurrentFragmentsHelp", "同时下载几个视频片段", /一个视频通常由许多小片段组成。这里设置一次同时下载几个片段；推荐 8。数值越大不一定越快，下载出错时可改为 4。/],
     ["concurrentRanges", "concurrentRangesHelp", "大文件同时下载几部分", /开启“自动加速大文件”后，较大的 MP4、MP3 等文件会拆开下载。这里设置一次同时下载几部分；推荐 8。数值越大不一定越快，下载出错时可改为 4。/],
     ["outputContainer", "outputContainerHelp", "下载文件保存格式", /推荐 MP4，兼容性最好；合并流媒体或转换格式时生效/],
-    ["liveDuration", "liveDurationHelp", "直播多久后自动停止（秒）", /推荐 0（手动停止）；仅录制直播时生效/]
+    ["liveDuration", "liveDurationHelp", "直播录制（0.2.4 暂停）", /当前版本仅下载未加密的静态 HLS 视频；直播、AES-128 加密流、独立音轨与时间线切换暂不开放/]
   ];
   for (const [id, helperId, label, helper] of fields) {
     assert.match(optionsHtml, new RegExp(`<label\\s+for="${id}">${label}</label>`));
@@ -54,6 +54,22 @@ test("download settings explain their effect in user-facing language", () => {
   assert.match(optionsHtml, /自动加速大文件/);
   assert.match(optionsHtml, /关闭后由浏览器普通下载/);
   assert.match(optionsHtml, /下载完成或失败时提醒我/);
+  assert.match(optionsHtml, /id="allowPrivateNetworkMedia"/);
+  assert.match(optionsHtml, /允许本地网络媒体/);
+  assert.match(optionsHtml, /云服务元数据地址和保留网络始终禁止访问/);
+  assert.match(optionsHtml, /id="autoEnrichSiteQuality"/);
+  assert.match(optionsHtml, /自动补全站点画质/);
+  assert.match(optionsHtml, /使用你当前的登录会话，请求该站点自己的播放信息接口/);
+  assert.match(optionsJs, /allowPrivateNetworkMedia: form\.allowPrivateNetworkMedia\.checked/);
+  assert.match(optionsJs, /autoEnrichSiteQuality: form\.autoEnrichSiteQuality\.checked/);
+  assert.match(optionsHtml, /id="liveDuration"[^>]+disabled[^>]+aria-disabled="true"/);
+  assert.match(optionsJs, /liveDuration: 0/);
+  assert.match(optionsJs, /let ytdlpNetworkDisabled = true/);
+  assert.match(optionsJs, /const EXTERNAL_TOOL_NETWORK_ENABLED = false/);
+  assert.match(optionsJs, /EXTERNAL_TOOL_NETWORK_ENABLED[\s\S]*host\.connected === true[\s\S]*ytdlp\.available === true[\s\S]*ytdlp\.networkDisabled === false/);
+  assert.match(optionsJs, /form\.youtubeEnabled\.disabled = ytdlpNetworkDisabled/);
+  assert.match(optionsJs, /youtubeEnabled: form\.youtubeEnabled\.checked && !ytdlpNetworkDisabled/);
+  assert.match(optionsHtml, /0\.2\.4 暂停外部引擎联网，等待受控网络代理/);
   assert.match(optionsCss, /\.field-help\{[^}]*color:var\(--muted\)[^}]*line-height:1\.45/);
 });
 
@@ -65,6 +81,28 @@ test("popup tabs expose complete ARIA state and keyboard navigation", () => {
   assert.match(popupHtml, /id="jobsView"[^>]+role="tabpanel"[^>]+aria-labelledby="jobsTab"/);
   for (const key of ["ArrowRight", "ArrowLeft", "Home", "End"]) assert.match(popupJs, new RegExp(`event\\.key === "${key}"`));
   assert.match(popupJs, /setAttribute\("aria-selected", String\(selected\)\)/);
+});
+
+test("popup requests the controlled native path for candidates not observed by the browser", () => {
+  assert.match(popupJs, /item\.provenance !== "observed_response"/);
+  assert.match(popupJs, /if \(advanced\) \{\s*const granted = await chrome\.permissions\.request/);
+});
+
+test("popup reports the 0.2.4 external-engine network pause instead of installation advice", () => {
+  assert.match(popupJs, /const EXTERNAL_TOOL_NETWORK_ENABLED = false/);
+  assert.match(popupJs, /!EXTERNAL_TOOL_NETWORK_ENABLED \|\| ytdlp\.networkDisabled !== false/);
+  assert.match(popupJs, /EXTERNAL_TOOL_NETWORK_ENABLED && Boolean\(ytdlp\.available\) && !ytdlpNetworkDisabled/);
+  assert.match(popupJs, /0\.2\.4 暂停外部引擎联网，等待受控网络代理/);
+});
+
+test("HLS UI exposes the clear static VOD boundary and blocks unsupported modes", () => {
+  for (const marker of ["aes128", "probe.type === \"media\" && probe.live", "probe.discontinuity", "probe.audioTrackCount"]) {
+    assert.match(popupJs, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  }
+  assert.match(popupJs, /manifestDownloadBlockReason\(probe\)/);
+  assert.match(popupJs, /state\.probes\.get\(mediaKey\(item\)\)/);
+  assert.match(popupJs, /FluxCatch 0\.2\.4 暂不支持 AES-128 加密的 HLS 下载/);
+  assert.doesNotMatch(popupJs, /检测到可处理的加密流媒体/);
 });
 
 test("dynamic status, task history and progress are exposed without duplicate rows", () => {

@@ -9,6 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { publicDisplayUrl } from "../extension/lib/candidate-public.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
@@ -130,6 +131,24 @@ try {
     labelledFields: [...document.querySelectorAll(".opt-field input, .opt-field select, .opt-field textarea")].every((node) => Boolean(document.querySelector('label[for="' + node.id + '"]'))),
     overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth
   }))()`);
+  const fixtureNetworkSetting = await control(`async () => {
+    const before = await chrome.runtime.sendMessage({ type: "GET_SETTINGS" });
+    if (!before?.ok) throw new Error(before?.error || "GET_SETTINGS failed before fixture opt-in");
+    const saved = await chrome.runtime.sendMessage({
+      type: "SAVE_SETTINGS",
+      settings: { ...before.settings, allowPrivateNetworkMedia: true }
+    });
+    if (!saved?.ok) throw new Error(saved?.error || "SAVE_SETTINGS failed for fixture opt-in");
+    const after = await chrome.runtime.sendMessage({ type: "GET_SETTINGS" });
+    if (!after?.ok) throw new Error(after?.error || "GET_SETTINGS failed after fixture opt-in");
+    return {
+      defaultAllowed: Boolean(before.settings?.allowPrivateNetworkMedia),
+      enabled: Boolean(after.settings?.allowPrivateNetworkMedia)
+    };
+  }`);
+  assert.equal(fixtureNetworkSetting.defaultAllowed, false, "private-network media must default to disabled");
+  assert.equal(fixtureNetworkSetting.enabled, true, "loopback fixtures require an explicit private-network opt-in");
+  report.extension.privateNetworkFixtureOptIn = true;
   const uiDownloadDir = path.join(chromeProfile, "verified-downloads");
   fs.mkdirSync(uiDownloadDir, { recursive: true });
   await browser.send("Browser.setDownloadBehavior", { behavior: "allow", downloadPath: uiDownloadDir, eventsEnabled: true });
@@ -280,11 +299,12 @@ async function runCase(definition, devtoolsOrigin) {
   const startedAt = Date.now();
   const pageUrl = `${serverOrigin}${definition.pagePath}`;
   const expectedUrl = definition.mediaUrl || `${serverOrigin}${definition.mediaPath}`;
-  const expectedThumbnailUrl = `${serverOrigin}${definition.thumbnailPath}`;
+  const expectedPublicUrl = publicDisplayUrl(expectedUrl);
+  const expectedThumbnailUrl = publicDisplayUrl(`${serverOrigin}${definition.thumbnailPath}`);
   const item = {
     name: definition.name,
     pageUrl,
-    expected: { kind: definition.expectedKind, url: expectedUrl },
+    expected: { kind: definition.expectedKind, observedUrl: expectedUrl, publicUrl: expectedPublicUrl },
     startedAt: new Date(startedAt).toISOString(),
     status: "running"
   };
@@ -339,12 +359,12 @@ async function runCase(definition, devtoolsOrigin) {
       })`);
       if (!response?.ok) throw new Error(response?.error || "GET_TAB_MEDIA failed");
       item.observed = (response.items || []).map(({ kind, url, source, sources }) => ({ kind, url, source, sources }));
-      const candidate = (response.items || []).find((entry) => entry.kind === definition.expectedKind && entry.url === expectedUrl);
+      const candidate = (response.items || []).find((entry) => entry.kind === definition.expectedKind && entry.url === expectedPublicUrl);
       return candidate ? { response, candidate } : null;
     }, CASE_TIMEOUT_MS, `${definition.name} exact ${definition.expectedKind} detection`);
 
     assert.equal(detection.candidate.kind, definition.expectedKind, "candidate kind mismatch");
-    assert.equal(detection.candidate.url, expectedUrl, "candidate URL mismatch");
+    assert.equal(detection.candidate.url, expectedPublicUrl, "candidate public display URL mismatch");
     assert.equal(detection.candidate.thumbnailUrl, expectedThumbnailUrl, "candidate thumbnail URL mismatch");
     assert.equal(detection.candidate.thumbnailSource, "poster", "video poster must outrank page metadata");
     item.candidate = {
@@ -366,8 +386,8 @@ async function runCase(definition, devtoolsOrigin) {
         if (!response?.ok) throw new Error(response?.error || "GET_TAB_MEDIA failed while waiting for HLS grouping");
         const visibleMedia = (response.items || []).filter((entry) => entry.kind !== "segment");
         const streams = visibleMedia.filter((entry) => entry.kind === "hls");
-        const representative = streams.find((entry) => entry.url === expectedUrl);
-        const captionVisible = visibleMedia.some((entry) => entry.url === definition.captionUrl
+        const representative = streams.find((entry) => entry.url === expectedPublicUrl);
+        const captionVisible = visibleMedia.some((entry) => entry.url === publicDisplayUrl(definition.captionUrl)
           || (() => { try { return /\/embed\/captions\//i.test(new URL(entry.url).pathname); } catch { return false; } })());
         return visibleMedia.length === 1
           && streams.length === 1
@@ -383,13 +403,13 @@ async function runCase(definition, devtoolsOrigin) {
         "one HLS video must be displayed once even when its master and rendition playlists were observed");
       assert.equal(grouped.captionVisible, false,
         "an /embed/captions/*.m3u8 subtitle playlist must not become a downloadable video candidate");
-      assert.equal(grouped.representative.url, expectedUrl,
+      assert.equal(grouped.representative.url, expectedPublicUrl,
         "the fast-host master must remain the representative instead of a rendition or caption playlist");
       assert.ok(grouped.representative.aliases.length >= HLS_RENDITIONS.length,
         "the grouped HLS item must retain its rendition aliases for diagnostics");
       const aliasUrls = grouped.representative.aliases.map((alias) => alias.url);
       for (const observedUrl of definition.observedVariants || []) {
-        assert.ok(aliasUrls.includes(observedUrl),
+        assert.ok(aliasUrls.includes(publicDisplayUrl(observedUrl)),
           `the grouped HLS item lost its observed CDN rendition alias: ${observedUrl}`);
       }
       item.grouping = {
@@ -411,14 +431,17 @@ async function runCase(definition, devtoolsOrigin) {
       })`);
       assert.equal(probe?.ok, true, `HLS probe failed: ${probe?.error || "unknown error"}`);
       const actualVariants = (probe.probe?.variants || []).map((variant) => variant.url).sort();
-      const expectedVariants = definition.expectedVariants.map((value) => new URL(value, serverOrigin).href).sort();
-      assert.deepEqual(actualVariants, expectedVariants,
-        "HLS master must expose two variants that point to different playlists");
-      assert.equal(new Set(actualVariants).size, expectedVariants.length,
-        "HLS variants unexpectedly point to duplicate playlists");
+      assert.equal(actualVariants.length, definition.expectedVariants.length,
+        "HLS master must expose one opaque selector per rendition");
+      assert.equal(new Set(actualVariants).size, definition.expectedVariants.length,
+        "HLS variants unexpectedly share an opaque selector");
+      assert.ok(actualVariants.every((value) => /^https:\/\/fluxcatch\.invalid\/manifest\/[a-f0-9-]{36}\/[a-f0-9-]{36}$/.test(value)),
+        "HLS variants exposed a media URL instead of an opaque selector");
+      assert.doesNotMatch(JSON.stringify(actualVariants), /run=|token=|signature=|\/deliveries\//i,
+        "HLS variant selectors leaked internal media URLs or queries");
       item.hlsVariants = actualVariants;
 
-      await auditHlsDownloadDialog(tabId, expectedUrl, definition.expectedTitle);
+      await auditHlsDownloadDialog(tabId, expectedPublicUrl, definition.expectedTitle);
     }
 
     item.status = "passed";
@@ -611,12 +634,12 @@ async function auditPopupTaskLifecycle(downloadDir) {
     const detected = await poll(async () => {
       const response = await control(`async () => chrome.runtime.sendMessage({ type: "GET_TAB_MEDIA", tabId: ${JSON.stringify(tabId)} })`);
       if (!response?.ok) throw new Error(response?.error || "GET_TAB_MEDIA failed for task lifecycle fixture");
-      const byUrl = Object.fromEntries((response.items || []).map((candidate) => [candidate.url, candidate]));
-      return Object.values(urls).every((url) => byUrl[url]) ? byUrl : null;
+      const byFilename = Object.fromEntries((response.items || []).map((candidate) => [candidate.suggestedFilename, candidate]));
+      return Object.values(filenames).every((filename) => byFilename[filename]) ? byFilename : null;
     }, CASE_TIMEOUT_MS, "four task lifecycle media candidates");
 
     const start = async (name) => {
-      const candidate = detected[urls[name]];
+      const candidate = detected[filenames[name]];
       const response = await control(`async () => chrome.runtime.sendMessage({
         type: "DOWNLOAD",
         tabId: ${JSON.stringify(tabId)},
@@ -834,8 +857,8 @@ async function captureFlowScreenshot(client, filename) {
 
 async function prepareUiFixtureTab() {
   const pageUrl = `${serverOrigin}/cases/direct.html?run=${encodeURIComponent(`${runId}-ui`)}`;
-  const expectedUrl = `${serverOrigin}/media/direct.mp4?run=${encodeURIComponent(`${runId}-ui`)}`;
-  const expectedThumbnailUrl = `${serverOrigin}/media/poster.png?run=${encodeURIComponent(`${runId}-ui`)}`;
+  const expectedUrl = publicDisplayUrl(`${serverOrigin}/media/direct.mp4?run=${encodeURIComponent(`${runId}-ui`)}`);
+  const expectedThumbnailUrl = publicDisplayUrl(`${serverOrigin}/media/poster.png?run=${encodeURIComponent(`${runId}-ui`)}`);
   const tab = await control(`async () => chrome.tabs.create({ url: ${JSON.stringify(pageUrl)}, active: true })`);
   assert.ok(Number.isInteger(tab?.id), "UI fixture did not create an active tab");
   await waitForTabComplete(tab.id, pageUrl, CASE_TIMEOUT_MS);

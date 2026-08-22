@@ -26,6 +26,7 @@ with zipfile.ZipFile(extension_output, "w", zipfile.ZIP_DEFLATED, compresslevel=
 native_output = dist / f"fluxcatch-native-host-macos-{manifest['version']}.zip"
 native_files = [
     "native-host/host.py",
+    "native-host/fluxcatch_network_policy.py",
     "native-host/install-macos.sh",
     "native-host/uninstall-macos.sh",
     "native-host/io.github.blanchot_alice.fluxcatch.json.in",

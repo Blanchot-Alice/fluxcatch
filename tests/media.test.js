@@ -48,6 +48,7 @@ test("recognizes only trusted Bilibili DASH tracks while generic m4s stays suppr
   const videoUrl = "https://upos-sz-mirrorcoso1.edge.mountaintoys.cn:4483/v1/resource/upgcxcode/12/34/41067939286-1-30032.m4s?deadline=1999999999&upsig=VIDEO_SECRET";
   const audioUrl = "https://upos-sz-mirror08c.bilivideo.com/upgcxcode/12/34/41067939286-1-30280.m4s?deadline=1999999999&upsig=AUDIO_SECRET";
   assert.equal(isBilibiliVideoPage("https://www.bilibili.com/video/BV14N8G6pEAf/?spm_id_from=333.1"), true);
+  assert.equal(isBilibiliVideoPage("https://www.bilibili.com/bangumi/play/ep123456"), false, "unsupported bangumi routes stay out of the adapter surface");
   assert.equal(isBilibiliVideoPage("https://space.bilibili.com/123"), false);
   assert.equal(isBilibiliMediaUrl(videoUrl), true, "partner CDN is limited to Bilibili's upgcxcode object shape");
   assert.equal(isBilibiliMediaUrl("https://cdn.mountaintoys.cn/unrelated/41067939286-1-30032.m4s"), false);
@@ -114,6 +115,7 @@ test("parses HLS VOD metadata, byte ranges and encryption", () => {
 #EXT-X-TARGETDURATION:6
 #EXT-X-MAP:URI="init.mp4",BYTERANGE="1000@0"
 #EXT-X-KEY:METHOD=AES-128,URI="key.bin"
+#EXT-X-DISCONTINUITY
 #EXTINF:6.0,
 #EXT-X-BYTERANGE:100@1000
 media.m4s
@@ -121,6 +123,7 @@ media.m4s
   assert.equal(parsed.type, "media");
   assert.equal(parsed.live, false);
   assert.equal(parsed.encrypted, true);
+  assert.equal(parsed.discontinuity, true);
   assert.equal(parsed.segments[0].byteRange, "100@1000");
   assert.equal(parsed.segments[0].initMap.url, "https://cdn.test/v/init.mp4");
 

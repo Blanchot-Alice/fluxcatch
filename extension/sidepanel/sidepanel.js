@@ -193,12 +193,25 @@ function createMediaRow(item) {
   download.className = "media-download";
   download.dataset.mediaId = item.id || item.url;
   download.type = "button";
-  download.textContent = "快速下载";
-  download.setAttribute("aria-label", `下载 ${title.textContent}`);
+  const youtube = item.kind === "youtube";
+  download.textContent = youtube ? "打开下载设置" : "快速下载";
+  download.setAttribute("aria-label", youtube ? `打开 ${title.textContent} 的下载设置` : `下载 ${title.textContent}`);
   download.addEventListener("click", () => void runAction(async () => {
     download.disabled = true;
     try {
-      const advanced = stream || Boolean(state.settings.useNativeForDirect);
+      // YouTube is an opt-in GitHub-build capability. Its full popup flow
+      // checks yt-dlp readiness and requests nativeMessaging in the originating
+      // user gesture. Never bypass those gates with Side Panel quick download.
+      if (youtube) {
+        try {
+          if (typeof chrome.action?.openPopup !== "function") throw new Error("openPopup unavailable");
+          await chrome.action.openPopup();
+        } catch {
+          showToast("请点击浏览器工具栏中的 FluxCatch 图标打开下载设置");
+        }
+        return;
+      }
+      const advanced = stream || item.provenance !== "observed_response" || Boolean(state.settings.useNativeForDirect);
       if (advanced) {
         // Keep request() inside the originating click gesture. Re-requesting an
         // already granted optional permission resolves without another prompt.
@@ -225,7 +238,11 @@ function createMediaVisual(item) {
   const fallback = document.createElement("span");
   fallback.className = `kind-icon ${stream ? "stream" : item.kind || "video"}`;
   fallback.textContent = stream ? streamTypeLabel(item) : item.kind === "audio" ? "AUDIO" : "VIDEO";
-  return loadPrivacySafeThumbnail(item.thumbnailUrl, fallback);
+  return loadPrivacySafeThumbnail(item.thumbnailUrl, fallback, {
+    allowedThumbnailOrigins: item.thumbnailAllowedOrigins || [],
+    adapterImageHosts: item.thumbnailAdapterImageHosts || [],
+    networkScope: state.settings.allowPrivateNetworkMedia ? "private_network_opt_in" : "public_only"
+  });
 }
 
 function renderJobs() {

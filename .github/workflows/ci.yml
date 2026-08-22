@@ -5,18 +5,66 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
+  fast:
+    name: Unit, native and validation gates
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@7f4fc3e22c37d6ff65e88745f38bd3157c663f7c # v4
         with:
           python-version: "3.12"
       - name: Extension unit and UI static tests
         run: npm test
+      - name: Native-host unit and security tests
+        run: python3 -m unittest discover -s native-host/tests -v
       - name: Manifest and syntax validation
         run: python3 scripts/validate.py
+      - name: Compile native Python sources
+        run: python3 -m compileall -q native-host
+      - name: Package and verify development artifacts
+        run: |
+          npm run package
+          cd dist
+          sha256sum -c SHA256SUMS
+
+  browser:
+    name: Chrome for Testing E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+      - name: Install pinned Chrome for Testing
+        id: chrome
+        uses: browser-actions/setup-chrome@48ad923757ca74d66703209fe939badbdf80f2f4 # v2
+        with:
+          chrome-version: 120.0.6099.109
+          install-dependencies: true
+      - name: Run browser E2E
+        env:
+          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
+        run: npm run test:e2e
+      - name: Upload redacted E2E evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: fluxcatch-e2e-${{ github.run_id }}
+          path: |
+            e2e/artifacts/latest.json
+            e2e/artifacts/screenshots/
+          if-no-files-found: warn
+          retention-days: 14

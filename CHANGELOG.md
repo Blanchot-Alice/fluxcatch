@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.4 — 2026-08-23
+
+- Added fail-closed extension and native NetworkPolicy gates for active targets, redirects, DNS results, manifest children, and thumbnails; native HTTP connections pin authorized peers, private-network media requires explicit opt-in, and metadata/reserved ranges remain blocked. FFmpeg remains available for local post-processing, while direct FFmpeg/yt-dlp network input is gated until a pinned broker exists.
+- Replaced crash-resume URLs with version-2 checkpoints containing only SHA-256 digests of the URL and entity validators, plus length and completed byte ranges; legacy checkpoints are discarded.
+- Replaced denylist-style candidate exposure with explicit UI/session field allowlists and opaque handling for paired DASH selections.
+- Kept passive detection as the default: Bilibili quality enrichment now runs only after the popup or Side Panel opens, a manual rescan, or the off-by-default automatic-enrichment setting.
+- Removed the unsupported Bilibili bangumi matcher, routed Side Panel YouTube actions through the guarded settings flow, and bounded/batched content-script payload scanning.
+- Made the current HLS boundary explicit in code and UI: only clear static VOD is downloadable in 0.2.4; live, AES-128/SAMPLE-AES, discontinuity, and separate-audio playlists fail closed.
+- Expanded security and lifecycle regression tests and made native tests, Python compilation, validation, and pinned Chrome for Testing E2E mandatory CI jobs.
+
 ## 0.2.3 — 2026-08-21
 
 - Detect Bilibili's MediaSource playback as one paired DASH item instead of discarding its separate `.m4s` video and audio tracks.

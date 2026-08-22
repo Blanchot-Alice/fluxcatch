@@ -10,6 +10,7 @@ const jobsList = $("#jobsList");
 const jobsEmpty = $("#jobsEmpty");
 const dialog = $("#downloadDialog");
 const port = chrome.runtime.connect({ name: "fluxcatch-popup" });
+const EXTERNAL_TOOL_NETWORK_ENABLED = false;
 
 function isStreamKind(value) {
   const kind = typeof value === "string" ? value : value?.kind;
@@ -163,7 +164,11 @@ function createMediaVisual(item) {
   const stream = isStreamKind(item);
   const fallback = el("div", `kind-icon ${stream ? "stream" : item.kind || "video"}`);
   fallback.textContent = stream ? streamTypeLabel(item) : item.kind === "audio" ? "♫" : "▶";
-  return loadPrivacySafeThumbnail(item.thumbnailUrl, fallback);
+  return loadPrivacySafeThumbnail(item.thumbnailUrl, fallback, {
+    allowedThumbnailOrigins: item.thumbnailAllowedOrigins || [],
+    adapterImageHosts: item.thumbnailAdapterImageHosts || [],
+    networkScope: state.settings.allowPrivateNetworkMedia ? "private_network_opt_in" : "public_only"
+  });
 }
 
 async function prepareDownload(item, button) {
@@ -191,6 +196,20 @@ async function prepareDownload(item, button) {
     button.removeAttribute("aria-busy");
   }
   openDownloadDialog(item, { probeWarning });
+}
+
+function manifestDownloadBlockReason(probe) {
+  if (probe?.kind === "hls") {
+    if (probe.protection === "drm" || probe.protected) return "检测到 DRM/SAMPLE-AES 内容保护，仅显示媒体信息。";
+    if (probe.protection === "aes128" || probe.encrypted) return "FluxCatch 0.2.4 暂不支持 AES-128 加密的 HLS 下载。";
+    if (probe.type === "media" && probe.live) return "FluxCatch 0.2.4 暂不支持 HLS 直播录制。";
+    if (probe.discontinuity) return "FluxCatch 0.2.4 暂不支持包含时间线切换的 HLS 下载。";
+    if (Number(probe.audioTrackCount || 0) > 0 || probe.variants?.some((variant) => variant.audioGroup)) {
+      return "FluxCatch 0.2.4 暂不支持独立音轨 HLS 下载。";
+    }
+  }
+  if (probe?.protection === "drm" || probe?.protected) return "检测到 DRM/内容保护，受保护内容暂不支持下载。";
+  return "";
 }
 
 function openDownloadDialog(item, { probeWarning = false } = {}) {
@@ -222,21 +241,23 @@ function openDownloadDialog(item, { probeWarning = false } = {}) {
     variantLabel.hidden = false;
   } else variantLabel.hidden = true;
   syncVariantVisibility();
-  const protectedMedia = probe?.protection === "drm" || probe?.protected;
-  const ytdlpReady = item.kind === "youtube" ? Boolean(state.hostStatus?.capabilities?.ytdlp?.available) : true;
-  $("#confirmDownload").disabled = Boolean(protectedMedia) || (item.kind === "youtube" && !ytdlpReady);
-  $("#dialogNote").style.color = item.kind === "youtube" && !ytdlpReady ? "var(--warning-strong)" : "";
+  const manifestBlockReason = manifestDownloadBlockReason(probe);
+  const ytdlp = state.hostStatus?.capabilities?.ytdlp || {};
+  const ytdlpNetworkDisabled = item.kind === "youtube" && (!EXTERNAL_TOOL_NETWORK_ENABLED || ytdlp.networkDisabled !== false);
+  const ytdlpReady = item.kind === "youtube" ? EXTERNAL_TOOL_NETWORK_ENABLED && Boolean(ytdlp.available) && !ytdlpNetworkDisabled : true;
+  $("#confirmDownload").disabled = Boolean(manifestBlockReason) || (item.kind === "youtube" && !ytdlpReady);
+  $("#dialogNote").style.color = manifestBlockReason || (item.kind === "youtube" && !ytdlpReady) ? "var(--warning-strong)" : "";
   $("#dialogNote").textContent = item.kind === "youtube"
-    ? ytdlpReady
+    ? ytdlpNetworkDisabled
+      ? "0.2.4 暂停外部引擎联网，等待受控网络代理。"
+      : ytdlpReady
       ? "实验性功能：由本机安装的 yt-dlp 引擎下载，画质与格式以本机 yt-dlp 为准。"
       : "实验性功能需要先安装 yt-dlp：请打开设置 → 站点适配器，按安装指引完成后再回来下载。"
-    : protectedMedia
-    ? "检测到 DRM/内容保护，受保护内容暂不支持下载。"
+    : manifestBlockReason
+    ? manifestBlockReason
     : probeWarning
       ? "未读取到清晰度选项，将自动选择并生成一个可直接播放的文件。"
-    : probe?.protection === "aes128"
-      ? "检测到可处理的加密流媒体，将使用高速下载功能完成下载。"
-      : item.kind === "dash_pair"
+    : item.kind === "dash_pair"
         ? "这个网站把画面和声音分开传送。FluxCatch 会分别下载并无损合并，最后保存为一个可以直接播放的文件。"
       : isStreamKind(item)
         ? "这类在线视频由许多小片段组成。FluxCatch 会逐段下载并自动组合，最后保存为一个可直接播放的文件。"
@@ -264,7 +285,8 @@ async function submitDownload(event) {
   const confirm = $("#confirmDownload");
   try {
     confirm.disabled = true;
-    const advanced = isStreamKind(item) || item.kind === "youtube" || options.extractAudio || options.convert || options.useNativeForDirect;
+    const advanced = isStreamKind(item) || item.kind === "youtube" || item.provenance !== "observed_response"
+      || options.extractAudio || options.convert || options.useNativeForDirect;
     if (advanced) {
       const granted = await chrome.permissions.request({ permissions: ["nativeMessaging"] });
       if (!granted) throw new Error("请先允许使用高速下载功能，再继续下载");
@@ -280,8 +302,10 @@ async function submitDownload(event) {
     $("#dialogNote").textContent = friendlyErrorMessage(error?.message);
     $("#dialogNote").style.color = "var(--danger-strong)";
   } finally {
-    const probe = state.probes.get(item.id);
-    confirm.disabled = Boolean(probe?.protection === "drm" || probe?.protected);
+    const probe = state.probes.get(mediaKey(item));
+    const ytdlp = state.hostStatus?.capabilities?.ytdlp || {};
+    const ytdlpReady = item.kind !== "youtube" || (EXTERNAL_TOOL_NETWORK_ENABLED && Boolean(ytdlp.available) && ytdlp.networkDisabled === false);
+    confirm.disabled = Boolean(manifestDownloadBlockReason(probe)) || !ytdlpReady;
   }
 }
 

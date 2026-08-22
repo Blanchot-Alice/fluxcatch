@@ -19,10 +19,16 @@ Detect direct media, HLS, and DASH resources requested by the current page and s
 - `storage`: stores local preferences and bounded per-tab detection state.
 - `webRequest`: reads request/response metadata needed to identify media and temporarily associate the exact selected request headers.
 - optional `nativeMessaging`: requested only from an explicit user action when the user authorizes or starts a mode that needs the separately installed local engine for HLS/DASH, remuxing, or parallel Range transfers.
-- `http://*/*`, `https://*/*`: media can be embedded from a CDN different from the page origin; access is used only for the user-facing detector/downloader purpose.
+- `http://*/*`, `https://*/*`: media can be embedded from a CDN different from the page origin; access is used only for passive detection, an explicit inspect/download action, or the off-by-default supported-site quality-enrichment setting. Active requests are constrained by a public-network policy.
 - optional `notifications`: requested only when the user enables completion notifications.
 
 The extension executes no remotely hosted code. Manifest and media responses are treated as data and parsed by code bundled in the extension/native host.
+
+Passive detection observes the current page's own traffic. Opening FluxCatch,
+rescanning, or explicitly enabling **自动补全站点画质** may use the current
+site login session to call that supported site's fixed playback-metadata API.
+The setting is off by default; page-provided URLs cannot select an arbitrary
+metadata endpoint.
 
 ## User-data disclosure
 
@@ -33,17 +39,18 @@ Disclose **web browsing activity**, **website content/resources**, and **authent
 Use:
 
 - local-first processing;
-- direct media, HLS, and DASH detection;
+- direct media, HLS, and DASH detection; the 0.2.4 native download path supports clear static HLS VOD and reports unsupported live, encrypted, discontinuous, or separate-audio playlists without downloading them;
 - advanced local engine on macOS;
 - DRM-protected media remains unavailable;
 - performance depends on server/network support.
+- Bilibili support currently covers standard `/video/` pages, not bangumi pages.
 
 Do not claim universal compatibility, support for every site, guaranteed acceleration, access to protected content, or support for named copyright platforms.
 
 ## Submission checklist
 
 - Replace `STORE_EXTENSION_ID`, publisher/support details, and the privacy-policy URL.
-- Upload a draft, copy its public key into `manifest.key`, and sync native `allowed_origins`.
+- Upload a draft, record its Item ID/public key outside the development identity, and generate the separate Store manifest plus matching native `allowed_origins` from that identity.
 - Host `PRIVACY.md` at a stable public HTTPS URL.
 - Supply the 128×128 icon, at least one 1280×800 or 640×400 screenshot, and a 440×280 promotional image.
 - Explain how reviewers can test direct, HLS, DASH capability errors, native host connection, and DRM blocking with local fixtures.

@@ -40,9 +40,9 @@
             <small id="outputContainerHelp" class="field-help">推荐 MP4，兼容性最好；合并流媒体或转换格式时生效。</small>
           </div>
           <div class="opt-field">
-            <label for="liveDuration">直播多久后自动停止（秒）</label>
-            <input id="liveDuration" name="liveDuration" type="number" min="0" max="86400" aria-describedby="liveDurationHelp">
-            <small id="liveDurationHelp" class="field-help">推荐 0（手动停止）；仅录制直播时生效。</small>
+            <label for="liveDuration">直播录制（0.2.4 暂停）</label>
+            <input id="liveDuration" name="liveDuration" type="number" min="0" max="0" value="0" disabled aria-disabled="true" aria-describedby="liveDurationHelp">
+            <small id="liveDurationHelp" class="field-help">当前版本仅下载未加密的静态 HLS 视频；直播、AES-128 加密流、独立音轨与时间线切换暂不开放。</small>
           </div>
         </div>
         <label class="opt-check"><input id="saveAs" name="saveAs" type="checkbox"><span class="switch" aria-hidden="true"></span><span class="txt">每次下载前选择保存位置<small>开启后会弹出“另存为”窗口；关闭则保存到默认下载目录。</small></span></label>
@@ -56,10 +56,12 @@
         </div>
         <p class="hint">可用字段：<code>{title}</code> <code>{host}</code> <code>{kind}</code> <code>{height}</code> <code>{date}</code></p>
         <div class="opt-field blocked-domains"><label for="blockedDomains">忽略域名（每行一个）</label><textarea id="blockedDomains" name="blockedDomains" rows="7" placeholder="ads.example.com"></textarea></div>
+        <label class="opt-check"><input id="allowPrivateNetworkMedia" name="allowPrivateNetworkMedia" type="checkbox"><span class="switch" aria-hidden="true"></span><span class="txt">允许本地网络媒体<small>默认关闭。仅在你明确要下载自己局域网设备上的媒体时开启；云服务元数据地址和保留网络始终禁止访问。</small></span></label>
       </section>
       <section class="opt-section">
         <h2><span class="bar"></span>站点适配器（实验性）</h2>
-        <label class="opt-check"><input id="youtubeEnabled" name="youtubeEnabled" type="checkbox"><span class="switch" aria-hidden="true"></span><span class="txt">启用 YouTube 下载<small>实验性：通过本机安装的 yt-dlp 引擎下载，画质与格式以本机 yt-dlp 为准。默认关闭；关闭时扩展在 YouTube 页面不显示任何界面，也不会处理任何数据。</small></span></label>
+        <label class="opt-check"><input id="autoEnrichSiteQuality" name="autoEnrichSiteQuality" type="checkbox"><span class="switch" aria-hidden="true"></span><span class="txt">自动补全站点画质<small>默认关闭。开启后，FluxCatch 可在支持的站点使用你当前的登录会话，请求该站点自己的播放信息接口以补全可用画质；关闭时只在你打开扩展、侧栏或手动刷新后请求。</small></span></label>
+        <label class="opt-check"><input id="youtubeEnabled" name="youtubeEnabled" type="checkbox"><span class="switch" aria-hidden="true"></span><span class="txt">启用 YouTube 下载<small>0.2.4 暂停外部引擎联网，等待受控网络代理；当前开关会保持关闭。</small></span></label>
         <div class="permission-row">
           <div><strong>yt-dlp 引擎</strong><small id="ytdlpStatus" role="status" aria-live="polite">正在检查是否可用…</small></div>
           <button id="ytdlpRefreshButton" type="button" class="secondary-btn">重新检查</button>
@@ -84,7 +86,7 @@
           <summary>本地引擎（高速下载）安装方法</summary>
           <ol>
             <li>高速下载依赖本地引擎，随扩展仓库一起提供，装一次即可。</li>
-            <li>从源码使用时：打开「终端」，执行 <code>bash ~/Documents/CODEX.ME/fluxcatch/native-host/install-macos.sh</code>（路径按实际仓库位置调整）。</li>
+            <li>从源码使用时：在「终端」进入 FluxCatch 仓库目录，然后执行 <code>bash native-host/install-macos.sh</code>。</li>
             <li>从 zip 包使用时：解压 native-host 包后，进入目录执行 <code>bash install-macos.sh</code>。</li>
             <li>安装器会同时登记 Google Chrome 与 Chrome for Testing，无需手动选择。</li>
             <li>完成后回到本页点击「开启高速下载功能」或扩展内的「重试」。</li>

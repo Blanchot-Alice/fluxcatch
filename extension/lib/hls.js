@@ -9,6 +9,7 @@ export function parseHls(text, manifestUrl) {
   const audioTracks = [];
   const subtitleTracks = [];
   const segments = [];
+  const keys = [];
   let pendingStream = null;
   let pendingDuration = null;
   let byteRange = null;
@@ -16,6 +17,7 @@ export function parseHls(text, manifestUrl) {
   let encrypted = false;
   let protection = "clear";
   let live = true;
+  let discontinuity = false;
   let targetDuration = null;
 
   for (const line of lines.slice(1)) {
@@ -55,11 +57,16 @@ export function parseHls(text, manifestUrl) {
         // period must not downgrade the playlist-wide protection result.
         if (method !== "AES-128" || keyFormat !== "identity") protection = "drm";
         else if (protection !== "drm") protection = "aes128";
+        if (attrs.URI) keys.push({ method, keyFormat, url: resolveUrl(attrs.URI, manifestUrl) });
       }
       continue;
     }
     if (line.startsWith("#EXT-X-TARGETDURATION:")) {
       targetDuration = Number.parseFloat(line.slice(line.indexOf(":") + 1));
+      continue;
+    }
+    if (line === "#EXT-X-DISCONTINUITY") {
+      discontinuity = true;
       continue;
     }
     if (line === "#EXT-X-ENDLIST") {
@@ -97,9 +104,11 @@ export function parseHls(text, manifestUrl) {
     audioTracks,
     subtitleTracks,
     segments,
+    keys,
     encrypted,
     protection,
     live,
+    discontinuity,
     targetDuration
   };
 }
