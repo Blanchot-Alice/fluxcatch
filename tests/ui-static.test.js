@@ -12,6 +12,23 @@ const optionsJs = readFileSync(new URL("../extension/options/options.js", import
 const sidepanelHtml = readFileSync(new URL("../extension/sidepanel/sidepanel.html", import.meta.url), "utf8");
 const sidepanelCss = readFileSync(new URL("../extension/sidepanel/sidepanel.css", import.meta.url), "utf8");
 const sidepanelJs = readFileSync(new URL("../extension/sidepanel/sidepanel.js", import.meta.url), "utf8");
+const tokensCss = readFileSync(new URL("../extension/ui/tokens.css", import.meta.url), "utf8");
+const componentsCss = readFileSync(new URL("../extension/ui/components.css", import.meta.url), "utf8");
+
+test("all extension surfaces load shared tokens and components before page styles", () => {
+  for (const [html, pageStylesheet] of [
+    [optionsHtml, "options.css"],
+    [popupHtml, "popup.css"],
+    [sidepanelHtml, "sidepanel.css"]
+  ]) {
+    const tokensIndex = html.indexOf('href="../ui/tokens.css"');
+    const componentsIndex = html.indexOf('href="../ui/components.css"');
+    const pageIndex = html.indexOf(`href="${pageStylesheet}"`);
+    assert.ok(tokensIndex >= 0, `${pageStylesheet} page loads shared tokens`);
+    assert.ok(tokensIndex < componentsIndex && componentsIndex < pageIndex,
+      `${pageStylesheet} loads tokens, components and page styles in order`);
+  }
+});
 
 test("options fields retain programmatic labels and keyboard-focusable switches", () => {
   for (const id of [
@@ -25,10 +42,10 @@ test("options fields retain programmatic labels and keyboard-focusable switches"
     assert.match(optionsHtml, new RegExp(`<label\\s+for="${id}">`));
     assert.match(optionsHtml, new RegExp(`<(?:input|select|textarea)\\s+id="${id}"`));
   }
-  const switchRule = optionsCss.match(/\.opt-check input\{([^}]+)\}/)?.[1] || "";
+  const switchRule = componentsCss.match(/\.opt-check input\s*\{([^}]+)\}/)?.[1] || "";
   assert.doesNotMatch(switchRule, /display\s*:\s*none/);
   assert.match(switchRule, /opacity\s*:\s*0/);
-  assert.match(optionsCss, /\.opt-check input:focus-visible\s*\+\s*\.switch/);
+  assert.match(componentsCss, /\.opt-check input:focus-visible\s*\+\s*\.switch/);
   assert.match(optionsHtml, /id="nativePermissionButton"/);
   assert.match(optionsHtml, /id="nativePermissionStatus"[^>]+role="status"[^>]+aria-live="polite"/);
   assert.match(optionsJs, /chrome\.permissions\.request\(\{ permissions: \["nativeMessaging"\] \}\)/);
@@ -170,12 +187,10 @@ test("popup task cards keep long filenames, terminal states and counts readable"
 test("empty state, host state and motion preferences retain correct semantics", () => {
   assert.match(popupJs, /emptyState\.hidden = items\.length > 0/);
   assert.match(popupJs, /当前筛选下没有媒体/);
-  assert.match(popupCss, /\.host-card \.dot\.ok\{/);
-  assert.match(popupCss, /\.host-card \.dot\.bad\{/);
-  assert.match(popupCss, /@media\s*\(prefers-reduced-motion:\s*reduce\)/);
-  assert.match(optionsCss, /@media\s*\(prefers-reduced-motion:\s*reduce\)/);
-  assert.match(popupCss, /button:focus-visible/);
-  assert.match(optionsCss, /button:focus-visible/);
+  assert.match(componentsCss, /\.host-card \.dot\.ok/);
+  assert.match(componentsCss, /\.host-card \.dot\.bad/);
+  assert.match(componentsCss, /@media\s*\(prefers-reduced-motion:\s*reduce\)/);
+  assert.match(componentsCss, /button:focus-visible/);
 });
 
 test("download acceleration status uses plain, consistent user-facing language", () => {
@@ -255,14 +270,12 @@ test("popup preserves long text and a visible scroll affordance", () => {
 });
 
 test("light and dark UI tokens meet text and control contrast floors", () => {
-  for (const css of [popupCss, optionsCss, sidepanelCss]) {
-    const light = parseVariables(css.match(/:root\s*\{([\s\S]*?)\}/)?.[1] || "");
-    const dark = parseVariables(css.match(/\[data-theme="dark"\]\s*\{([\s\S]*?)\}/)?.[1] || css.match(/@media\s*\(prefers-color-scheme:\s*dark\)[\s\S]*?:root\s*\{([\s\S]*?)\}/)?.[1] || "");
-    for (const [mode, variables] of [["light", light], ["dark", dark]]) {
-      if (variables["--primary-action"]) assert.ok(contrast("#FFFFFF", variables["--primary-action"]) >= 4.5, `${mode} primary action text contrast`);
-      assert.ok(contrast(variables["--muted"], variables["--surface"]) >= 4.5, `${mode} muted text contrast`);
-      assert.ok(contrast(variables["--control-border"], variables["--surface"]) >= 3, `${mode} control boundary contrast`);
-    }
+  const light = parseVariables(tokensCss.match(/:root\s*\{([\s\S]*?)\}/)?.[1] || "");
+  const dark = parseVariables(tokensCss.match(/\[data-theme="dark"\]\s*\{([\s\S]*?)\}/)?.[1] || "");
+  for (const [mode, variables] of [["light", light], ["dark", dark]]) {
+    assert.ok(contrast("#FFFFFF", variables["--primary-action"]) >= 4.5, `${mode} primary action text contrast`);
+    assert.ok(contrast(variables["--muted"], variables["--surface"]) >= 4.5, `${mode} muted text contrast`);
+    assert.ok(contrast(variables["--control-border"], variables["--surface"]) >= 3, `${mode} control boundary contrast`);
   }
   assert.match(sidepanelJs, /setAttribute\("aria-valuetext"/);
 });

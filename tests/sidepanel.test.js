@@ -17,6 +17,8 @@ test("manifest exposes the FluxCatch side panel workspace", () => {
 test("side panel ships complete workspace assets and accessible states", () => {
   const html = fs.readFileSync(path.join(extension, "sidepanel/sidepanel.html"), "utf8");
   const css = fs.readFileSync(path.join(extension, "sidepanel/sidepanel.css"), "utf8");
+  const tokens = fs.readFileSync(path.join(extension, "ui/tokens.css"), "utf8");
+  const components = fs.readFileSync(path.join(extension, "ui/components.css"), "utf8");
   const js = fs.readFileSync(path.join(extension, "sidepanel/sidepanel.js"), "utf8");
 
   assert.match(html, /id="mediaLoading"/);
@@ -29,11 +31,13 @@ test("side panel ships complete workspace assets and accessible states", () => {
   assert.match(html, /<p>播放视频后自动检测可下载的视频、音频与流媒体<\/p>/);
   assert.match(html, /sidepanel\.css/);
   assert.match(html, /sidepanel\.js/);
+  assert.ok(html.indexOf('href="../ui/tokens.css"') < html.indexOf('href="../ui/components.css"'));
+  assert.ok(html.indexOf('href="../ui/components.css"') < html.indexOf('href="sidepanel.css"'));
 
-  assert.match(css, /--primary:#5E8F84/);
-  assert.match(css, /prefers-color-scheme:\s*dark/);
-  assert.match(css, /prefers-reduced-motion:\s*reduce/);
-  assert.match(css, /button:focus-visible/);
+  assert.match(tokens, /--primary:#5E8F84/);
+  assert.match(tokens, /prefers-color-scheme:\s*dark/);
+  assert.match(components, /prefers-reduced-motion:\s*reduce/);
+  assert.match(components, /button:focus-visible/);
 
   assert.match(js, /name:\s*"fluxcatch-sidepanel"/);
   assert.match(js, /type:\s*"GET_TAB_MEDIA"/);
