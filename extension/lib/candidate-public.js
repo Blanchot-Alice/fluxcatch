@@ -79,9 +79,12 @@ export function publicDisplayUrl(value, { kind = "", site = "" } = {}) {
 
 function publicAlias(alias) {
   if (!alias || typeof alias !== "object") return null;
+  const rawUrl = string(alias.url);
+  const displayUrl = publicDisplayUrl(rawUrl);
   return {
     id: string(alias.id),
-    url: publicDisplayUrl(alias.url),
+    displayUrl,
+    urlIsRedacted: Boolean(rawUrl && displayUrl !== rawUrl),
     source: string(alias.source),
     manifestType: string(alias.manifestType) || null,
     width: numberOrNull(alias.width),
@@ -111,10 +114,18 @@ function publicTrack(track) {
 export function candidateForUi(candidate, dashPair = null) {
   const aliases = Array.isArray(candidate?.aliases) ? candidate.aliases.map(publicAlias).filter(Boolean).slice(0, 400) : [];
   const preview = previewForUi(candidate);
+  const rawUrl = string(candidate?.url);
+  const displayUrl = publicDisplayUrl(rawUrl, { kind: candidate?.kind, site: candidate?.site });
+  const urlIsRedacted = Boolean(rawUrl && displayUrl !== rawUrl);
+  const direct = candidate?.kind === "video" || candidate?.kind === "audio";
   const result = {
     id: string(candidate?.id),
+    generation: string(candidate?.generation),
     kind: string(candidate?.kind),
-    url: publicDisplayUrl(candidate?.url, { kind: candidate?.kind, site: candidate?.site }),
+    displayUrl,
+    urlIsRedacted,
+    copyable: Boolean(direct && displayUrl && !urlIsRedacted),
+    requiresRefresh: Boolean(urlIsRedacted || candidate?.kind === "dash_pair"),
     mime: string(candidate?.mime),
     ext: string(candidate?.ext),
     title: string(candidate?.title),
@@ -181,7 +192,7 @@ export function candidateForPersistence(candidate) {
   return {
     id: safe.id,
     kind: safe.kind,
-    url: safe.url,
+    url: displayUrl,
     mime: safe.mime,
     ext: safe.ext,
     title: safe.title,

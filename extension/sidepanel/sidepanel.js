@@ -168,12 +168,12 @@ function createMediaRow(item) {
   main.className = "media-main";
   const title = document.createElement("h3");
   title.className = "media-title";
-  title.textContent = item.title || item.suggestedFilename || item.pageTitle || fileLabel(item.url);
+  title.textContent = item.title || item.suggestedFilename || item.pageTitle || fileLabel(item.displayUrl);
   title.title = title.textContent;
   const url = document.createElement("p");
   url.className = "media-url";
-  url.textContent = compactMediaUrl(item.url);
-  url.title = item.url || "";
+  url.textContent = compactMediaUrl(item.displayUrl);
+  url.title = item.displayUrl || "";
   const chips = document.createElement("div");
   chips.className = "chips";
   for (const chip of mediaChips(item)) {
@@ -192,7 +192,7 @@ function createMediaRow(item) {
   age.textContent = relativeTime(item.lastSeen);
   const download = document.createElement("button");
   download.className = "media-download";
-  download.dataset.mediaId = item.id || item.url;
+  download.dataset.mediaId = item.id || item.displayUrl;
   download.type = "button";
   const youtube = item.kind === "youtube";
   download.textContent = youtube ? "打开下载设置" : "快速下载";
@@ -219,7 +219,7 @@ function createMediaRow(item) {
         const granted = await chrome.permissions.request({ permissions: ["nativeMessaging"] });
         if (!granted) throw new Error("请先允许使用高速下载功能，再继续下载");
       }
-      const result = await call({ type: "DOWNLOAD", tabId: state.tabId, candidate: item, options: {} });
+      const result = await call({ type: "DOWNLOAD", tabId: state.tabId, candidate: candidateReference(item), options: {} });
       showToast(result.method === "native" ? "高速下载任务已开始" : "浏览器下载已开始");
       const jobsResult = await call({ type: "GET_JOBS" });
       state.jobs = jobsResult.jobs || state.jobs;
@@ -437,6 +437,10 @@ function compactMediaUrl(value) {
   } catch {
     return String(value || "");
   }
+}
+
+function candidateReference(item) {
+  return { id: item?.id, kind: item?.kind, generation: item?.generation };
 }
 
 function fileLabel(value) {

@@ -132,8 +132,8 @@ function createMediaCard(item) {
   title.textContent = readableMediaTitle(item);
   title.title = title.textContent;
   const url = el("p", "media-url");
-  url.textContent = compactUrl(item.url);
-  url.title = item.url;
+  url.textContent = compactUrl(item.displayUrl);
+  url.title = item.displayUrl;
   const chips = el("div", "chips");
   for (const { text, cls } of mediaChips(item)) { const chip = el("span", cls ? `chip ${cls}` : "chip"); chip.textContent = text; chips.append(chip); }
   info.append(title, url, chips);
@@ -142,12 +142,12 @@ function createMediaCard(item) {
   download.textContent = "下载";
   download.addEventListener("click", () => void prepareDownload(item, download));
   actions.append(download);
-  if (!stream) {
+  if (item.copyable === true) {
     const copy = el("button", "more-button");
     copy.textContent = "复制链接";
     copy.addEventListener("click", async () => {
       try {
-        await navigator.clipboard.writeText(item.url);
+        await navigator.clipboard.writeText(item.displayUrl);
         copy.textContent = "已复制";
         setTimeout(() => { if (copy.isConnected) copy.textContent = "复制链接"; }, 1000);
       } catch (error) {
@@ -185,7 +185,7 @@ async function prepareDownload(item, button) {
   try {
     const key = mediaKey(item);
     if (!state.probes.has(key)) {
-      const result = await call({ type: "PROBE_MANIFEST", tabId: state.tabId, candidate: item });
+      const result = await call({ type: "PROBE_MANIFEST", tabId: state.tabId, candidate: candidateReference(item) });
       state.probes.set(key, result.probe);
     }
   } catch (error) {
@@ -291,7 +291,7 @@ async function submitDownload(event) {
       const granted = await chrome.permissions.request({ permissions: ["nativeMessaging"] });
       if (!granted) throw new Error("请先允许使用高速下载功能，再继续下载");
     }
-    const result = await call({ type: "DOWNLOAD", tabId: state.tabId, candidate: item, options });
+    const result = await call({ type: "DOWNLOAD", tabId: state.tabId, candidate: candidateReference(item), options });
     dialog.close();
     if (result.method === "native") {
       state.jobs.set(result.jobId, { jobId: result.jobId, filename: options.filename, status: "queued", progress: 0, speed: 0 });
@@ -460,13 +460,17 @@ function syncVariantVisibility() {
   $("#variantLabel").hidden = !hasChoices || $("#containerSelect").value === "mp3";
 }
 
-function mediaKey(item) { return item.id || item.url; }
+function mediaKey(item) { return item.id || item.displayUrl; }
+
+function candidateReference(item) {
+  return { id: item?.id, kind: item?.kind, generation: item?.generation };
+}
 function readableMediaTitle(item) {
   for (const value of [item.displayTitle, item.title, item.suggestedFilename, item.pageTitle]) {
     const title = String(value || "").trim();
     if (title) return title;
   }
-  return fileLabel(item.url);
+  return fileLabel(item.displayUrl);
 }
 function defaultFilename(item, format) {
   const title = readableMediaTitle(item);

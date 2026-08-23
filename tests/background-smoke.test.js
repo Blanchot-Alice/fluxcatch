@@ -439,8 +439,13 @@ test("MV3 worker registers network and message listeners during module load", as
   assert.equal(namedDirect?.suggestedFilename, "server_course_title.mp4",
     "a readable Content-Disposition filename takes precedence over a generic page title without rewriting its safe stem");
   assert.match(namedDirect?.id || "", opaqueIdPattern, "new candidates use collision-resistant random opaque IDs");
-  assert.equal(namedDirect?.url, "https://media.example.test/direct.mp4",
+  assert.equal(namedDirect?.displayUrl, "https://media.example.test/direct.mp4",
     "the public candidate keeps the opaque id while hiding the signed query");
+  assert.equal(namedDirect?.urlIsRedacted, true);
+  assert.equal(namedDirect?.copyable, false);
+  assert.equal(namedDirect?.requiresRefresh, true);
+  assert.equal(Object.hasOwn(namedDirect || {}, "url"), false, "PublicCandidate never publishes an executable URL field");
+  assert.doesNotMatch(JSON.stringify({ namedDirect, sessionState }), /PRIVATE_TOKEN/);
 
   let biliApiMedia = null;
   for (let attempt = 0; attempt < 20; attempt += 1) {
@@ -453,7 +458,9 @@ test("MV3 worker registers network and message listeners during module load", as
   const biliApiCandidate = biliApiMedia.items[0];
   assert.match(biliApiCandidate.id, opaqueIdPattern, "Bilibili candidates do not expose deterministic FNV identifiers");
   assert.equal(biliApiCandidate.kind, "dash_pair");
-  assert.equal(biliApiCandidate.url, biliPageUrl, "public candidate key is a stable queryless page URL");
+  assert.equal(biliApiCandidate.displayUrl, biliPageUrl, "public candidate key is a stable queryless page URL");
+  assert.equal(biliApiCandidate.copyable, false);
+  assert.equal(biliApiCandidate.requiresRefresh, true);
   assert.equal(biliApiCandidate.height, 480);
   assert.equal(biliApiCandidate.duration, 185);
   assert.equal(biliApiCandidate.videoTrackCount, 3);
@@ -544,7 +551,7 @@ test("MV3 worker registers network and message listeners during module load", as
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
   assert.equal(observedBiliMedia.items.length, 1, "audio-first webRequest observations pair by document and asset family");
-  assert.equal(observedBiliMedia.items[0].url, "https://www.bilibili.com/video/av12345/");
+  assert.equal(observedBiliMedia.items[0].displayUrl, "https://www.bilibili.com/video/av12345/");
   observeBiliTrack("bili-video-range-repeat", 22, observedVideoB, "document-A");
   for (let attempt = 0; attempt < 20; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 0));
   observedBiliMedia = await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 22 });
@@ -641,8 +648,8 @@ test("MV3 worker registers network and message listeners during module load", as
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
   assert.equal(legacyRestored.items.length, 1, "legacy session candidates are re-inspected and regrouped after worker upgrade");
-  assert.equal(legacyRestored.items[0].url, legacyRootUrl);
-  assert.deepEqual(new Set(legacyRestored.items[0].aliases.map((item) => item.url)), new Set([legacyHighUrl, legacyLowUrl]));
+  assert.equal(legacyRestored.items[0].displayUrl, legacyRootUrl);
+  assert.deepEqual(new Set(legacyRestored.items[0].aliases.map((item) => item.displayUrl)), new Set([legacyHighUrl, legacyLowUrl]));
   assert.equal(legacyRestored.items[0].contentLength, 0);
   assert.equal(legacyRestored.items[0].manifestSize, 2100);
 
@@ -829,18 +836,18 @@ test("MV3 worker registers network and message listeners during module load", as
   let groupedResponse = null;
   for (let attempt = 0; attempt < 100; attempt += 1) {
     groupedResponse = await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 12 });
-    const root = groupedResponse.items.find((item) => item.url === groupedRootUrl);
+    const root = groupedResponse.items.find((item) => item.displayUrl === groupedRootUrl);
     if (groupedResponse.items.length === 2 && root?.aliases?.length === 2) break;
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
   assert.equal(groupedResponse.ok, true);
   assert.equal(groupedResponse.items.length, 2, "only graph-linked manifests merge; another video on the same page remains visible");
-  const groupedRoot = groupedResponse.items.find((item) => item.url === groupedRootUrl);
+  const groupedRoot = groupedResponse.items.find((item) => item.displayUrl === groupedRootUrl);
   assert.ok(groupedRoot, "the parseable master is the group representative");
   assert.equal(groupedRoot.manifestType, "master");
   assert.equal(groupedRoot.manifestVariantCount, 2);
   assert.equal(groupedRoot.groupSize, 3);
-  assert.deepEqual(new Set(groupedRoot.aliases.map((item) => item.url)), new Set([groupedHighUrl, groupedLowUrl]));
+  assert.deepEqual(new Set(groupedRoot.aliases.map((item) => item.displayUrl)), new Set([groupedHighUrl, groupedLowUrl]));
   assert.equal(groupedRoot.title, "Generative Motion Workshop", "readable page title replaces delivery hashes");
   assert.equal(groupedRoot.suggestedFilename, "Generative Motion Workshop.mp4", "card title and default download stem agree");
   assert.equal(groupedRoot.contentLength, 0, "playlist response bytes are not presented as media size");
@@ -852,7 +859,7 @@ test("MV3 worker registers network and message listeners during module load", as
   const groupedProbe = await sendRuntimeMessage({
     type: "PROBE_MANIFEST",
     tabId: 12,
-    candidate: { id: groupedRoot.id, kind: "hls", url: groupedRoot.url }
+    candidate: { id: groupedRoot.id, kind: "hls", generation: groupedRoot.generation }
   });
   assert.deepEqual(groupedProbe.probe.variants.map((item) => item.height), [1080, 720], "one visible candidate retains the master quality list");
   assert.ok(groupedProbe.probe.variants.every((item) => /\/manifest\/[a-f0-9-]{36}\/[a-f0-9-]{36}$/.test(item.url)),
@@ -860,18 +867,18 @@ test("MV3 worker registers network and message listeners during module load", as
   const repeatedGroupedProbe = await sendRuntimeMessage({
     type: "PROBE_MANIFEST",
     tabId: 12,
-    candidate: { id: groupedRoot.id, kind: "hls", url: groupedRoot.url }
+    candidate: { id: groupedRoot.id, kind: "hls", generation: groupedRoot.generation }
   });
   assert.deepEqual(
     repeatedGroupedProbe.probe.variants.map((item) => item.url),
     groupedProbe.probe.variants.map((item) => item.url),
     "repeated probes reuse the selector token for the same private URL"
   );
-  const hiddenHigh = groupedRoot.aliases.find((item) => item.url === groupedHighUrl);
+  const hiddenHigh = groupedRoot.aliases.find((item) => item.displayUrl === groupedHighUrl);
   const staleAliasProbe = await sendRuntimeMessage({
     type: "PROBE_MANIFEST",
     tabId: 12,
-    candidate: { id: hiddenHigh.id, kind: "hls", url: hiddenHigh.url }
+    candidate: { id: hiddenHigh.id, kind: "hls", generation: groupedRoot.generation }
   });
   assert.deepEqual(staleAliasProbe.probe.variants.map((item) => item.height), [1080, 720], "stale alias references resolve to the representative safely");
 
@@ -958,8 +965,8 @@ test("MV3 worker registers network and message listeners during module load", as
   }, wistiaSender);
 
   const preProbeWistia = await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 14 });
-  assert.equal(preProbeWistia.items.some((item) => item.url === wistiaCaptionsUrl), false, "caption playlists never appear as video candidates");
-  const wistiaCandidate = preProbeWistia.items.find((item) => item.url === wistiaMasterUrl);
+  assert.equal(preProbeWistia.items.some((item) => item.displayUrl === wistiaCaptionsUrl), false, "caption playlists never appear as video candidates");
+  const wistiaCandidate = preProbeWistia.items.find((item) => item.displayUrl === wistiaMasterUrl);
   assert.ok(wistiaCandidate, "the master remains the user-facing candidate");
   assert.equal(
     manifestFetches.some((item) => item.url === wistiaMasterUrl),
@@ -969,24 +976,24 @@ test("MV3 worker registers network and message listeners during module load", as
   const wistiaProbe = await sendRuntimeMessage({
     type: "PROBE_MANIFEST",
     tabId: 14,
-    candidate: { id: wistiaCandidate.id, kind: "hls", url: wistiaCandidate.url }
+    candidate: { id: wistiaCandidate.id, kind: "hls", generation: wistiaCandidate.generation }
   });
   assert.deepEqual(wistiaProbe.probe.variants.map((item) => item.height), [1080, 720]);
   const afterWistiaProbe = await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 14 });
   assert.equal(afterWistiaProbe.items.length, 2, "an explicit master probe folds token/CDN aliases immediately while preserving another video");
-  const finalWistia = afterWistiaProbe.items.find((item) => item.url === wistiaMasterUrl);
+  const finalWistia = afterWistiaProbe.items.find((item) => item.displayUrl === wistiaMasterUrl);
   assert.equal(finalWistia.manifestType, "master");
   assert.equal(finalWistia.manifestVariantCount, 2);
   assert.equal(finalWistia.manifestSubtitleTrackCount, 1);
   assert.equal(finalWistia.groupSize, 3);
   assert.deepEqual(
-    new Set(finalWistia.aliases.map((item) => item.url)),
+    new Set(finalWistia.aliases.map((item) => item.displayUrl)),
     new Set([wistiaHighObserved, wistiaLowObserved].map((value) => { const url = new URL(value); url.search = ""; return url.href; })),
     "public alias metadata omits signed query parameters"
   );
   assert.equal(finalWistia.title, "Volume of Distribution Interactive | Pharmacokinetics - Part 1");
   assert.equal(finalWistia.suggestedFilename, "Volume of Distribution Interactive _ Pharmacokinetics - Part 1.mp4");
-  assert.ok(afterWistiaProbe.items.some((item) => item.url === secondMasterUrl), "an unrelated video is never merged by page title");
+  assert.ok(afterWistiaProbe.items.some((item) => item.displayUrl === secondMasterUrl), "an unrelated video is never merged by page title");
 
   // Manifest children and redirect destinations cross the same NetworkPolicy
   // boundary as the root URL. A public manifest cannot smuggle a private
@@ -1003,7 +1010,7 @@ test("MV3 worker registers network and message listeners during module load", as
   observeWistia("private-child-root", privateChildManifest);
   let privateChildCandidate = null;
   for (let attempt = 0; attempt < 30; attempt += 1) {
-    privateChildCandidate = (await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 14 })).items.find((item) => item.url === privateChildManifest);
+    privateChildCandidate = (await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 14 })).items.find((item) => item.displayUrl === privateChildManifest);
     if (privateChildCandidate) break;
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
@@ -1028,7 +1035,7 @@ test("MV3 worker registers network and message listeners during module load", as
   observeWistia("encrypted-vod-root", aesManifest);
   let aesCandidate = null;
   for (let attempt = 0; attempt < 30; attempt += 1) {
-    aesCandidate = (await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 14 })).items.find((item) => item.url === aesManifest);
+    aesCandidate = (await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 14 })).items.find((item) => item.displayUrl === aesManifest);
     if (aesCandidate) break;
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
@@ -1046,7 +1053,7 @@ test("MV3 worker registers network and message listeners during module load", as
   observeWistia("private-redirect-root", redirectManifest);
   let redirectCandidate = null;
   for (let attempt = 0; attempt < 30; attempt += 1) {
-    redirectCandidate = (await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 14 })).items.find((item) => item.url === redirectManifest);
+    redirectCandidate = (await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 14 })).items.find((item) => item.displayUrl === redirectManifest);
     if (redirectCandidate) break;
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
@@ -1116,16 +1123,28 @@ test("MV3 worker registers network and message listeners during module load", as
     "an unobserved public URL that may redirect never enters chrome.downloads");
 
   const restoredDirect = (await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 9 })).items
-    .find((item) => item.url === "https://media.example.test/movie.mp4");
+    .find((item) => item.displayUrl === "https://media.example.test/movie.mp4");
   assert.match(restoredDirect?.id || "", opaqueIdPattern, "legacy persisted candidate IDs rotate at the trust-boundary upgrade");
-  const candidate = { id: restoredDirect.id, kind: restoredDirect.kind, url: restoredDirect.url };
+  assert.equal(restoredDirect.copyable, true, "an exact queryless direct URL may be copied");
+  assert.equal(restoredDirect.urlIsRedacted, false);
+  const candidate = { id: restoredDirect.id, kind: restoredDirect.kind, generation: restoredDirect.generation };
   const browserPersistReached = new Promise((resolve) => { browserPersistEntered = resolve; });
   const browserSearchReached = new Promise((resolve) => { browserSearchEntered = resolve; });
   blockBrowserPersist = true;
   blockBrowserSearch = true;
   const browserStartPromise = new Promise((resolve) => {
     onMessage.listeners[0].fn(
-      { type: "DOWNLOAD", tabId: 9, candidate, options: { filename: "browser.mp4" } },
+      {
+        type: "DOWNLOAD",
+        tabId: 9,
+        candidate: {
+          ...candidate,
+          displayUrl: "https://attacker.example/forged.mp4",
+          url: "https://attacker.example/forged.mp4?token=FORGED_TARGET_SECRET",
+          headers: { authorization: "Bearer FORGED_HEADER_SECRET" }
+        },
+        options: { filename: "browser.mp4" }
+      },
       { id: extensionId, url: `chrome-extension://${extensionId}/sidepanel/sidepanel.html` },
       resolve
     );
@@ -1164,6 +1183,9 @@ test("MV3 worker registers network and message listeners during module load", as
   assert.deepEqual({ method: browserStart.method, downloadId: browserStart.downloadId, jobId: browserStart.jobId }, {
     method: "browser", downloadId: 42, jobId: "browser:42"
   });
+  assert.equal(browserDownloadRequests.at(-1)?.url, "https://media.example.test/movie.mp4",
+    "UI candidate tampering cannot replace the worker-private download target");
+  assert.doesNotMatch(JSON.stringify(browserDownloadRequests), /FORGED_TARGET_SECRET|FORGED_HEADER_SECRET/);
   assert.equal(
     (await getJobs()).jobs.find((job) => job.jobId === "browser:42")?.status,
     "completed",
@@ -1544,6 +1566,14 @@ test("MV3 worker registers network and message listeners during module load", as
   assert.equal(clearTabAndHistory.removedJobs, 1, "clearing detections also removes ended task rows");
   assert.equal(clearTabAndHistory.jobs.some((job) => job.jobId === failedBeforeClear.jobId), false);
   assert.equal(clearTabAndHistory.jobs.some((job) => job.jobId === activeDuringClear.jobId), true, "clearing detections never cancels an active download");
+  const staleGeneration = await sendRuntimeMessage({
+    type: "DOWNLOAD",
+    tabId: 9,
+    candidate,
+    options: { filename: "stale.mp4" }
+  });
+  assert.equal(staleGeneration.ok, false, "a reference from the previous tab generation is rejected");
+  assert.match(staleGeneration.error, /已失效/);
 
   nativeOnMessage.listeners[0].fn({
     type: "complete",

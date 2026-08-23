@@ -139,6 +139,7 @@ const DEFAULT_SETTINGS = {
 };
 
 const tabMedia = new Map();
+const tabGenerations = new Map();
 const tabPreviews = new Map();
 const requestHeaders = new Map();
 const pendingRequestHeaders = new Map();
@@ -1252,6 +1253,7 @@ async function addCandidate(tabId, input, commitGuard = null) {
   if (kind === "dash_pair" && (!selectedVideo || !selectedAudio || !Number.isFinite(pairExpiresAt) || pairExpiresAt <= now)) return false;
   const candidate = {
     id: old?.id || reusableOpaqueId(input.id),
+    generation: old?.generation || currentTabGeneration(tabId),
     url,
     kind,
     mime,
@@ -2618,6 +2620,7 @@ async function restoreSession() {
         restored.set(`${item.kind}:${url}`, {
           ...persisted,
           id: randomOpaqueId(),
+          generation: currentTabGeneration(numericTabId),
           url,
           title: naming.title,
           suggestedFilename: naming.suggestedFilename,
@@ -2988,6 +2991,15 @@ function randomOpaqueId() {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
+function currentTabGeneration(tabId) {
+  let generation = tabGenerations.get(tabId);
+  if (!generation) {
+    generation = randomOpaqueId();
+    tabGenerations.set(tabId, generation);
+  }
+  return generation;
+}
+
 function reusableOpaqueId(value) {
   const id = cleanText(value, 64).toLowerCase();
   return /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(id)
@@ -3037,6 +3049,9 @@ function sameOrigin(first, second) {
 }
 
 function dropTabState(tabId) {
+  // Rotate before deleting candidates so a still-open popup can never reuse a
+  // reference captured from the previous document in the same tab.
+  tabGenerations.set(tabId, randomOpaqueId());
   tabMedia.delete(tabId);
   tabPreviews.delete(tabId);
   bilibiliDashStates.delete(tabId);
@@ -3062,6 +3077,7 @@ function dropTabState(tabId) {
 async function clearTabAfterRestore(tabId, update) {
   await sessionReady;
   dropTabState(tabId);
+  if (!update) tabGenerations.delete(tabId);
   await persistSession();
   if (update) await updateBadge(tabId);
 }
@@ -3133,11 +3149,18 @@ function validTabId(value) {
 function requireTabCandidate(tabId, reference) {
   const id = cleanText(reference?.id, 64);
   const kind = cleanText(reference?.kind, 16);
-  if (!id || !kind) throw new Error("媒体候选项无效");
+  const generation = cleanText(reference?.generation, 64);
+  const currentGeneration = tabGenerations.get(tabId);
+  if (!id || !kind || !generation || !currentGeneration || generation !== currentGeneration) {
+    throw new Error("该媒体候选项已失效，请重新扫描页面");
+  }
   const map = tabMedia.get(tabId);
-  let item = [...(map?.values() || [])].find((candidate) => candidate.kind === kind && candidate.id === id);
+  let item = [...(map?.values() || [])].find((candidate) =>
+    candidate.generation === generation && candidate.kind === kind && candidate.id === id
+  );
   if (!item) item = [...(map?.values() || [])].find((candidate) =>
-    candidate.kind === kind
+    candidate.generation === generation
+    && candidate.kind === kind
     && !candidate.mergedInto
     && (candidate.aliases || []).some((alias) => alias.id === id)
   );

@@ -92,6 +92,17 @@ test("popup requests the controlled native path for candidates not observed by t
   assert.match(popupJs, /if \(advanced\) \{\s*const granted = await chrome\.permissions\.request/);
 });
 
+test("extension pages display public URLs but return only opaque candidate references", () => {
+  for (const source of [popupJs, sidepanelJs]) {
+    assert.match(source, /item\.displayUrl/);
+    assert.match(source, /return \{ id: item\?\.id, kind: item\?\.kind, generation: item\?\.generation \}/);
+    assert.doesNotMatch(source, /candidate:\s*item/);
+    assert.doesNotMatch(source, /item\.url\b/);
+  }
+  assert.match(popupJs, /if \(item\.copyable === true\)/);
+  assert.match(popupJs, /navigator\.clipboard\.writeText\(item\.displayUrl\)/);
+});
+
 test("popup reports the 0.2.4 external-engine network pause instead of installation advice", () => {
   assert.match(popupJs, /import \{ BUILD_PROFILE, HOST_MISMATCH_MESSAGE \} from "\.\.\/lib\/build-profile\.js"/);
   assert.match(popupJs, /!BUILD_PROFILE\.features\.externalToolNetwork \|\| ytdlp\.networkDisabled !== false/);

@@ -394,19 +394,26 @@ async function runCase(definition, devtoolsOrigin) {
         tabId: ${JSON.stringify(tabId)}
       })`);
       if (!response?.ok) throw new Error(response?.error || "GET_TAB_MEDIA failed");
-      item.observed = (response.items || []).map(({ kind, url, source, sources }) => ({ kind, url, source, sources }));
-      const candidate = (response.items || []).find((entry) => entry.kind === definition.expectedKind && entry.url === expectedPublicUrl);
+      item.observed = (response.items || []).map(({ kind, displayUrl, source, sources }) => ({ kind, displayUrl, source, sources }));
+      const candidate = (response.items || []).find((entry) => entry.kind === definition.expectedKind && entry.displayUrl === expectedPublicUrl);
       return candidate ? { response, candidate } : null;
     }, CASE_TIMEOUT_MS, `${definition.name} exact ${definition.expectedKind} detection`);
 
     assert.equal(detection.candidate.kind, definition.expectedKind, "candidate kind mismatch");
-    assert.equal(detection.candidate.url, expectedPublicUrl, "candidate public display URL mismatch");
+    assert.equal(detection.candidate.displayUrl, expectedPublicUrl, "candidate public display URL mismatch");
+    assert.equal(Object.hasOwn(detection.candidate, "url"), false, "PublicCandidate exposed an executable URL field");
+    assert.match(detection.candidate.generation || "", /^[a-f0-9-]{36}$/, "candidate generation is not opaque");
+    assert.equal(detection.candidate.copyable, false, "signed fixture URLs must not be copyable");
+    assert.equal(detection.candidate.urlIsRedacted, true, "signed fixture URLs must be marked as redacted");
+    assert.doesNotMatch(JSON.stringify(detection.candidate), /token=(?:direct|fast|manifest|observed|caption|dash)/,
+      "signed media values crossed the PublicCandidate boundary");
     assert.equal(detection.candidate.thumbnailUrl, expectedThumbnailUrl, "candidate thumbnail URL mismatch");
     assert.equal(detection.candidate.thumbnailSource, "poster", "video poster must outrank page metadata");
     item.candidate = {
       id: detection.candidate.id,
+      generation: detection.candidate.generation,
       kind: detection.candidate.kind,
-      url: detection.candidate.url,
+      displayUrl: detection.candidate.displayUrl,
       mime: detection.candidate.mime,
       sources: detection.candidate.sources,
       thumbnailUrl: detection.candidate.thumbnailUrl,
@@ -422,9 +429,9 @@ async function runCase(definition, devtoolsOrigin) {
         if (!response?.ok) throw new Error(response?.error || "GET_TAB_MEDIA failed while waiting for HLS grouping");
         const visibleMedia = (response.items || []).filter((entry) => entry.kind !== "segment");
         const streams = visibleMedia.filter((entry) => entry.kind === "hls");
-        const representative = streams.find((entry) => entry.url === expectedPublicUrl);
-        const captionVisible = visibleMedia.some((entry) => entry.url === publicDisplayUrl(definition.captionUrl)
-          || (() => { try { return /\/embed\/captions\//i.test(new URL(entry.url).pathname); } catch { return false; } })());
+        const representative = streams.find((entry) => entry.displayUrl === expectedPublicUrl);
+        const captionVisible = visibleMedia.some((entry) => entry.displayUrl === publicDisplayUrl(definition.captionUrl)
+          || (() => { try { return /\/embed\/captions\//i.test(new URL(entry.displayUrl).pathname); } catch { return false; } })());
         return visibleMedia.length === 1
           && streams.length === 1
           && representative?.groupSize >= HLS_RENDITIONS.length + 1
@@ -439,11 +446,11 @@ async function runCase(definition, devtoolsOrigin) {
         "one HLS video must be displayed once even when its master and rendition playlists were observed");
       assert.equal(grouped.captionVisible, false,
         "an /embed/captions/*.m3u8 subtitle playlist must not become a downloadable video candidate");
-      assert.equal(grouped.representative.url, expectedPublicUrl,
+      assert.equal(grouped.representative.displayUrl, expectedPublicUrl,
         "the fast-host master must remain the representative instead of a rendition or caption playlist");
       assert.ok(grouped.representative.aliases.length >= HLS_RENDITIONS.length,
         "the grouped HLS item must retain its rendition aliases for diagnostics");
-      const aliasUrls = grouped.representative.aliases.map((alias) => alias.url);
+      const aliasUrls = grouped.representative.aliases.map((alias) => alias.displayUrl);
       for (const observedUrl of definition.observedVariants || []) {
         assert.ok(aliasUrls.includes(publicDisplayUrl(observedUrl)),
           `the grouped HLS item lost its observed CDN rendition alias: ${observedUrl}`);
@@ -452,7 +459,7 @@ async function runCase(definition, devtoolsOrigin) {
         visibleCandidates: grouped.visibleMedia.length,
         groupSize: grouped.representative.groupSize,
         aliasCount: grouped.representative.aliases.length,
-        representativeUrl: grouped.representative.url,
+        representativeUrl: grouped.representative.displayUrl,
         captionExcluded: !grouped.captionVisible
       };
 
@@ -462,7 +469,7 @@ async function runCase(definition, devtoolsOrigin) {
         candidate: ${JSON.stringify({
           id: detection.candidate.id,
           kind: detection.candidate.kind,
-          url: detection.candidate.url
+          generation: detection.candidate.generation
         })}
       })`);
       assert.equal(probe?.ok, true, `HLS probe failed: ${probe?.error || "unknown error"}`);
@@ -679,7 +686,7 @@ async function auditPopupTaskLifecycle(downloadDir) {
       const response = await control(`async () => chrome.runtime.sendMessage({
         type: "DOWNLOAD",
         tabId: ${JSON.stringify(tabId)},
-        candidate: ${JSON.stringify({ id: candidate.id, kind: candidate.kind, url: candidate.url })},
+        candidate: ${JSON.stringify({ id: candidate.id, kind: candidate.kind, generation: candidate.generation })},
         options: { filename: ${JSON.stringify(filenames[name])}, saveAs: false }
       })`);
       assert.equal(response?.ok, true, `${name} task did not start: ${response?.error || "unknown error"}`);
@@ -902,7 +909,7 @@ async function prepareUiFixtureTab() {
     const response = await control(`async () => chrome.runtime.sendMessage({ type: "GET_TAB_MEDIA", tabId: ${JSON.stringify(tab.id)} })`);
     if (!response?.ok) throw new Error(response?.error || "GET_TAB_MEDIA failed for UI fixture");
     return response.items?.some((item) => item.kind === "video"
-      && item.url === expectedUrl
+      && item.displayUrl === expectedUrl
       && item.thumbnailUrl === expectedThumbnailUrl
       && item.thumbnailSource === "poster") ? true : null;
   }, CASE_TIMEOUT_MS, "direct candidate for Side Panel quick download");

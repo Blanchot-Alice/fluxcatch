@@ -11,6 +11,7 @@ import {
 test("public candidate is an explicit allowlist and redacts signed queries", () => {
   const privateCandidate = {
     id: "opaque-id",
+    generation: "opaque-generation",
     kind: "hls",
     url: "https://cdn.example/media/master.m3u8?token=VERY_SECRET&deadline=999",
     mime: "application/vnd.apple.mpegurl",
@@ -32,16 +33,21 @@ test("public candidate is an explicit allowlist and redacts signed queries", () 
   const publicCandidate = candidateForUi(privateCandidate);
   const serialized = JSON.stringify(publicCandidate);
 
-  assert.equal(publicCandidate.url, "https://cdn.example/media/master.m3u8");
-  assert.equal(publicCandidate.aliases[0].url, "https://cdn.example/media/high.m3u8");
+  assert.equal(publicCandidate.displayUrl, "https://cdn.example/media/master.m3u8");
+  assert.equal(publicCandidate.aliases[0].displayUrl, "https://cdn.example/media/high.m3u8");
+  assert.equal(publicCandidate.urlIsRedacted, true);
+  assert.equal(publicCandidate.copyable, false);
+  assert.equal(publicCandidate.requiresRefresh, true);
+  assert.equal(publicCandidate.aliases[0].urlIsRedacted, true);
+  assert.equal(Object.hasOwn(publicCandidate, "url"), false);
   assert.equal(publicCandidate.thumbnailUrl, "https://images.example/poster.jpg");
   assert.deepEqual(Object.keys(publicCandidate).sort(), [
-    "aliases", "codecs", "confidence", "contentLength", "displayTitle", "duration", "ext", "firstSeen",
-    "groupSize", "height", "id", "kind", "lastSeen", "manifestAudioTrackCount", "manifestInspectedAt",
+    "aliases", "codecs", "confidence", "contentLength", "copyable", "displayTitle", "displayUrl", "duration", "ext", "firstSeen",
+    "generation", "groupSize", "height", "id", "kind", "lastSeen", "manifestAudioTrackCount", "manifestInspectedAt",
     "manifestProbeStatus", "manifestSize", "manifestSubtitleTrackCount", "manifestType", "manifestVariantCount",
     "mime", "pageTitle", "provenance", "rangeSupported", "site", "source", "sourceFilenames", "sources",
     "suggestedFilename", "thumbnailAdapterImageHosts", "thumbnailAllowedOrigins", "thumbnailAt", "thumbnailFrameId",
-    "thumbnailSource", "thumbnailUrl", "title", "url", "width"
+    "thumbnailSource", "thumbnailUrl", "title", "urlIsRedacted", "requiresRefresh", "width"
   ].sort());
   assert.doesNotMatch(serialized, /VERY_SECRET|ALIAS_SECRET|COOKIE_SECRET|AUTH_SECRET|SIGNED_SECRET|SECRET_BODY|AUDIO_SECRET|THUMB_SECRET|THUMB_FUTURE_SECRET|FUTURE_SECRET/);
   assert.equal(candidateForPersistence(privateCandidate), null, "signed candidates remain memory-only instead of leaking into session storage");
@@ -102,4 +108,31 @@ test("public display URL preserves only non-secret adapter identity parameters",
     publicDisplayUrl("https://www.bilibili.com/video/BV1fixture/?p=2&vd_source=SECRET", { site: "bilibili" }),
     "https://www.bilibili.com/video/BV1fixture/?p=2"
   );
+});
+
+test("only exact queryless direct candidates publish a copyable address", () => {
+  const direct = candidateForUi({
+    id: "direct-id",
+    generation: "generation-id",
+    kind: "video",
+    url: "https://media.example/video.mp4",
+    provenance: "observed_response"
+  });
+  assert.equal(direct.displayUrl, "https://media.example/video.mp4");
+  assert.equal(direct.urlIsRedacted, false);
+  assert.equal(direct.copyable, true);
+  assert.equal(direct.requiresRefresh, false);
+
+  const signed = candidateForUi({
+    id: "signed-id",
+    generation: "generation-id",
+    kind: "video",
+    url: "https://media.example/video.mp4?token=SECRET",
+    provenance: "observed_response"
+  });
+  assert.equal(signed.displayUrl, "https://media.example/video.mp4");
+  assert.equal(signed.urlIsRedacted, true);
+  assert.equal(signed.copyable, false);
+  assert.equal(signed.requiresRefresh, true);
+  assert.doesNotMatch(JSON.stringify(signed), /SECRET/);
 });
