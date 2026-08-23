@@ -1,5 +1,6 @@
 import { humanBytes } from "../lib/media.js";
 import { loadPrivacySafeThumbnail } from "../lib/thumbnail.js";
+import { BUILD_PROFILE, HOST_MISMATCH_MESSAGE } from "../lib/build-profile.js";
 
 const state = {
   tabId: null,
@@ -109,7 +110,7 @@ async function refreshAll() {
       call({ type: "GET_JOBS" })
     ]);
     if (token !== state.refreshToken) return;
-    state.items = mediaResult.items || [];
+    state.items = (mediaResult.items || []).filter((item) => item.kind !== "youtube" || BUILD_PROFILE.features.externalToolNetwork);
     state.settings = mediaResult.settings || {};
     state.jobs = jobsResult.jobs || [];
     state.hostStatus = jobsResult.hostStatus || mediaResult.hostStatus || {};
@@ -127,7 +128,7 @@ async function refreshAll() {
 async function refreshMedia() {
   if (!Number.isInteger(state.tabId)) return;
   const result = await call({ type: "GET_TAB_MEDIA", tabId: state.tabId });
-  state.items = result.items || [];
+  state.items = (result.items || []).filter((item) => item.kind !== "youtube" || BUILD_PROFILE.features.externalToolNetwork);
   state.settings = result.settings || state.settings;
   renderMedia();
   if (result.hostStatus) updateHost(result.hostStatus);
@@ -167,12 +168,12 @@ function createMediaRow(item) {
   main.className = "media-main";
   const title = document.createElement("h3");
   title.className = "media-title";
-  title.textContent = item.title || item.suggestedFilename || item.pageTitle || fileLabel(item.url);
+  title.textContent = item.title || item.suggestedFilename || item.pageTitle || fileLabel(item.displayUrl);
   title.title = title.textContent;
   const url = document.createElement("p");
   url.className = "media-url";
-  url.textContent = compactMediaUrl(item.url);
-  url.title = item.url || "";
+  url.textContent = compactMediaUrl(item.displayUrl);
+  url.title = item.displayUrl || "";
   const chips = document.createElement("div");
   chips.className = "chips";
   for (const chip of mediaChips(item)) {
@@ -191,21 +192,21 @@ function createMediaRow(item) {
   age.textContent = relativeTime(item.lastSeen);
   const download = document.createElement("button");
   download.className = "media-download";
-  download.dataset.mediaId = item.id || item.url;
+  download.dataset.mediaId = item.id || item.displayUrl;
   download.type = "button";
   download.textContent = "快速下载";
   download.setAttribute("aria-label", `下载 ${title.textContent}`);
   download.addEventListener("click", () => void runAction(async () => {
     download.disabled = true;
     try {
-      const advanced = stream || Boolean(state.settings.useNativeForDirect);
+      const advanced = stream || item.provenance !== "observed_response" || Boolean(state.settings.useNativeForDirect);
       if (advanced) {
         // Keep request() inside the originating click gesture. Re-requesting an
         // already granted optional permission resolves without another prompt.
         const granted = await chrome.permissions.request({ permissions: ["nativeMessaging"] });
         if (!granted) throw new Error("请先允许使用高速下载功能，再继续下载");
       }
-      const result = await call({ type: "DOWNLOAD", tabId: state.tabId, candidate: item, options: {} });
+      const result = await call({ type: "DOWNLOAD", tabId: state.tabId, candidate: candidateReference(item), options: {} });
       showToast(result.method === "native" ? "高速下载任务已开始" : "浏览器下载已开始");
       const jobsResult = await call({ type: "GET_JOBS" });
       state.jobs = jobsResult.jobs || state.jobs;
@@ -225,7 +226,11 @@ function createMediaVisual(item) {
   const fallback = document.createElement("span");
   fallback.className = `kind-icon ${stream ? "stream" : item.kind || "video"}`;
   fallback.textContent = stream ? streamTypeLabel(item) : item.kind === "audio" ? "AUDIO" : "VIDEO";
-  return loadPrivacySafeThumbnail(item.thumbnailUrl, fallback);
+  return loadPrivacySafeThumbnail(item.thumbnailUrl, fallback, {
+    allowedThumbnailOrigins: item.thumbnailAllowedOrigins || [],
+    adapterImageHosts: item.thumbnailAdapterImageHosts || [],
+    networkScope: state.settings.allowPrivateNetworkMedia ? "private_network_opt_in" : "public_only"
+  });
 }
 
 function renderJobs() {
@@ -310,8 +315,13 @@ function createJobRow(job) {
 function updateHost(status = {}) {
   state.hostStatus = status;
   const dot = $("#hostDot");
-  dot.className = `status-dot ${status.connected ? "ok" : status.lastError ? "bad" : ""}`;
-  $("#hostTitle").textContent = status.connected ? "高速下载功能已就绪" : "高速下载功能暂未就绪";
+  const mismatch = status.connected && status.compatible !== true;
+  dot.className = `status-dot ${status.connected && !mismatch ? "ok" : status.lastError || mismatch ? "bad" : ""}`;
+  $("#hostTitle").textContent = mismatch ? "高速下载功能版本不匹配" : status.connected ? "高速下载功能已就绪" : "高速下载功能暂未就绪";
+  if (mismatch) {
+    $("#hostDetail").textContent = HOST_MISMATCH_MESSAGE;
+    return;
+  }
   if (!status.connected) {
     $("#hostDetail").textContent = status.needsPermission
       ? "需要加速、合并或转换格式时会请你授权"
@@ -414,6 +424,10 @@ function compactMediaUrl(value) {
   } catch {
     return String(value || "");
   }
+}
+
+function candidateReference(item) {
+  return { id: item?.id, kind: item?.kind, generation: item?.generation };
 }
 
 function fileLabel(value) {

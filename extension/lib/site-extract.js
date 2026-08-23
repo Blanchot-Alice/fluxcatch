@@ -14,6 +14,20 @@
   const MAX_FRAGMENTS = 40;
   const INSTAGRAM_MEDIA_HOST = /(?:^|\.)(?:cdninstagram\.com|fbcdn\.net)$/i;
   const TWITTER_MEDIA_HOST = /(?:^|\.)twimg\.com$/i;
+  const INSTAGRAM_PAGE_HOST = /(?:^|\.)instagram\.com$/i;
+  const TWITTER_PAGE_HOST = /(?:^|\.)(?:x|twitter)\.com$/i;
+
+  // Content scripts run in every HTTP(S) frame so generic <video>/<audio>
+  // detection keeps working inside embedded players. Large site-specific JSON
+  // payloads are different: inspect them only in the top-level document and
+  // only on the two sites whose payload formats we understand.
+  function payloadSiteForPage(hostname, topFrame) {
+    if (!topFrame) return null;
+    const host = String(hostname || "").trim().toLowerCase().replace(/\.$/, "");
+    if (INSTAGRAM_PAGE_HOST.test(host)) return "instagram";
+    if (TWITTER_PAGE_HOST.test(host)) return "twitter";
+    return null;
+  }
 
   function positive(value) {
     const number = Number(value);
@@ -148,7 +162,7 @@
     return results;
   }
 
-  const api = { extractInstagramVideos, extractTwitterVideos };
+  const api = { extractInstagramVideos, extractTwitterVideos, payloadSiteForPage };
   globalThis.__fluxcatchSiteExtract = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })();

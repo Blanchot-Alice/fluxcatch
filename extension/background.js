@@ -13,6 +13,10 @@ import {
 } from "./lib/media.js";
 import { parseHls, sortHlsVariants } from "./lib/hls.js";
 import { parseDash } from "./lib/dash.js";
+import { candidateForPersistence, candidateForUi, previewForPersistence } from "./lib/candidate-public.js";
+import { CANDIDATE_PROVENANCES, evaluateNetworkRequest, requireNetworkRequest } from "./lib/network-policy.js";
+import { hostEventForUi, hostStatusForUi } from "./lib/host-public.js";
+import { BUILD_PROFILE, HOST_MISMATCH_MESSAGE, buildDiagnostics, hostCompatibility } from "./lib/build-profile.js";
 
 const HOST_NAME = "io.github.blanchot_alice.fluxcatch";
 const EXTENSION_ORIGIN = chrome.runtime.getURL("");
@@ -26,6 +30,7 @@ const MAX_MANIFEST_IDENTITY_KEY_LENGTH = 16_416;
 const MANIFEST_INSPECTION_TIMEOUT_MS = 7_000;
 const MAX_MANIFEST_CACHE_CHARS_PER_TAB = 4_000_000;
 const MAX_MANIFEST_CACHE_CHARS_GLOBAL = 12_000_000;
+const MAX_MANIFEST_SELECTOR_MAPPINGS = 512;
 const MAX_STORED_JOBS = 200;
 const MAX_THUMBNAIL_URL_LENGTH = 4096;
 const BILIBILI_DISCOVERY_TTL_MS = 45_000;
@@ -33,6 +38,10 @@ const BILIBILI_TRACK_TTL_MS = 2 * 60_000;
 const BILIBILI_PAIR_WINDOW_MS = 30_000;
 const BILIBILI_SAFE_REFERER = "https://www.bilibili.com/";
 const DASH_PAIR_SELECTOR_ORIGIN = "https://fluxcatch.invalid";
+const MANIFEST_SELECTOR_ORIGIN = "https://fluxcatch.invalid";
+// 0.2.4 has no pinned broker for external tools. Keep the adapter source for
+// the future GitHub build, but compile every setting/candidate/download gate
+// closed regardless of what an older or replacement native host reports.
 const SENSITIVE_REQUEST_HEADERS = new Set(["authorization", "cookie", "origin", "referer"]);
 const UI_PORT_NAMES = new Set(["fluxcatch-popup", "fluxcatch-sidepanel"]);
 const JOB_STATUSES = new Set(["queued", "starting", "downloading", "remuxing", "completed", "failed", "cancelled"]);
@@ -60,7 +69,8 @@ const SITE_ADAPTERS = Object.freeze([
   {
     id: "bilibili",
     label: "Bilibili",
-    pagePattern: /^https?:\/\/(?:www\.|m\.)?bilibili\.com\/(?:video|bangumi\/play)\//i
+    pagePattern: /^https?:\/\/(?:www\.|m\.)?bilibili\.com\/video\//i,
+    imageHostSuffixes: ["hdslb.com", "biliimg.com"]
   },
   {
     id: "youtube",
@@ -72,13 +82,15 @@ const SITE_ADAPTERS = Object.freeze([
     id: "instagram",
     label: "Instagram",
     pagePattern: /^https?:\/\/(?:www\.)?instagram\.com\/(?:p|reel|reels|tv)\/[A-Za-z0-9_-]+/i,
-    mediaHostPattern: /(?:^|\.)(?:cdninstagram\.com|fbcdn\.net)$/i
+    mediaHostPattern: /(?:^|\.)(?:cdninstagram\.com|fbcdn\.net)$/i,
+    imageHostSuffixes: ["cdninstagram.com", "fbcdn.net"]
   },
   {
     id: "twitter",
     label: "X",
     pagePattern: /^https?:\/\/(?:www\.|mobile\.)?(?:twitter|x)\.com\/[^/?#]+\/status\/\d+/i,
-    mediaHostPattern: /(?:^|\.)twimg\.com$/i
+    mediaHostPattern: /(?:^|\.)twimg\.com$/i,
+    imageHostSuffixes: ["twimg.com"]
   }
 ]);
 
@@ -119,12 +131,15 @@ const DEFAULT_SETTINGS = {
   minimumBytes: 500 * 1024,
   liveDuration: 0,
   youtubeEnabled: false,
+  autoEnrichSiteQuality: false,
+  allowPrivateNetworkMedia: false,
   blockedDomains: [],
   filenameTemplate: "{title}",
   showNotifications: false
 };
 
 const tabMedia = new Map();
+const tabGenerations = new Map();
 const tabPreviews = new Map();
 const requestHeaders = new Map();
 const pendingRequestHeaders = new Map();
@@ -150,7 +165,16 @@ let headerPruneTimer = null;
 let nativePort = null;
 let nativeConnectPromise = null;
 const pendingHostPings = new Map();
-let hostStatus = { connected: false, version: null, ffmpeg: false, capabilities: null, needsPermission: true, lastError: null };
+let hostStatus = {
+  connected: false,
+  version: null,
+  protocolVersion: null,
+  capabilityProfileVersion: null,
+  ffmpeg: false,
+  capabilities: null,
+  needsPermission: true,
+  lastError: null
+};
 
 // Register listeners synchronously, but make every state consumer wait for the
 // MV3 session restore so early webRequest/content events cannot be overwritten.
@@ -165,10 +189,10 @@ chrome.webRequest.onBeforeSendHeaders.addListener(
     // response from the previous History API route must not be classified
     // against the URL that happens to be current when the response arrives.
     const bilibiliGeneration = isBilibiliMediaUrl(url) ? bilibiliTabToken(details.tabId) : null;
-    // First media bytes mean the player is live: kick off page discovery now
-    // so the API quality ladder lands before the user ever opens the popup.
-    // discoverBilibiliDash is TTL-guarded, so repeat calls stay cheap no-ops.
-    if (bilibiliGeneration) void triggerSiteDiscovery(details.tabId);
+    // Observed player traffic remains passive by default. This event only
+    // starts site metadata enrichment when the user explicitly enabled the
+    // automatic quality-completion setting.
+    if (bilibiliGeneration) void triggerSiteDiscovery(details.tabId, { automatic: true });
     const allowed = new Set(["accept", "authorization", "cookie", "origin", "referer", "user-agent"]);
     const headers = {};
     let capturedBytes = 0;
@@ -238,6 +262,7 @@ chrome.webRequest.onHeadersReceived.addListener(
       rangeSupported: rangeLength > 0 || /bytes/i.test(headers["accept-ranges"] || ""),
       suggestedFilename,
       source: "webRequest",
+      provenance: "observed_response",
       ...classification
     });
   },
@@ -288,9 +313,9 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
     void clearTabAfterRestore(tabId, true);
     return;
   }
-  // Page finished loading: run site discovery immediately so the toolbar
-  // badge reflects detected media without waiting for the popup to open.
-  if (changeInfo.status === "complete") void triggerSiteDiscovery(tabId);
+  // Page completion may run opted-in site enrichment. Passive webRequest and
+  // content detection update the badge independently with no metadata fetch.
+  if (changeInfo.status === "complete") void triggerSiteDiscovery(tabId, { automatic: true });
 });
 
 chrome.tabs.onActivated.addListener(({ tabId }) => {
@@ -315,14 +340,14 @@ async function handleMessage(message, sender) {
   switch (message.type) {
     case "CONTENT_MEDIA": {
       const tabId = sender.tab?.id;
-      const data = validateContentCandidate(message.data, sender);
+      const data = await validateContentCandidate(message.data, sender);
       if (!data) return { ignored: true };
       await addCandidate(tabId, data);
       return { accepted: true };
     }
     case "PAGE_PREVIEW": {
       const tabId = sender.tab?.id;
-      const preview = validatePagePreview(message.data, sender);
+      const preview = await validatePagePreview(message.data, sender);
       if (!preview) return { ignored: true };
       await setTabPreview(tabId, preview);
       return { accepted: true };
@@ -342,10 +367,10 @@ async function handleMessage(message, sender) {
         .filter((item) => item.kind !== "youtube" || settings.youtubeEnabled)
         .sort((a, b) => candidateScore(b) - candidateScore(a) || b.lastSeen - a.lastSeen)
         .map(withoutManifestText);
-      return { items, hostStatus, settings };
+      return { items, hostStatus: hostStatusForUi(hostStatus), settings };
     }
     case "GET_JOBS":
-      return { jobs: jobsForUi(), hostStatus };
+      return { jobs: jobsForUi(), hostStatus: hostStatusForUi(hostStatus) };
     case "CLEAR_COMPLETED_JOBS": {
       // Keep the legacy message name for compatibility, but "completed" here
       // means every ended state: saved, failed, or cancelled.
@@ -378,9 +403,13 @@ async function handleMessage(message, sender) {
       const tabId = validTabId(message.tabId);
       const candidate = requireTabCandidate(tabId, message.candidate);
       if (candidate.kind === "dash_pair") return { probe: dashPairProbeForUi(candidate) };
-      const inspection = await probeManifest(candidate);
+      const settings = await getSettings();
+      const inspection = await probeManifest(candidate, {
+        userInitiated: true,
+        networkScope: networkScopeForSettings(settings)
+      });
       await recordManifestInspection(tabId, candidate, inspection);
-      return { probe: probeForUi(inspection) };
+      return { probe: probeForUi(inspection, candidate) };
     }
     case "DOWNLOAD": {
       const tabId = validTabId(message.tabId);
@@ -388,10 +417,10 @@ async function handleMessage(message, sender) {
     }
     case "PING_HOST": {
       if (!await hasNativePermission()) {
-        hostStatus = { connected: false, version: null, ffmpeg: false, capabilities: null, needsPermission: true, lastError: null };
-        return { hostStatus };
+        hostStatus = disconnectedHostStatus({ needsPermission: true });
+        return { hostStatus: hostStatusForUi(hostStatus) };
       }
-      const port = await ensureNativePort();
+      const port = await ensureNativePort({ requireCompatibility: false });
       // A live port answers with capabilities probed when its process started;
       // yt-dlp may have been installed or upgraded since. Force a fresh ping
       // round-trip so the UI's "重新检查" reports the machine's current state
@@ -399,7 +428,7 @@ async function handleMessage(message, sender) {
       if (nativePort === port && hostStatus.connected) {
         try { await pingNativePort(port); } catch { /* a dead port has already reset hostStatus via onDisconnect */ }
       }
-      return { hostStatus };
+      return { hostStatus: hostStatusForUi(hostStatus) };
     }
     case "CANCEL_JOB": {
       const jobId = cleanText(message.jobId, 128);
@@ -426,8 +455,22 @@ async function handleMessage(message, sender) {
     }
     case "GET_SETTINGS":
       return { settings: await getSettings() };
+    case "GET_DIAGNOSTICS":
+      return {
+        diagnostics: buildDiagnostics({
+          extensionId: chrome.runtime.id,
+          manifestVersion: chrome.runtime.getManifest().version,
+          hostStatus
+        })
+      };
     case "SAVE_SETTINGS": {
-      const settings = normalizeSettings(message.settings);
+      const requested = normalizeSettings(message.settings);
+      const settings = {
+        ...requested,
+        // The 0.2.4 build gate is closed. A caller cannot persist the
+        // experimental switch by forging a capability response.
+        youtubeEnabled: requested.youtubeEnabled && ytdlpNetworkAllowed()
+      };
       await chrome.storage.local.set({ settings });
       return { settings };
     }
@@ -579,10 +622,11 @@ async function discoverBilibiliDash(tabId, force = false) {
 // Fan out per-site discovery when a page finishes loading or starts playing.
 // Both underlying helpers are guarded (TTL / in-flight / settings), so calling
 // this repeatedly is a cheap no-op and never blocks the event listener.
-async function triggerSiteDiscovery(tabId) {
+async function triggerSiteDiscovery(tabId, { automatic = false } = {}) {
   try {
     await sessionReady;
-    await discoverBilibiliDash(tabId);
+    const settings = await getSettings();
+    if (!automatic || settings.autoEnrichSiteQuality) await discoverBilibiliDash(tabId);
     await maybeAddYouTubeCandidate(tabId);
   } catch {
     // Discovery is best-effort; the popup scan path retries on demand.
@@ -606,7 +650,7 @@ async function maybeAddYouTubeCandidate(tabId) {
   let tab;
   try { tab = await chrome.tabs.get(tabId); } catch { return; }
   const settings = await getSettings();
-  const watchUrl = settings.youtubeEnabled ? youtubeWatchUrl(tab?.url) : null;
+  const watchUrl = settings.youtubeEnabled && !ytdlpNetworkDisabled() ? youtubeWatchUrl(tab?.url) : null;
   const map = tabMedia.get(tabId);
   if (!watchUrl) {
     if (map) await removeYouTubeCandidatesFromTab(tabId, map);
@@ -614,7 +658,6 @@ async function maybeAddYouTubeCandidate(tabId) {
   }
   if (map?.has(`youtube:${watchUrl}`)) return;
   await addCandidate(tabId, {
-    id: stableId(`youtube:${watchUrl}`),
     kind: "youtube",
     url: watchUrl,
     mime: "video/mp4",
@@ -623,6 +666,7 @@ async function maybeAddYouTubeCandidate(tabId) {
     pageTitle: cleanText(tab?.title, 240),
     tabUrl: watchUrl,
     source: "site-adapter",
+    provenance: "site_payload",
     site: "youtube",
     confidence: 1
   });
@@ -652,18 +696,25 @@ async function dropYouTubeCandidates() {
 // is attached. Cookies only ever travel to the api.bilibili.com origin named
 // in the URL itself.
 async function fetchPublicJson(url, { credentials = "omit" } = {}) {
+  const allowedUrl = requireNetworkRequest({
+    url,
+    purpose: "site_metadata",
+    provenance: "fixed_site_api",
+    networkScope: "public_only"
+  });
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 3_000);
   timer?.unref?.();
   try {
-    const response = await fetch(url, {
+    const response = await fetch(allowedUrl, {
       method: "GET",
       credentials,
       cache: "no-store",
-      redirect: "follow",
+      redirect: "error",
       signal: controller.signal
     });
     if (!response.ok) return null;
+    if (response.url && response.url !== allowedUrl) return null;
     const declared = Number(response.headers.get("content-length") || 0);
     if (declared > 2 * 1024 * 1024) return null;
     const text = await response.text();
@@ -706,7 +757,8 @@ function normalizeBilibiliApiTrack(value, trackType) {
     mime: normalizeMime(value.mimeType || value.mime_type || (trackType === "video" ? "video/mp4" : "audio/mp4")),
     contentLength: 0,
     rangeSupported: true,
-    source: "bilibili-api"
+    source: "bilibili-api",
+    provenance: "fixed_site_api"
   };
 }
 
@@ -795,7 +847,8 @@ async function observeBilibiliDashTrack(details, observation, classified, tabTok
     url,
     cohort: bilibiliObservationCohort(details, state.pageKey),
     rangeSupported: Boolean(observation.rangeSupported),
-    source: "webRequest"
+    source: "webRequest",
+    provenance: "observed_response"
   };
   const map = classified.trackType === "video" ? state.video : state.audio;
   const old = map.get(classified.identity);
@@ -883,7 +936,7 @@ async function publishBilibiliDashPair(tabId, tab, tabToken = bilibiliTabTokens.
   if (!commitGuard()) return;
   if (map) for (const [key, item] of map) if (item.kind === "dash_pair") map.delete(key);
   await addCandidate(tabId, {
-    id: previous?.id || stableId(`bilibili-dash-pair:${tabId}:${state.pageKey}`),
+    id: previous?.id || randomOpaqueId(),
     kind: "dash_pair",
     // This public candidate address is intentionally the page URL. Exact CDN
     // track URLs remain only in the worker-private arrays below.
@@ -906,6 +959,9 @@ async function publishBilibiliDashPair(tabId, tab, tabToken = bilibiliTabTokens.
     pageTitle: cleanText(tab?.title, 240),
     tabUrl: pageUrl,
     source: "bilibili-dash",
+    provenance: candidateVideos.some((track) => track.provenance === "fixed_site_api")
+      ? "fixed_site_api"
+      : "observed_response",
     confidence: 1
   }, commitGuard);
   if (commitGuard()) scheduleBilibiliPrune(tabId);
@@ -1095,6 +1151,9 @@ function normalizeDashPairTracks(values, trackType) {
       contentLength: positive(value.contentLength) || 0,
       rangeSupported: Boolean(value.rangeSupported),
       source: value.source === "webRequest" ? "webRequest" : "bilibili-api",
+      provenance: value.provenance === "observed_response" || value.source === "webRequest"
+        ? "observed_response"
+        : "fixed_site_api",
       firstSeen: timestamp(value.firstSeen, Date.now()),
       lastSeen,
       expiresAt
@@ -1156,6 +1215,7 @@ async function addCandidate(tabId, input, commitGuard = null) {
   }
   const now = Date.now();
   const sources = new Set([...(old?.sources || []), input.source || "unknown"]);
+  const provenance = deriveCandidateProvenance(input, old);
   const preview = choosePreview(previewFromCandidate(old), tabPreviews.get(tabId), incomingPreview);
   const mime = normalizeMime(input.mime || old?.mime || classified?.mime || "");
   const ext = input.ext || old?.ext || classified?.ext || "";
@@ -1167,9 +1227,9 @@ async function addCandidate(tabId, input, commitGuard = null) {
   );
   const pageTitle = cleanText(input.pageTitle, 240) || old?.pageTitle || cleanText(tab?.title, 240) || "";
   const sourceFilenames = uniqueCleanTexts([
+    input.suggestedFilename,
     ...(Array.isArray(old?.sourceFilenames) ? old.sourceFilenames : []),
-    old?.suggestedFilename,
-    input.suggestedFilename
+    old?.suggestedFilename
   ], 260, 20);
   const naming = candidateNaming({
     kind,
@@ -1180,6 +1240,7 @@ async function addCandidate(tabId, input, commitGuard = null) {
     pageTitle,
     suggestedFilenames: sourceFilenames
   });
+  const directSourceFilename = !manifest ? directSuggestedFilename(input.suggestedFilename, kind, ext) : "";
   const videoTracks = kind === "dash_pair" ? normalizeDashPairTracks(input.videoTracks, "video") : [];
   const audioTracks = kind === "dash_pair" ? normalizeDashPairTracks(input.audioTracks, "audio") : [];
   const pairedAudioUrl = kind === "dash_pair" ? canonicalizeUrl(input.pairedAudioUrl) : null;
@@ -1191,7 +1252,8 @@ async function addCandidate(tabId, input, commitGuard = null) {
     : 0;
   if (kind === "dash_pair" && (!selectedVideo || !selectedAudio || !Number.isFinite(pairExpiresAt) || pairExpiresAt <= now)) return false;
   const candidate = {
-    id: cleanText(input.id, 64) || old?.id || stableId(key),
+    id: old?.id || reusableOpaqueId(input.id),
+    generation: old?.generation || currentTabGeneration(tabId),
     url,
     kind,
     mime,
@@ -1204,18 +1266,21 @@ async function addCandidate(tabId, input, commitGuard = null) {
     duration: positive(input.duration) || old?.duration || null,
     codecs: cleanText(input.codecs, 180) || old?.codecs || "",
     title: naming.title,
-    suggestedFilename: naming.suggestedFilename,
+    suggestedFilename: directSourceFilename || old?.suggestedFilename || naming.suggestedFilename,
     sourceFilenames,
     pageTitle,
     tabUrl: canonicalizeUrl(input.tabUrl) || old?.tabUrl || canonicalizeUrl(tab?.url) || "",
     confidence: Math.max(Number(old?.confidence || 0), Number(input.confidence || classified?.confidence || 0.5)),
     source: input.source || old?.source || "unknown",
     sources: [...sources],
+    provenance,
     site: cleanText(input.site, 24) || old?.site || siteAdapterForMediaUrl(url)?.id || "",
     thumbnailUrl: preview?.thumbnailUrl || null,
     thumbnailSource: preview?.thumbnailSource || null,
     thumbnailFrameId: preview?.thumbnailFrameId ?? null,
     thumbnailAt: preview?.thumbnailAt || null,
+    thumbnailAllowedOrigins: uniqueCleanTexts(preview?.thumbnailAllowedOrigins, 512, 16),
+    thumbnailAdapterImageHosts: uniqueCleanTexts(preview?.thumbnailAdapterImageHosts, 255, 16),
     manifestType: old?.manifestType || null,
     manifestVariantCount: positive(old?.manifestVariantCount) || 0,
     manifestAudioTrackCount: positive(old?.manifestAudioTrackCount) || 0,
@@ -1255,7 +1320,69 @@ async function addCandidate(tabId, input, commitGuard = null) {
   return true;
 }
 
-function validateContentCandidate(data, sender) {
+function provenanceForContentSource(source) {
+  if (source === "metadata") return "dom_metadata";
+  if (source === "site-payload") return "site_payload";
+  return "dom_media_element";
+}
+
+function deriveCandidateProvenance(input, previous) {
+  const source = cleanText(input?.source, 40);
+  let next = CANDIDATE_PROVENANCES.includes(input?.provenance) ? input.provenance : "";
+  if (source === "webRequest") next = "observed_response";
+  else if (["bilibili-api", "bilibili-dash"].includes(source) && next !== "observed_response") next = "fixed_site_api";
+  else if (source === "site-adapter") next = "site_payload";
+  else if (CONTENT_SOURCES.has(source)) next = provenanceForContentSource(source);
+  if (!next) next = "user_supplied";
+
+  // Page messages cannot choose this field: validateContentCandidate derives
+  // it from the trusted sender/source. A later webRequest observation may only
+  // promote an existing hint to observed_response; lower-trust input cannot
+  // downgrade a candidate that the browser has actually seen.
+  if (previous?.provenance === "observed_response" || next === "observed_response") return "observed_response";
+  if (previous?.provenance === "fixed_site_api" || next === "fixed_site_api") return "fixed_site_api";
+  return CANDIDATE_PROVENANCES.includes(previous?.provenance) ? previous.provenance : next;
+}
+
+function urlOrigin(value) {
+  try { return new URL(value).origin; } catch { return ""; }
+}
+
+function networkScopeForSettings(settings) {
+  return settings?.allowPrivateNetworkMedia ? "private_network_opt_in" : "public_only";
+}
+
+async function validateThumbnailPreview(value, source, sender) {
+  const thumbnailUrl = normalizeThumbnailUrl(value);
+  if (!thumbnailUrl) return null;
+  const tabId = sender?.tab?.id;
+  const pageUrls = uniqueCleanTexts([
+    canonicalizeUrl(sender?.tab?.url),
+    canonicalizeUrl(sender?.url)
+  ], 16_384, 4);
+  const observedMediaUrls = [...(tabMedia.get(tabId)?.values() || [])]
+    .filter((item) => item.provenance === "observed_response" || item.sources?.includes("webRequest"))
+    .map((item) => item.url);
+  const adapter = pageUrls.map(siteAdapterForPageUrl).find(Boolean);
+  const adapterImageHosts = adapter?.imageHostSuffixes || [];
+  const allowedOrigins = uniqueCleanTexts([
+    ...pageUrls.map(urlOrigin),
+    ...observedMediaUrls.map(urlOrigin)
+  ], 512, 16);
+  const settings = await getSettings();
+  const decision = evaluateNetworkRequest({
+    url: thumbnailUrl,
+    purpose: "thumbnail",
+    provenance: source === "poster" ? "dom_media_element" : "dom_metadata",
+    networkScope: networkScopeForSettings(settings),
+    allowedThumbnailOrigins: allowedOrigins,
+    adapterImageHosts
+  });
+  if (!decision.allowed) return null;
+  return createPreview(decision.url, source, sender.frameId, Date.now(), { allowedOrigins, adapterImageHosts });
+}
+
+async function validateContentCandidate(data, sender) {
   if (!data || typeof data !== "object") return null;
   const url = canonicalizeUrl(data.url);
   if (!url) return null;
@@ -1263,7 +1390,7 @@ function validateContentCandidate(data, sender) {
   const manifestText = typeof data.manifestText === "string" && data.manifestText.length <= 1_500_000 ? data.manifestText : null;
   const source = cleanText(data.source, 40);
   const preview = cleanText(data.thumbnailSource, 40) === "poster"
-    ? createPreview(data.thumbnailUrl, "poster", sender.frameId, Date.now())
+    ? await validateThumbnailPreview(data.thumbnailUrl, "poster", sender)
     : null;
   return {
     url,
@@ -1279,16 +1406,17 @@ function validateContentCandidate(data, sender) {
     // Do not trust a MAIN-world page to choose the provenance tab URL/source.
     tabUrl: canonicalizeUrl(tab?.url) || canonicalizeUrl(sender.url) || "",
     source: CONTENT_SOURCES.has(source) ? source : "content",
+    provenance: provenanceForContentSource(source),
     manifestText,
     ...(preview || {})
   };
 }
 
-function validatePagePreview(data, sender) {
+async function validatePagePreview(data, sender) {
   if (!data || typeof data !== "object") return null;
   const source = cleanText(data.source, 40);
   if (!PAGE_PREVIEW_PRIORITIES.has(source)) return null;
-  return createPreview(data.thumbnailUrl, source, sender.frameId, Date.now());
+  return validateThumbnailPreview(data.thumbnailUrl, source, sender);
 }
 
 function normalizeThumbnailUrl(value) {
@@ -1296,8 +1424,7 @@ function normalizeThumbnailUrl(value) {
     if (typeof value !== "string" || !value.trim() || value.length > MAX_THUMBNAIL_URL_LENGTH) return null;
     const url = new URL(value);
     if (!/^https?:$/.test(url.protocol)) return null;
-    url.username = "";
-    url.password = "";
+    if (url.username || url.password) return null;
     url.hash = "";
     return url.href.length <= MAX_THUMBNAIL_URL_LENGTH ? url.href : null;
   } catch {
@@ -1305,14 +1432,16 @@ function normalizeThumbnailUrl(value) {
   }
 }
 
-function createPreview(value, source, frameId, at) {
+function createPreview(value, source, frameId, at, policy = {}) {
   const thumbnailUrl = normalizeThumbnailUrl(value);
   if (!thumbnailUrl || !PAGE_PREVIEW_PRIORITIES.has(source)) return null;
   return {
     thumbnailUrl,
     thumbnailSource: source,
     thumbnailFrameId: Number.isInteger(frameId) && frameId >= 0 ? frameId : 0,
-    thumbnailAt: Number.isFinite(Number(at)) && Number(at) > 0 ? Math.min(Number(at), Date.now() + 60_000) : Date.now()
+    thumbnailAt: Number.isFinite(Number(at)) && Number(at) > 0 ? Math.min(Number(at), Date.now() + 60_000) : Date.now(),
+    thumbnailAllowedOrigins: uniqueCleanTexts(policy.allowedOrigins, 512, 16),
+    thumbnailAdapterImageHosts: uniqueCleanTexts(policy.adapterImageHosts, 255, 16)
   };
 }
 
@@ -1322,7 +1451,11 @@ function previewFromCandidate(candidate) {
     candidate.thumbnailUrl,
     cleanText(candidate.thumbnailSource, 40),
     candidate.thumbnailFrameId,
-    candidate.thumbnailAt
+    candidate.thumbnailAt,
+    {
+      allowedOrigins: candidate.thumbnailAllowedOrigins,
+      adapterImageHosts: candidate.thumbnailAdapterImageHosts
+    }
   );
 }
 
@@ -1363,6 +1496,8 @@ async function setTabPreview(tabId, preview) {
     candidate.thumbnailSource = next.thumbnailSource;
     candidate.thumbnailFrameId = next.thumbnailFrameId;
     candidate.thumbnailAt = next.thumbnailAt;
+    candidate.thumbnailAllowedOrigins = [...(next.thumbnailAllowedOrigins || [])];
+    candidate.thumbnailAdapterImageHosts = [...(next.thumbnailAdapterImageHosts || [])];
     changed.push(candidate);
   }
   if (!changed.length && !previewChanged) return;
@@ -1439,9 +1574,9 @@ function candidateNaming({ kind, ext, url, inputTitle, previousTitle, pageTitle,
   try { urlName = new URL(url).pathname.split("/").filter(Boolean).pop() || ""; } catch { /* validated earlier */ }
   const title = [
     inputTitle,
+    ...suggestedFilenames,
     pageTitle,
     previousTitle,
-    ...suggestedFilenames,
     urlName
   ].map(readableTitle).find(Boolean) || "媒体";
   const outputExt = ["hls", "dash", "dash_pair"].includes(kind) ? "mp4" : ext || (kind === "audio" ? "m4a" : "mp4");
@@ -1449,6 +1584,15 @@ function candidateNaming({ kind, ext, url, inputTitle, previousTitle, pageTitle,
     title,
     suggestedFilename: `${sanitizeFilename(title)}.${outputExt}`
   };
+}
+
+function directSuggestedFilename(value, kind, ext) {
+  const raw = cleanText(value, 260);
+  if (!raw || !readableTitle(raw)) return "";
+  const safe = sanitizeFilename(raw);
+  const outputExt = cleanText(ext, 12) || (kind === "audio" ? "m4a" : "mp4");
+  const stem = safe.replace(/\.[a-z0-9]{1,8}$/i, "");
+  return `${stem}.${outputExt}`;
 }
 
 function strongDeliveryPathIdentity(pathname) {
@@ -1611,7 +1755,12 @@ function inspectionKey(tabId, key) {
 }
 
 function scheduleTabManifestInspections(tabId, preferredKey, retryPreferred = false) {
-  const entries = [...(tabMedia.get(tabId)?.entries() || [])].filter(([, candidate]) => candidate.kind === "hls");
+  const entries = [...(tabMedia.get(tabId)?.entries() || [])].filter(([, candidate]) =>
+    candidate.kind === "hls"
+    && (typeof candidate.manifestText === "string"
+      || candidate.provenance === "observed_response"
+      || candidate.sources?.includes("webRequest"))
+  );
   if (entries.length < 2 && !retryPreferred) return;
   for (const [key] of entries) scheduleManifestInspection(tabId, key, retryPreferred && key === preferredKey);
 }
@@ -1629,9 +1778,12 @@ async function inspectManifestCandidate(tabId, key) {
   const candidate = tabMedia.get(tabId)?.get(key);
   if (!candidate || candidate.kind !== "hls") return;
   try {
+    const settings = await getSettings();
     const inspection = await probeManifest(candidate, {
       credentials: "omit",
-      timeoutMs: MANIFEST_INSPECTION_TIMEOUT_MS
+      timeoutMs: MANIFEST_INSPECTION_TIMEOUT_MS,
+      automatic: true,
+      networkScope: networkScopeForSettings(settings)
     });
     await recordManifestInspection(tabId, candidate, inspection);
   } catch {
@@ -1699,19 +1851,35 @@ async function probeManifest(candidate, options = {}) {
   let text = typeof candidate.manifestText === "string" ? candidate.manifestText : "";
   let manifestUrl = url;
   if (!text) {
+    const allowedUrl = requireNetworkRequest({
+      url,
+      purpose: "manifest_probe",
+      provenance: CANDIDATE_PROVENANCES.includes(candidate?.provenance) ? candidate.provenance : "user_supplied",
+      networkScope: options.networkScope || "public_only",
+      automatic: Boolean(options.automatic),
+      userInitiated: Boolean(options.userInitiated)
+    });
     const controller = Number(options.timeoutMs) > 0 ? new AbortController() : null;
     const timeout = controller ? setTimeout(() => controller.abort(), Number(options.timeoutMs)) : null;
     try {
-      const response = await fetch(url, {
+      const response = await fetch(allowedUrl, {
         credentials: options.credentials === "omit" ? "omit" : "include",
         cache: "no-store",
-        redirect: "follow",
+        redirect: "error",
         ...(controller ? { signal: controller.signal } : {})
       });
       if (!response.ok) throw new Error(`Manifest HTTP ${response.status}`);
       const length = Number(response.headers.get("content-length") || 0);
       if (length > MAX_MANIFEST_BYTES) throw new Error("媒体清单超出大小限制");
-      manifestUrl = canonicalizeUrl(response.url) || url;
+      if (response.url && response.url !== allowedUrl) {
+        manifestUrl = requireNetworkRequest({
+          url: response.url,
+          purpose: "redirect",
+          provenance: CANDIDATE_PROVENANCES.includes(candidate?.provenance) ? candidate.provenance : "user_supplied",
+          networkScope: options.networkScope || "public_only",
+          userInitiated: Boolean(options.userInitiated)
+        });
+      } else manifestUrl = allowedUrl;
       text = await readResponseTextLimited(response, MAX_MANIFEST_BYTES);
     } finally {
       if (timeout !== null) clearTimeout(timeout);
@@ -1719,9 +1887,38 @@ async function probeManifest(candidate, options = {}) {
   }
   if (text.length > MAX_MANIFEST_BYTES) throw new Error("媒体清单超出大小限制");
   const manifestByteLength = new TextEncoder().encode(text).byteLength;
-  if (candidate.kind === "dash" || /<MPD\b/i.test(text)) return { kind: "dash", manifestUrl, manifestByteLength, ...parseDash(text, manifestUrl) };
+  if (candidate.kind === "dash" || /<MPD\b/i.test(text)) {
+    const dash = { kind: "dash", manifestUrl, manifestByteLength, ...parseDash(text, manifestUrl) };
+    validateManifestChildren(dash, candidate, options);
+    return dash;
+  }
   const hls = parseHls(text, manifestUrl);
-  return { kind: "hls", manifestUrl, manifestByteLength, ...hls, variants: sortHlsVariants(hls.variants) };
+  const result = { kind: "hls", manifestUrl, manifestByteLength, ...hls, variants: sortHlsVariants(hls.variants) };
+  validateManifestChildren(result, candidate, options);
+  return result;
+}
+
+function validateManifestChildren(manifest, candidate, options) {
+  const urls = manifest.kind === "dash"
+    ? (manifest.representations || []).map((item) => item.url)
+    : [
+        ...(manifest.variants || []).map((item) => item.url),
+        ...(manifest.audioTracks || []).map((item) => item.url),
+        ...(manifest.subtitleTracks || []).map((item) => item.url),
+        ...(manifest.segments || []).flatMap((item) => [item.url, item.initMap?.url]),
+        ...(manifest.keys || []).map((item) => item.url)
+      ];
+  for (const childUrl of urls) {
+    if (!childUrl) continue;
+    requireNetworkRequest({
+      url: childUrl,
+      purpose: "manifest_child",
+      provenance: CANDIDATE_PROVENANCES.includes(candidate?.provenance) ? candidate.provenance : "user_supplied",
+      networkScope: options.networkScope || "public_only",
+      automatic: Boolean(options.automatic),
+      userInitiated: Boolean(options.userInitiated)
+    });
+  }
 }
 
 async function readResponseTextLimited(response, maxBytes) {
@@ -1751,10 +1948,46 @@ async function readResponseTextLimited(response, maxBytes) {
   }
 }
 
-function probeForUi(probe) {
+function manifestVariantSelector(candidate, value) {
+  const url = canonicalizeUrl(value);
+  const candidateId = cleanText(candidate?.id, 64);
+  if (!url || !candidateId) return null;
+  if (!(candidate.manifestVariantSelectors instanceof Map)) candidate.manifestVariantSelectors = new Map();
+  if (!(candidate.manifestVariantSelectorsByUrl instanceof Map)) candidate.manifestVariantSelectorsByUrl = new Map();
+  const existing = candidate.manifestVariantSelectorsByUrl.get(url);
+  if (existing && candidate.manifestVariantSelectors.get(existing) === url) return existing;
+  let selector;
+  do {
+    selector = `${MANIFEST_SELECTOR_ORIGIN}/manifest/${encodeURIComponent(candidateId)}/${randomOpaqueId()}`;
+  } while (candidate.manifestVariantSelectors.has(selector));
+  candidate.manifestVariantSelectors.set(selector, url);
+  candidate.manifestVariantSelectorsByUrl.set(url, selector);
+  while (candidate.manifestVariantSelectors.size > MAX_MANIFEST_SELECTOR_MAPPINGS) {
+    const [oldSelector, oldUrl] = candidate.manifestVariantSelectors.entries().next().value || [];
+    if (!oldSelector) break;
+    candidate.manifestVariantSelectors.delete(oldSelector);
+    if (candidate.manifestVariantSelectorsByUrl.get(oldUrl) === oldSelector) candidate.manifestVariantSelectorsByUrl.delete(oldUrl);
+  }
+  return selector;
+}
+
+function resolveManifestVariantSelector(candidate, value) {
+  if (typeof value !== "string" || !value.trim()) return null;
+  const selector = canonicalizeUrl(value);
+  if (!selector || !selector.startsWith(`${MANIFEST_SELECTOR_ORIGIN}/manifest/`)) {
+    throw new Error("所选清晰度无效，请重新读取清晰度");
+  }
+  const selected = candidate?.manifestVariantSelectors instanceof Map
+    ? candidate.manifestVariantSelectors.get(selector)
+    : null;
+  if (!selected) throw new Error("所选清晰度已失效，请重新读取清晰度");
+  return selected;
+}
+
+function probeForUi(probe, candidate) {
   if (probe.kind === "hls") {
     const variants = (probe.variants || []).slice(0, 200).map((item) => ({
-      url: canonicalizeUrl(item.url),
+      url: manifestVariantSelector(candidate, item.url),
       bandwidth: positive(item.bandwidth) || 0,
       width: positive(item.width),
       height: positive(item.height),
@@ -1773,6 +2006,8 @@ function probeForUi(probe) {
       encrypted: Boolean(probe.encrypted),
       protection: probe.protection,
       live: Boolean(probe.live),
+      discontinuity: Boolean(probe.discontinuity),
+      audioTrackCount: Array.isArray(probe.audioTracks) ? probe.audioTracks.length : 0,
       targetDuration: positive(probe.targetDuration)
     };
   }
@@ -1789,9 +2024,23 @@ function probeForUi(probe) {
       width: positive(item.width),
       height: positive(item.height),
       frameRate: cleanText(item.frameRate, 80),
-      url: canonicalizeUrl(item.url)
+      url: manifestVariantSelector(candidate, item.url)
     }))
   };
+}
+
+function hlsUnsupportedReason(probe) {
+  if (probe?.kind !== "hls") return null;
+  if (probe.protection === "drm" || probe.protected) return "检测到 DRM/SAMPLE-AES 内容保护，仅显示媒体信息";
+  if (probe.protection === "aes128" || probe.encrypted) return "FluxCatch 0.2.4 暂不支持 AES-128 加密的 HLS 下载";
+  // A master playlist has no EXT-X-ENDLIST of its own. Its selected media
+  // playlist is revalidated by the native host before any segment is fetched.
+  if (probe.type === "media" && probe.live) return "FluxCatch 0.2.4 暂不支持 HLS 直播录制";
+  if (probe.discontinuity) return "FluxCatch 0.2.4 暂不支持包含时间线切换的 HLS 下载";
+  if ((probe.audioTracks || []).length > 0 || (probe.variants || []).some((item) => item.audioGroup)) {
+    return "FluxCatch 0.2.4 暂不支持独立音轨 HLS 下载";
+  }
+  return null;
 }
 
 function selectDashPairTracks(candidate, requestedVariant) {
@@ -1876,16 +2125,40 @@ async function startDownload(candidate, options, tabId) {
   // experimental opt-in; the page URL is handed to the local yt-dlp engine.
   if (isPolicyBlocked(url, candidate?.tabUrl) && candidate?.kind !== "youtube") throw new Error("商店版本不支持从此平台下载");
   const settings = await getSettings();
+  const networkScope = networkScopeForSettings(settings);
+  url = requireNetworkRequest({
+    url,
+    purpose: "user_download",
+    provenance: CANDIDATE_PROVENANCES.includes(candidate?.provenance) ? candidate.provenance : "user_supplied",
+    networkScope,
+    userInitiated: true
+  });
+  if (dashPair) {
+    requireNetworkRequest({
+      url: dashPair.audio.url,
+      purpose: "manifest_child",
+      provenance: CANDIDATE_PROVENANCES.includes(candidate?.provenance) ? candidate.provenance : "fixed_site_api",
+      networkScope,
+      userInitiated: true
+    });
+  }
   if (matchesBlockedDomain(url, settings.blockedDomains) || matchesBlockedDomain(candidate?.tabUrl, settings.blockedDomains)) {
     throw new Error("该域名已在 FluxCatch 设置中被忽略");
   }
   const opts = normalizeDownloadOptions(options, settings);
   if (candidate.kind === "hls" || candidate.kind === "dash") {
     try {
-      const inspection = await probeManifest(candidate);
-      if (inspection.protection === "drm" || inspection.protected) throw new Error("检测到 DRM 内容保护，仅显示媒体信息");
+      const inspection = await probeManifest(candidate, { userInitiated: true, networkScope });
+      const unsupportedHls = hlsUnsupportedReason(inspection);
+      if (unsupportedHls) {
+        const error = new Error(unsupportedHls);
+        error.code = "HLS_UNSUPPORTED";
+        throw error;
+      }
+      if (inspection.protected) throw new Error("检测到 DRM 内容保护，仅显示媒体信息");
+      probeForUi(inspection, candidate);
     } catch (error) {
-      if (/DRM|内容保护/i.test(error?.message || "")) throw error;
+      if (error?.code || /DRM|内容保护|网络策略/i.test(error?.message || "")) throw error;
       // An authenticated manifest may be unavailable to extension fetch. The
       // native host can still use the request headers observed for this tab.
     }
@@ -1893,7 +2166,23 @@ async function startDownload(candidate, options, tabId) {
   const pageTitle = candidate.pageTitle || candidate.title || "media";
   const requestedName = cleanText(options.filename, 200) || renderFilename(candidate, settings.filenameTemplate, pageTitle);
   const filename = sanitizeFilename(requestedName);
-  const advanced = candidate.kind === "hls" || candidate.kind === "dash" || candidate.kind === "dash_pair" || candidate.kind === "youtube" || opts.extractAudio || opts.convert || opts.useNativeForDirect;
+  // chrome.downloads follows redirects outside the worker's fetch policy.
+  // Only a final media response observed by webRequest may use that path;
+  // DOM/site hints are delegated to the native host, which revalidates every
+  // redirect and address before connecting.
+  const browserDirectEligible = candidate.provenance === "observed_response";
+  const advanced = candidate.kind === "hls" || candidate.kind === "dash" || candidate.kind === "dash_pair" || candidate.kind === "youtube"
+    || opts.extractAudio || opts.convert || opts.useNativeForDirect || !browserDirectEligible;
+  const requestedVariantUrl = dashPair ? null : resolveManifestVariantSelector(candidate, options.variantUrl);
+  if (requestedVariantUrl) {
+    requireNetworkRequest({
+      url: requestedVariantUrl,
+      purpose: "manifest_child",
+      provenance: CANDIDATE_PROVENANCES.includes(candidate?.provenance) ? candidate.provenance : "user_supplied",
+      networkScope,
+      userInitiated: true
+    });
+  }
 
   if (!advanced) {
     const id = await chrome.downloads.download({
@@ -1931,6 +2220,9 @@ async function startDownload(candidate, options, tabId) {
 
   if (!await hasNativePermission()) throw new Error("需要授权连接本地引擎，才能使用此下载模式");
   const port = await ensureNativePort();
+  if (candidate.kind === "youtube" && ytdlpNetworkDisabled()) {
+    throw new Error("0.2.4 暂停外部引擎联网，等待受控网络代理");
+  }
   if (dashPair) {
     // Permission prompts and native-host startup are asynchronous. Resolve the
     // candidate again at the final dispatch boundary so navigation, a newer
@@ -1938,6 +2230,20 @@ async function startDownload(candidate, options, tabId) {
     candidate = requireTabCandidate(tabId, candidate);
     dashPair = selectDashPairTracks(candidate, options.variantUrl);
     url = dashPair.video.url;
+    requireNetworkRequest({
+      url,
+      purpose: "manifest_child",
+      provenance: CANDIDATE_PROVENANCES.includes(candidate?.provenance) ? candidate.provenance : "fixed_site_api",
+      networkScope,
+      userInitiated: true
+    });
+    requireNetworkRequest({
+      url: dashPair.audio.url,
+      purpose: "manifest_child",
+      provenance: CANDIDATE_PROVENANCES.includes(candidate?.provenance) ? candidate.provenance : "fixed_site_api",
+      networkScope,
+      userInitiated: true
+    });
     if (isPolicyBlocked(url, candidate?.tabUrl)
       || matchesBlockedDomain(url, settings.blockedDomains)
       || matchesBlockedDomain(candidate?.tabUrl, settings.blockedDomains)) {
@@ -1992,11 +2298,12 @@ async function startDownload(candidate, options, tabId) {
         extractAudio: Boolean(opts.extractAudio),
         convert: Boolean(opts.convert),
         liveDuration: Number(opts.liveDuration || 0),
-        variantUrl: dashPair ? null : canonicalizeUrl(options.variantUrl) || null,
+        variantUrl: requestedVariantUrl,
         audioUrl: dashPair?.audio.url || null,
         audioHeaders,
         expiresAt: dashPair?.expiresAt || null,
-        expectedDuration: dashPair ? positive(candidate.duration) || 0 : 0
+        expectedDuration: dashPair ? positive(candidate.duration) || 0 : 0,
+        allowPrivateNetworkMedia: Boolean(settings.allowPrivateNetworkMedia)
       }
     });
     // Keep the capture only while this in-memory native job is active so a
@@ -2014,12 +2321,17 @@ async function startDownload(candidate, options, tabId) {
   return { method: "native", jobId };
 }
 
-async function ensureNativePort() {
-  if (nativePort && hostStatus.connected) return nativePort;
+async function ensureNativePort({ requireCompatibility = true } = {}) {
+  if (nativePort && hostStatus.connected) {
+    if (requireCompatibility) requireCompatibleNativeHost();
+    return nativePort;
+  }
   if (nativeConnectPromise) return nativeConnectPromise;
   nativeConnectPromise = openNativePort();
   try {
-    return await nativeConnectPromise;
+    const port = await nativeConnectPromise;
+    if (requireCompatibility) requireCompatibleNativeHost();
+    return port;
   } finally {
     nativeConnectPromise = null;
   }
@@ -2031,7 +2343,7 @@ async function openNativePort() {
   try {
     port = chrome.runtime.connectNative(HOST_NAME);
   } catch (error) {
-    hostStatus = { connected: false, version: null, ffmpeg: false, capabilities: null, needsPermission: false, lastError: error.message };
+    hostStatus = disconnectedHostStatus({ lastError: error.message });
     throw new Error(`本地引擎尚未安装或未注册：${error.message}`);
   }
   nativePort = port;
@@ -2040,11 +2352,14 @@ async function openNativePort() {
       hostStatus = {
         connected: true,
         version: message.version || null,
+        protocolVersion: message.protocolVersion ?? null,
+        capabilityProfileVersion: message.capabilityProfileVersion ?? null,
         ffmpeg: Boolean(message.ffmpeg),
         capabilities: message.capabilities && typeof message.capabilities === "object" ? message.capabilities : null,
         needsPermission: false,
         lastError: null
       };
+      if (ytdlpNetworkDisabled()) void dropYouTubeCandidates();
       resolveHostPing(port, message.requestId);
     }
     void handleNativeHostMessage(message);
@@ -2054,7 +2369,7 @@ async function openNativePort() {
     rejectHostPings(port, new Error(error));
     if (nativePort !== port) return;
     nativePort = null;
-    hostStatus = { connected: false, version: null, ffmpeg: false, capabilities: null, needsPermission: false, lastError: error };
+    hostStatus = disconnectedHostStatus({ lastError: error });
     void handleNativeDisconnect(error);
   });
   try {
@@ -2063,7 +2378,7 @@ async function openNativePort() {
   } catch (error) {
     if (nativePort === port) {
       nativePort = null;
-      hostStatus = { connected: false, version: null, ffmpeg: false, capabilities: null, needsPermission: false, lastError: error.message };
+      hostStatus = disconnectedHostStatus({ lastError: error.message });
     }
     try { port.disconnect?.(); } catch { /* The failed port may already be closed. */ }
     throw error;
@@ -2124,7 +2439,7 @@ async function handleNativeHostMessage(message) {
       if (TERMINAL_JOB_STATUSES.has(status)) cleanupJobHeaders(jobId);
     }
   }
-  broadcast({ type: "HOST_EVENT", event: message, hostStatus });
+  broadcast({ type: "HOST_EVENT", event: hostEventForUi(message), hostStatus: hostStatusForUi(hostStatus) });
   await maybeNotifyHostEvent(message);
 }
 
@@ -2138,7 +2453,11 @@ async function handleNativeDisconnect(error) {
     updates.push(updated);
   }
   if (updates.length) await persistJobs();
-  broadcast({ type: "HOST_EVENT", event: { type: "host-disconnected", error }, hostStatus });
+  broadcast({
+    type: "HOST_EVENT",
+    event: hostEventForUi({ type: "host-disconnected" }),
+    hostStatus: hostStatusForUi(hostStatus)
+  });
   for (const job of updates) broadcast({ type: "JOB_UPDATED", job: jobForUi(job) });
 }
 
@@ -2237,7 +2556,7 @@ async function maybeNotifyHostEvent(message) {
   if (!message?.jobId || !["completed", "failed"].includes(status)) return;
   const settings = await getSettings();
   if (!settings.showNotifications) return;
-  const filename = cleanText(message.filename, 180) || "media";
+  const filename = displayFilename(message.filename);
   const detail = status === "completed"
     ? `${filename} 已保存`
     : redactJobText(message.message || message.error, 240) || `${filename} 下载失败`;
@@ -2281,7 +2600,9 @@ async function restoreSession() {
       for (const item of items.slice(0, MAX_ITEMS_PER_TAB)) {
         const url = canonicalizeUrl(item?.url);
         if (!url || isLikelySubtitleResource({ url, mime: item?.mime }) || !["video", "audio", "hls", "dash", "segment", "youtube"].includes(item?.kind)) continue;
-        const preview = previewFromCandidate(item);
+        const persisted = candidateForPersistence({ ...item, url });
+        if (!persisted) continue;
+        const preview = previewFromCandidate(persisted);
         const manifest = item.kind === "hls" || item.kind === "dash";
         const sourceFilenames = uniqueCleanTexts([
           ...(Array.isArray(item.sourceFilenames) ? item.sourceFilenames : []),
@@ -2297,7 +2618,9 @@ async function restoreSession() {
         });
         const fingerprint = cleanText(item.manifestFingerprint, 128).toLowerCase();
         restored.set(`${item.kind}:${url}`, {
-          ...item,
+          ...persisted,
+          id: randomOpaqueId(),
+          generation: currentTabGeneration(numericTabId),
           url,
           title: naming.title,
           suggestedFilename: naming.suggestedFilename,
@@ -2315,10 +2638,15 @@ async function restoreSession() {
           manifestInspectedAt: positive(item.manifestInspectedAt) || null,
           mergedInto: null,
           aliases: [],
+          provenance: CANDIDATE_PROVENANCES.includes(item.provenance)
+            ? item.provenance
+            : deriveCandidateProvenance(item, null),
           thumbnailUrl: preview?.thumbnailUrl || null,
           thumbnailSource: preview?.thumbnailSource || null,
           thumbnailFrameId: preview?.thumbnailFrameId ?? null,
           thumbnailAt: preview?.thumbnailAt || null,
+          thumbnailAllowedOrigins: uniqueCleanTexts(preview?.thumbnailAllowedOrigins, 512, 16),
+          thumbnailAdapterImageHosts: uniqueCleanTexts(preview?.thumbnailAdapterImageHosts, 255, 16),
           manifestText: null
         });
       }
@@ -2335,7 +2663,7 @@ async function restoreSession() {
     for (const [tabId, item] of Object.entries(data.tabPreviews || {})) {
       const numericTabId = Number(tabId);
       if (!Number.isInteger(numericTabId) || numericTabId < 0) continue;
-      const preview = previewFromCandidate(item);
+      const preview = previewFromCandidate(previewForPersistence(item));
       if (preview) tabPreviews.set(numericTabId, choosePreview(tabPreviews.get(numericTabId), preview));
     }
     for (const raw of Array.isArray(data.jobs) ? data.jobs : []) {
@@ -2379,10 +2707,14 @@ function persistSession() {
   for (const [tabId, map] of tabMedia) {
     data[tabId] = [...map.values()]
       .filter((item) => item.kind !== "dash_pair")
-      .map(withoutManifestText);
+      .map(candidateForPersistence)
+      .filter(Boolean);
   }
   const previews = {};
-  for (const [tabId, preview] of tabPreviews) previews[tabId] = { ...preview };
+  for (const [tabId, preview] of tabPreviews) {
+    const persisted = previewForPersistence(preview);
+    if (persisted) previews[tabId] = persisted;
+  }
   // Timers may be discarded when an MV3 worker is suspended. Queue the actual
   // storage operation and return it so message handlers stay alive until done.
   persistChain = persistChain
@@ -2475,7 +2807,7 @@ function normalizeJob(value = {}) {
     method,
     downloadId: method === "browser" && Number.isInteger(value.downloadId) && value.downloadId >= 0 ? value.downloadId : null,
     tabId: Number.isInteger(value.tabId) && value.tabId >= 0 ? value.tabId : null,
-    kind: ["video", "audio", "hls", "dash", "dash_pair"].includes(value.kind) ? value.kind : "",
+    kind: ["video", "audio", "hls", "dash", "dash_pair", "youtube"].includes(value.kind) ? value.kind : "",
     filename: displayFilename(value.filename),
     status,
     progress,
@@ -2532,7 +2864,12 @@ async function reconcileBrowserJob(job, missingIsFailure = true) {
 
 async function getSettings() {
   const data = await chrome.storage.local.get("settings");
-  return normalizeSettings(data.settings || {});
+  const settings = normalizeSettings(data.settings || {});
+  if (settings.youtubeEnabled && !ytdlpNetworkAllowed()) {
+    settings.youtubeEnabled = false;
+    await chrome.storage.local.set({ settings });
+  }
+  return settings;
 }
 
 function normalizeSettings(value) {
@@ -2544,11 +2881,15 @@ function normalizeSettings(value) {
     saveAs: Boolean(value.saveAs),
     useNativeForDirect: Boolean(value.useNativeForDirect),
     minimumBytes: boundedInt(value.minimumBytes, 0, 100 * 1024 * 1024, DEFAULT_SETTINGS.minimumBytes),
-    liveDuration: boundedInt(value.liveDuration, 0, 24 * 3600, DEFAULT_SETTINGS.liveDuration),
+    // Live capture is deliberately unavailable in 0.2.4 while external-tool
+    // networking is fail-closed. Ignore stale pre-upgrade preferences.
+    liveDuration: 0,
     blockedDomains: normalizeDomains(value.blockedDomains),
     filenameTemplate: cleanText(value.filenameTemplate, 160) || DEFAULT_SETTINGS.filenameTemplate,
     showNotifications: Boolean(value.showNotifications),
-    youtubeEnabled: Boolean(value.youtubeEnabled)
+    youtubeEnabled: Boolean(value.youtubeEnabled),
+    autoEnrichSiteQuality: Boolean(value.autoEnrichSiteQuality),
+    allowPrivateNetworkMedia: Boolean(value.allowPrivateNetworkMedia)
   };
 }
 
@@ -2561,7 +2902,7 @@ function normalizeDownloadOptions(value, fallback = DEFAULT_SETTINGS) {
     convert: Boolean(value.convert),
     useNativeForDirect: typeof value.useNativeForDirect === "boolean" ? value.useNativeForDirect : Boolean(fallback.useNativeForDirect),
     saveAs: typeof value.saveAs === "boolean" ? value.saveAs : Boolean(fallback.saveAs),
-    liveDuration: boundedInt(value.liveDuration, 0, 24 * 3600, fallback.liveDuration || 0)
+    liveDuration: 0
   };
 }
 
@@ -2641,10 +2982,58 @@ function trimManifestCache(preferredTabId, preferredKey) {
   }
 }
 
-function stableId(value) {
-  let hash = 2166136261;
-  for (let i = 0; i < value.length; i += 1) hash = Math.imul(hash ^ value.charCodeAt(i), 16777619);
-  return (hash >>> 0).toString(36);
+function randomOpaqueId() {
+  if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = [...bytes].map((value) => value.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+function currentTabGeneration(tabId) {
+  let generation = tabGenerations.get(tabId);
+  if (!generation) {
+    generation = randomOpaqueId();
+    tabGenerations.set(tabId, generation);
+  }
+  return generation;
+}
+
+function reusableOpaqueId(value) {
+  const id = cleanText(value, 64).toLowerCase();
+  return /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(id)
+    ? id
+    : randomOpaqueId();
+}
+
+function ytdlpNetworkAllowed() {
+  const ytdlp = hostStatus?.capabilities?.ytdlp;
+  return BUILD_PROFILE.features.externalToolNetwork
+    && hostStatus?.connected === true
+    && ytdlp?.available === true
+    && ytdlp?.networkDisabled === false;
+}
+
+function disconnectedHostStatus({ needsPermission = false, lastError = null } = {}) {
+  return {
+    connected: false,
+    version: null,
+    protocolVersion: null,
+    capabilityProfileVersion: null,
+    ffmpeg: false,
+    capabilities: null,
+    needsPermission: Boolean(needsPermission),
+    lastError: lastError || null
+  };
+}
+
+function requireCompatibleNativeHost() {
+  if (hostCompatibility(hostStatus).compatible !== true) throw new Error(HOST_MISMATCH_MESSAGE);
+}
+
+function ytdlpNetworkDisabled() {
+  return !ytdlpNetworkAllowed();
 }
 
 function headerKey(tabId, url) {
@@ -2660,6 +3049,9 @@ function sameOrigin(first, second) {
 }
 
 function dropTabState(tabId) {
+  // Rotate before deleting candidates so a still-open popup can never reuse a
+  // reference captured from the previous document in the same tab.
+  tabGenerations.set(tabId, randomOpaqueId());
   tabMedia.delete(tabId);
   tabPreviews.delete(tabId);
   bilibiliDashStates.delete(tabId);
@@ -2685,6 +3077,7 @@ function dropTabState(tabId) {
 async function clearTabAfterRestore(tabId, update) {
   await sessionReady;
   dropTabState(tabId);
+  if (!update) tabGenerations.delete(tabId);
   await persistSession();
   if (update) await updateBadge(tabId);
 }
@@ -2754,19 +3147,23 @@ function validTabId(value) {
 }
 
 function requireTabCandidate(tabId, reference) {
-  const url = canonicalizeUrl(reference?.url);
   const id = cleanText(reference?.id, 64);
   const kind = cleanText(reference?.kind, 16);
-  if (!url || !id || !kind) throw new Error("媒体候选项无效");
-  const map = tabMedia.get(tabId);
-  let item = map?.get(`${kind}:${url}`);
-  if (!item || item.id !== id) {
-    item = [...(map?.values() || [])].find((candidate) =>
-      candidate.kind === kind
-      && !candidate.mergedInto
-      && (candidate.aliases || []).some((alias) => alias.id === id && alias.url === url)
-    );
+  const generation = cleanText(reference?.generation, 64);
+  const currentGeneration = tabGenerations.get(tabId);
+  if (!id || !kind || !generation || !currentGeneration || generation !== currentGeneration) {
+    throw new Error("该媒体候选项已失效，请重新扫描页面");
   }
+  const map = tabMedia.get(tabId);
+  let item = [...(map?.values() || [])].find((candidate) =>
+    candidate.generation === generation && candidate.kind === kind && candidate.id === id
+  );
+  if (!item) item = [...(map?.values() || [])].find((candidate) =>
+    candidate.generation === generation
+    && candidate.kind === kind
+    && !candidate.mergedInto
+    && (candidate.aliases || []).some((alias) => alias.id === id)
+  );
   if (!item) throw new Error("该媒体候选项已失效，请重新扫描页面");
   if (item.mergedInto) item = [...(map?.values() || [])].find((candidate) => candidate.id === item.mergedInto);
   if (!item || item.mergedInto) throw new Error("该媒体候选项已失效，请重新扫描页面");
@@ -2782,32 +3179,22 @@ function isContentSender(sender) {
 }
 
 function withoutManifestText(item) {
-  const {
-    manifestText,
-    pairedAudioUrl,
-    videoTracks,
-    audioTracks,
-    selectedVideoTrackId,
-    selectedAudioTrackId,
-    ...safe
-  } = item;
   if (item?.kind === "dash_pair") {
     const now = Date.now();
     const tracks = [
-      ...(Array.isArray(videoTracks) ? videoTracks : []).filter((track) => isFreshBilibiliTrack(track, now)).map((track) => publicDashPairTrack(track, "video")),
-      ...(Array.isArray(audioTracks) ? audioTracks : []).filter((track) => isFreshBilibiliTrack(track, now)).map((track) => publicDashPairTrack(track, "audio"))
+      ...(Array.isArray(item.videoTracks) ? item.videoTracks : []).filter((track) => isFreshBilibiliTrack(track, now)).map((track) => publicDashPairTrack(track, "video")),
+      ...(Array.isArray(item.audioTracks) ? item.audioTracks : []).filter((track) => isFreshBilibiliTrack(track, now)).map((track) => publicDashPairTrack(track, "audio"))
     ];
     const expiresAt = Number(item.expiresAt || 0);
-    return {
-      ...safe,
+    return candidateForUi(item, {
       tracks,
       videoTrackCount: tracks.filter((track) => track.role === "video").length,
       audioTrackCount: tracks.filter((track) => track.role === "audio").length,
       available: isFreshBilibiliCandidate(item, now),
       expiresAt: Number.isFinite(expiresAt) && expiresAt > 0 ? expiresAt : null
-    };
+    });
   }
-  return safe;
+  return candidateForUi(item);
 }
 
 function publicDashPairTrack(track, role) {
@@ -2840,7 +3227,7 @@ function redactJobText(value, max) {
   text = text
     .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer <已隐藏>")
     .replace(/\b(authorization|cookie|set-cookie|access[_-]?token|refresh[_-]?token|token|signature|sig|api[_-]?key)\s*[:=]\s*[^\s,;]+/gi, "$1=<已隐藏>")
-    .replace(/(?:\/Users\/|\/home\/|[A-Za-z]:\\)[^\s]+/g, "<本地路径已隐藏>");
+    .replace(/(?:\/Users\/|\/home\/|\/private\/|\/var\/|\/tmp\/|\/opt\/|\/usr\/|\/Applications\/|\/Library\/|[A-Za-z]:\\).*/g, "<本地路径已隐藏>");
   return cleanText(text, max);
 }
 

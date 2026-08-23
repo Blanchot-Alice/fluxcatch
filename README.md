@@ -10,7 +10,7 @@ A local-first Manifest V3 Chrome extension that detects the media a page is
 playing and saves it cleanly — direct files, HLS and DASH streams, with an
 optional macOS native engine for parallel, resumable downloads.
 
-[![Version](https://img.shields.io/badge/version-0.2.3_beta-5E8F84?style=flat-square)](https://github.com/Blanchot-Alice/fluxcatch/releases)
+[![Version](https://img.shields.io/badge/version-0.2.4_beta-5E8F84?style=flat-square)](https://github.com/Blanchot-Alice/fluxcatch/releases)
 [![Chrome MV3](https://img.shields.io/badge/Chrome-Manifest_V3-8E82AD?style=flat-square&logo=googlechrome&logoColor=white)](https://developer.chrome.com/docs/extensions/develop/migrate)
 [![License: MIT](https://img.shields.io/badge/license-MIT-C78FA0?style=flat-square)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS_%2B_Chrome-486D80?style=flat-square)](docs/INSTALL.md)
@@ -22,44 +22,57 @@ optional macOS native engine for parallel, resumable downloads.
 
 ## What it does
 
-FluxCatch watches what the current page actually requests — no scraping, no
-third-party services — and lists every media resource it can identify:
+FluxCatch passively watches what the current page actually requests and, on a
+small allowlist of supported sites, can read media data already embedded in the
+page. It uses no developer-operated service and lists the media resources it
+can identify:
 progressive MP4s, HLS master/variant playlists, MPEG-DASH manifests, and the
 separate video/audio tracks used by modern players. Pick one, pick a quality,
 and the file lands in your Downloads folder.
 
-A optional native host (a small Python program running on your Mac) adds the
-heavy machinery: parallel Range transfers, HLS segment fetching, stream-copy
-merging via FFmpeg, and MP3 extraction. Everything stays on your machine.
+An optional native host (a small Python program running on your Mac) adds the
+heavy machinery: parallel Range transfers, clear static-HLS VOD segment fetching,
+stream-copy local post-processing via FFmpeg, and MP3 extraction. Live HLS,
+encrypted HLS, discontinuities, and separate HLS audio tracks stay gated in
+0.2.4 rather than being handed to an external tool for network access.
+FluxCatch has no developer-operated telemetry, relay, or cloud-processing
+service. Detection state and post-processing remain on the device; an explicit
+inspect, metadata-enrichment, or download action still contacts the selected
+source service.
 
 | | |
 | --- | --- |
-| 🔍 **Passive detection** | Nothing is requested until you open the popup; detection rides on the page's own traffic. |
+| 🔍 **Passive by default** | Network detection rides on the page's own traffic. Supported-site quality metadata is requested only after you open FluxCatch, rescan, or explicitly enable automatic quality enrichment. |
 | 📺 **Quality selection** | HLS variants and DASH representations are listed explicitly — including the Bilibili quality ladder your logged-in account can actually play. |
-| ⚡ **Fast transfers** | The native engine splits downloads into concurrent ranges and merges with FFmpeg stream copy. |
-| 🔒 **Local-first privacy** | No telemetry, no accounts, no cloud. Cookies captured for a download only ever travel to the exact CDN URL that received them. |
+| ⚡ **Conditional acceleration** | When the source server supports byte ranges and the native path is enabled, FluxCatch can download multiple ranges concurrently. This does not guarantee higher throughput. |
+| 🔒 **Local-first privacy** | No developer telemetry, account, relay, or cloud-processing service. Captured cookies remain scoped to the same origin that received them and are stripped when a native redirect or manifest child crosses origins. |
 | 🛡️ **DRM stays DRM** | Protected content is detected and reported, never decrypted. |
 
 ## Site adapters
 
-Generic detection covers most of the web. A few sites get first-class support
-because their players need it:
+Generic detection handles many conventional media requests, but compatibility
+varies by player, manifest structure, server behavior, and access policy. A few
+sites get first-class support because their players need it:
 
 | Site | Status | Notes |
 | --- | --- | --- |
-| **Bilibili** | ✅ Stable | DASH video/audio pairing, opaque quality selectors, login-aware quality ladder (4K with 大会员), short-lived signed URLs kept in memory only. |
-| **Instagram** | ✅ Stable | Direct CDN links extracted from the page payload; private media downloads replay the page's own cookie to the same CDN URL. |
+| **Bilibili video pages** | ✅ Stable | `/video/` pages: DASH video/audio pairing, opaque quality selectors, login-aware quality ladder, and short-lived signed URLs kept in memory only. Bangumi pages are not currently claimed as supported. |
+| **Instagram** | ✅ Stable | Direct CDN links extracted from the page payload; private media downloads replay the page's own cookie only to the same CDN origin. |
 | **X / Twitter** | ✅ Stable | `video_info` variants extracted in-page; best bitrate surfaced automatically. |
-| **YouTube** | 🧪 Experimental | Off by default. When enabled, the watch URL is handed to your locally installed [yt-dlp](https://github.com/yt-dlp/yt-dlp) — no YouTube URLs or credentials flow anywhere else. |
+| **YouTube** | ⏸ Source-only in 0.2.4 | Experimental source remains in the repository, but the stable profile renders no YouTube or yt-dlp controls, publishes no YouTube candidates, and never launches yt-dlp for network access. |
 
 ## Interface
 
-| Popup | Media workspace | Settings |
-| --- | --- | --- |
-| ![Toolbar popup](docs/assets/popup.png) | ![Side panel](docs/assets/sidepanel.png) | ![Settings](docs/assets/options.png) |
+The toolbar badge updates in real time as media is detected. The popup handles
+selection and download settings, the Side Panel is the persistent workbench for
+long downloads, and Settings shows the exact capability profile of the build.
+The stable GitHub profile does not actively fetch page-derived remote
+thumbnails; media cards use packaged type tiles instead.
 
-The toolbar badge updates in real time as media is detected — no need to open
-anything. The Side Panel is the persistent workbench for long downloads.
+Opening the popup or Side Panel, clicking rescan, or enabling **自动补全站点画质**
+may ask a supported site's own playback-metadata API for the qualities available
+to the current login session. That setting is off by default. Automatic probes
+never follow arbitrary URLs supplied by page markup.
 
 ## Quick start
 
@@ -84,12 +97,11 @@ Open a page that's playing media, watch the toolbar badge light up, click the
 FluxCatch icon, and download.
 
 <details>
-<summary>Want YouTube downloads too?</summary>
+<summary>YouTube status in 0.2.4</summary>
 
-Install yt-dlp (`brew install yt-dlp`), then open FluxCatch settings →
-**站点适配器（实验性）** → enable the YouTube toggle. YouTube candidates only
-appear while the toggle is on, and quality is whatever your local yt-dlp
-resolves.
+Experimental YouTube-related source remains in the repository, but the stable
+0.2.4 profile exposes no YouTube or yt-dlp controls, candidates, or download
+path. Installing yt-dlp does not enable the feature.
 
 </details>
 
@@ -111,9 +123,20 @@ flowchart LR
 
 The extension never holds more than it needs: signed Bilibili track URLs live
 in service-worker memory for at most two minutes, session storage receives
-redacted metadata only, and the native host gets the exact headers and URL for
-the task you started — nothing else. See [Privacy](PRIVACY.md) for the full
-data-flow statement and [Architecture](docs/ARCHITECTURE.md) for the deep dive.
+redacted metadata only, and extension pages receive a non-executable
+`displayUrl` plus an opaque `{id, kind, generation}` reference. The service
+worker resolves that reference back to the current private target when you
+start a task. See [Privacy](PRIVACY.md) for the full data-flow statement and
+[Architecture](docs/ARCHITECTURE.md) for the deep dive.
+
+Extension-owned probes validate URL syntax, literal host/IP category, purpose,
+provenance, and worker-derived origin allowlists; browser fetch APIs do not
+expose DNS answers or connected peers. Native transfers additionally validate
+DNS answers, pin the authorized peer, recheck redirects and manifest children,
+and remove sensitive headers monotonically on cross-origin transitions.
+Local/private media requires explicit opt-in, while metadata and reserved ranges
+stay blocked. Ordinary Chrome-backed direct downloads are limited to final media
+responses the browser already observed, and Chrome owns that transfer lifecycle.
 
 ## Development
 
@@ -121,7 +144,7 @@ data-flow statement and [Architecture](docs/ARCHITECTURE.md) for the deep dive.
 npm test                                  # extension unit + UI static tests
 python3 -m unittest discover -s native-host/tests -v
 python3 scripts/validate.py               # manifest + syntax validation
-npm run test:e2e                          # Chrome for Testing detection suite
+npm run test:e2e                          # Chrome detection, UI and interaction suite
 npm run package                           # dist/ zips + SHA256SUMS
 ```
 

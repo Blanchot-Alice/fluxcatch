@@ -18,7 +18,6 @@ test("options fields retain programmatic labels and keyboard-focusable switches"
     "concurrentFragments",
     "concurrentRanges",
     "outputContainer",
-    "liveDuration",
     "minimumKiB",
     "filenameTemplate",
     "blockedDomains"
@@ -40,8 +39,7 @@ test("download settings explain their effect in user-facing language", () => {
   const fields = [
     ["concurrentFragments", "concurrentFragmentsHelp", "同时下载几个视频片段", /一个视频通常由许多小片段组成。这里设置一次同时下载几个片段；推荐 8。数值越大不一定越快，下载出错时可改为 4。/],
     ["concurrentRanges", "concurrentRangesHelp", "大文件同时下载几部分", /开启“自动加速大文件”后，较大的 MP4、MP3 等文件会拆开下载。这里设置一次同时下载几部分；推荐 8。数值越大不一定越快，下载出错时可改为 4。/],
-    ["outputContainer", "outputContainerHelp", "下载文件保存格式", /推荐 MP4，兼容性最好；合并流媒体或转换格式时生效/],
-    ["liveDuration", "liveDurationHelp", "直播多久后自动停止（秒）", /推荐 0（手动停止）；仅录制直播时生效/]
+    ["outputContainer", "outputContainerHelp", "下载文件保存格式", /推荐 MP4，兼容性最好；合并流媒体或转换格式时生效/]
   ];
   for (const [id, helperId, label, helper] of fields) {
     assert.match(optionsHtml, new RegExp(`<label\\s+for="${id}">${label}</label>`));
@@ -54,7 +52,32 @@ test("download settings explain their effect in user-facing language", () => {
   assert.match(optionsHtml, /自动加速大文件/);
   assert.match(optionsHtml, /关闭后由浏览器普通下载/);
   assert.match(optionsHtml, /下载完成或失败时提醒我/);
+  assert.match(optionsHtml, /id="allowPrivateNetworkMedia"/);
+  assert.match(optionsHtml, /允许本地网络媒体/);
+  assert.match(optionsHtml, /云服务元数据地址和保留网络始终禁止访问/);
+  assert.match(optionsHtml, /id="autoEnrichSiteQuality"/);
+  assert.match(optionsHtml, /自动补全站点画质/);
+  assert.match(optionsHtml, /使用你当前的登录会话，请求该站点自己的播放信息接口/);
+  assert.match(optionsJs, /allowPrivateNetworkMedia: form\.allowPrivateNetworkMedia\.checked/);
+  assert.match(optionsJs, /autoEnrichSiteQuality: form\.autoEnrichSiteQuality\.checked/);
+  assert.match(optionsJs, /liveDuration: 0/);
+  assert.match(optionsJs, /import \{ BUILD_PROFILE, HOST_MISMATCH_MESSAGE \} from "\.\.\/lib\/build-profile\.js"/);
+  assert.match(optionsJs, /youtubeEnabled: false/);
+  for (const deadControl of ["liveDuration", "youtubeEnabled", "ytdlpStatus", "ytdlpRefreshButton", "ytdlpGuide"]) {
+    assert.doesNotMatch(optionsHtml, new RegExp(`id="${deadControl}"`));
+  }
+  assert.doesNotMatch(`${optionsHtml}\n${optionsJs}`, /yt-dlp|安装 yt-dlp|refreshYtdlp|ytdlpNetworkDisabled/);
   assert.match(optionsCss, /\.field-help\{[^}]*color:var\(--muted\)[^}]*line-height:1\.45/);
+  assert.match(optionsHtml, /id="diagnosticsHeading"/);
+  assert.match(optionsHtml, /id="copyDiagnosticsButton"/);
+  assert.match(optionsHtml, /id="capabilityList"/);
+  for (const feature of ["directMedia", "staticHls", "staticDash", "bilibiliDashPair", "liveHls", "encryptedHls", "separateAudioHls", "externalToolNetwork", "remoteThumbnails"]) {
+    assert.match(optionsJs, new RegExp(`${feature}:`));
+  }
+  assert.match(optionsJs, /BUILD_PROFILE\.features\[feature\] === true/);
+  assert.match(optionsJs, /value\.textContent = enabled \? "可用" : "未启用"/);
+  assert.match(optionsJs, /type: "GET_DIAGNOSTICS"/);
+  assert.match(optionsJs, /navigator\.clipboard\.writeText\(JSON\.stringify\(diagnostics, null, 2\)\)/);
 });
 
 test("popup tabs expose complete ARIA state and keyboard navigation", () => {
@@ -65,6 +88,47 @@ test("popup tabs expose complete ARIA state and keyboard navigation", () => {
   assert.match(popupHtml, /id="jobsView"[^>]+role="tabpanel"[^>]+aria-labelledby="jobsTab"/);
   for (const key of ["ArrowRight", "ArrowLeft", "Home", "End"]) assert.match(popupJs, new RegExp(`event\\.key === "${key}"`));
   assert.match(popupJs, /setAttribute\("aria-selected", String\(selected\)\)/);
+});
+
+test("popup requests the controlled native path for candidates not observed by the browser", () => {
+  assert.match(popupJs, /item\.provenance !== "observed_response"/);
+  assert.match(popupJs, /if \(advanced\) \{\s*const granted = await chrome\.permissions\.request/);
+});
+
+test("extension pages display public URLs but return only opaque candidate references", () => {
+  for (const source of [popupJs, sidepanelJs]) {
+    assert.match(source, /item\.displayUrl/);
+    assert.match(source, /return \{ id: item\?\.id, kind: item\?\.kind, generation: item\?\.generation \}/);
+    assert.doesNotMatch(source, /candidate:\s*item/);
+    assert.doesNotMatch(source, /item\.url\b/);
+  }
+  assert.match(popupJs, /if \(item\.copyable === true\)/);
+  assert.match(popupJs, /navigator\.clipboard\.writeText\(item\.displayUrl\)/);
+});
+
+test("stable popup and side panel hide external-tool candidates and dead setup paths", () => {
+  assert.match(popupJs, /import \{ BUILD_PROFILE, HOST_MISMATCH_MESSAGE \} from "\.\.\/lib\/build-profile\.js"/);
+  for (const source of [popupJs, sidepanelJs]) {
+    assert.match(source, /item\.kind !== "youtube" \|\| BUILD_PROFILE\.features\.externalToolNetwork/);
+    assert.doesNotMatch(source, /yt-dlp|ytdlpReady|ytdlpNetworkDisabled|打开下载设置/);
+  }
+});
+
+test("popup and side panel report native build mismatches without hiding ordinary downloads", () => {
+  for (const source of [popupJs, sidepanelJs]) {
+    assert.match(source, /HOST_MISMATCH_MESSAGE/);
+    assert.match(source, /status\.connected && status\.compatible !== true/);
+  }
+});
+
+test("HLS UI exposes the clear static VOD boundary and blocks unsupported modes", () => {
+  for (const marker of ["aes128", "probe.type === \"media\" && probe.live", "probe.discontinuity", "probe.audioTrackCount"]) {
+    assert.match(popupJs, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  }
+  assert.match(popupJs, /manifestDownloadBlockReason\(probe\)/);
+  assert.match(popupJs, /state\.probes\.get\(mediaKey\(item\)\)/);
+  assert.match(popupJs, /FluxCatch 0\.2\.4 暂不支持 AES-128 加密的 HLS 下载/);
+  assert.doesNotMatch(popupJs, /检测到可处理的加密流媒体/);
 });
 
 test("dynamic status, task history and progress are exposed without duplicate rows", () => {

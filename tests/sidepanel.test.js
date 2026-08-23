@@ -44,7 +44,11 @@ test("side panel ships complete workspace assets and accessible states", () => {
   assert.match(js, /type:\s*"DOWNLOAD"/);
   assert.match(js, /kind === "dash_pair"/);
   assert.match(js, /streamTypeLabel/);
+  assert.match(js, /item\.kind !== "youtube" \|\| BUILD_PROFILE\.features\.externalToolNetwork/);
+  assert.match(js, /download\.textContent = "快速下载"/);
+  assert.doesNotMatch(js, /chrome\.action\?\.openPopup|打开下载设置|yt-dlp/);
   assert.match(js, /permissions\.request\(\{ permissions: \["nativeMessaging"\] \}\)/);
+  assert.match(js, /item\.provenance !== "observed_response"/);
   assert.match(js, /openOptionsPage/);
 });
 
@@ -66,11 +70,17 @@ test("popup and side panel render privacy-safe thumbnails with kind fallbacks", 
 
   for (const source of [popupJs, sidepanelJs]) {
     assert.match(source, /import \{ loadPrivacySafeThumbnail \} from "\.\.\/lib\/thumbnail\.js"/);
-    assert.match(source, /loadPrivacySafeThumbnail\(item\.thumbnailUrl, fallback\)/);
+    assert.match(source, /loadPrivacySafeThumbnail\(item\.thumbnailUrl, fallback,\s*\{/);
+    assert.match(source, /allowedThumbnailOrigins:\s*item\.thumbnailAllowedOrigins/);
+    assert.match(source, /allowPrivateNetworkMedia\s*\?\s*"private_network_opt_in"/);
   }
+  assert.match(thumbnailJs, /import \{ BUILD_PROFILE \} from "\.\/build-profile\.js"/);
+  assert.match(thumbnailJs, /enabled = BUILD_PROFILE\.features\.remoteThumbnails/);
+  assert.match(thumbnailJs, /if \(!enabled\) return fallback/);
   assert.match(thumbnailJs, /credentials:\s*"omit"/);
   assert.match(thumbnailJs, /referrerPolicy:\s*"no-referrer"/);
   assert.match(thumbnailJs, /cache:\s*"force-cache"/);
+  assert.match(thumbnailJs, /redirect:\s*"error"/);
   assert.match(thumbnailJs, /contentType\.startsWith\("image\/"\)/);
   assert.match(thumbnailJs, /DEFAULT_MAX_THUMBNAIL_BYTES = 8 \* 1024 \* 1024/);
   assert.match(thumbnailJs, /URL\.createObjectURL\(blob\)/);

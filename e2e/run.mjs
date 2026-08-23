@@ -9,6 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { publicDisplayUrl } from "../extension/lib/candidate-public.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
@@ -121,6 +122,16 @@ try {
     version: manifest.version
   }, "runtime manifest differs from the checked-in manifest");
   report.extension.runtimeManifest = runtimeManifest;
+  const buildInfo = await control(`async () => chrome.runtime.sendMessage({ type: "GET_DIAGNOSTICS" })`);
+  assert.equal(buildInfo?.ok, true, buildInfo?.error || "GET_DIAGNOSTICS failed");
+  assert.equal(buildInfo.diagnostics?.extension?.version, manifest.version, "runtime build version differs from manifest");
+  assert.equal(buildInfo.diagnostics?.extension?.id, EXPECTED_EXTENSION_ID, "runtime build identity has the wrong extension ID");
+  assert.equal(buildInfo.diagnostics?.extension?.channel, "github", "runtime build channel mismatch");
+  assert.equal(buildInfo.diagnostics?.extension?.commit, "development", "unpacked E2E must identify a development source tree");
+  assert.equal(buildInfo.diagnostics?.capabilities?.externalToolNetwork, false, "stable external-tool gate must stay closed");
+  assert.equal(buildInfo.diagnostics?.capabilities?.remoteThumbnails, false, "stable remote thumbnail gate must stay closed");
+  report.extension.buildIdentity = buildInfo.diagnostics.extension;
+  report.extension.capabilityProfile = buildInfo.diagnostics.capabilities;
 
   await auditExistingExtensionPage("options", controlPage, 720, 900, `(() => ({
     title: document.title,
@@ -128,20 +139,41 @@ try {
     saveButton: document.querySelector(".save-btn")?.textContent,
     nativePermissionButton: document.querySelector("#nativePermissionButton")?.textContent,
     labelledFields: [...document.querySelectorAll(".opt-field input, .opt-field select, .opt-field textarea")].every((node) => Boolean(document.querySelector('label[for="' + node.id + '"]'))),
+    deadControls: ["liveDuration", "youtubeEnabled", "ytdlpStatus", "ytdlpRefreshButton", "ytdlpGuide"].filter((id) => document.getElementById(id)),
+    capabilities: [...document.querySelectorAll("#capabilityList li")].map((node) => ({
+      feature: node.dataset.feature,
+      enabled: node.dataset.enabled,
+      status: node.querySelector("strong")?.textContent
+    })),
     overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth
   }))()`);
+  const fixtureNetworkSetting = await control(`async () => {
+    const before = await chrome.runtime.sendMessage({ type: "GET_SETTINGS" });
+    if (!before?.ok) throw new Error(before?.error || "GET_SETTINGS failed before fixture opt-in");
+    const saved = await chrome.runtime.sendMessage({
+      type: "SAVE_SETTINGS",
+      settings: { ...before.settings, allowPrivateNetworkMedia: true }
+    });
+    if (!saved?.ok) throw new Error(saved?.error || "SAVE_SETTINGS failed for fixture opt-in");
+    const after = await chrome.runtime.sendMessage({ type: "GET_SETTINGS" });
+    if (!after?.ok) throw new Error(after?.error || "GET_SETTINGS failed after fixture opt-in");
+    return {
+      defaultAllowed: Boolean(before.settings?.allowPrivateNetworkMedia),
+      enabled: Boolean(after.settings?.allowPrivateNetworkMedia)
+    };
+  }`);
+  assert.equal(fixtureNetworkSetting.defaultAllowed, false, "private-network media must default to disabled");
+  assert.equal(fixtureNetworkSetting.enabled, true, "loopback fixtures require an explicit private-network opt-in");
+  report.extension.privateNetworkFixtureOptIn = true;
   const uiDownloadDir = path.join(chromeProfile, "verified-downloads");
   fs.mkdirSync(uiDownloadDir, { recursive: true });
   await browser.send("Browser.setDownloadBehavior", { behavior: "allow", downloadPath: uiDownloadDir, eventsEnabled: true });
   const uiFixture = await prepareUiFixtureTab();
   try {
     await auditNewExtensionPage("popup", "popup/popup.html", 372, 560, `(async () => {
-      const deadline = Date.now() + 5000;
-      let thumbnail;
-      while (!(thumbnail = document.querySelector(".media-thumbnail")) && Date.now() < deadline) {
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      }
-      while (thumbnail && (!thumbnail.complete || thumbnail.naturalWidth === 0) && Date.now() < deadline) {
+      const deadline = Date.now() + ${CASE_TIMEOUT_MS};
+      let mediaCard;
+      while (!(mediaCard = document.querySelector(".media-card")) && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 50));
       }
       document.querySelector("#jobsTab")?.click();
@@ -157,23 +189,31 @@ try {
         jobsVisible,
         mediaVisible: !document.querySelector("#mediaView")?.hidden,
         thumbnailCount: document.querySelectorAll(".media-thumbnail").length,
-        thumbnailSrc: thumbnail?.src || "",
-        thumbnailCurrentSrc: thumbnail?.currentSrc || "",
-        thumbnailLoaded: Boolean(thumbnail?.complete && thumbnail?.naturalWidth > 0),
-        thumbnailConnected: Boolean(thumbnail?.isConnected),
+        fallbackCount: document.querySelectorAll(".media-card .kind-icon").length,
         overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth
       };
     })()`, launched.httpOrigin);
     await control(`async () => { await chrome.tabs.update(${JSON.stringify(uiFixture.tabId)}, { active: true }); return true; }`);
     await auditNewExtensionPage("sidepanel", "sidepanel/sidepanel.html", 420, 820, `(async () => {
-      const deadline = Date.now() + 5000;
+      const deadline = Date.now() + ${CASE_TIMEOUT_MS};
       let button;
       while (!(button = document.querySelector(".media-download")) && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 50));
       }
       button?.click();
-      while (button?.disabled && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50));
-      const thumbnail = document.querySelector(".media-thumbnail");
+      let quickDownloadFinished = false;
+      while (Date.now() < deadline) {
+        const response = await chrome.runtime.sendMessage({ type: "GET_JOBS" });
+        const job = response?.jobs?.find((item) => item.method === "browser"
+          && item.filename === ${JSON.stringify(UI_DIRECT_FILENAME)});
+        if (job?.status === "failed") throw new Error(job.error || job.message || "Side Panel download failed");
+        if (job?.status === "completed") {
+          quickDownloadFinished = true;
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
       return {
         title: document.title,
         brand: document.querySelector(".brand-copy strong")?.textContent,
@@ -182,10 +222,9 @@ try {
         mediaHeading: document.querySelector("#mediaHeading")?.textContent,
         jobsHeading: document.querySelector("#jobsHeading")?.textContent,
         quickDownloadButtons: document.querySelectorAll(".media-download").length,
-        quickDownloadFinished: Boolean(button) && !button.disabled,
+        quickDownloadFinished,
         thumbnailCount: document.querySelectorAll(".media-thumbnail").length,
-        thumbnailSrc: thumbnail?.src || "",
-        thumbnailLoaded: Boolean(thumbnail?.complete && thumbnail?.naturalWidth > 0),
+        fallbackCount: document.querySelectorAll(".media-row .kind-icon").length,
         globalErrorHidden: document.querySelector("#globalError")?.hidden,
         hasLiveRegions: document.querySelectorAll('[aria-live="polite"]').length >= 3,
         overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth
@@ -280,11 +319,12 @@ async function runCase(definition, devtoolsOrigin) {
   const startedAt = Date.now();
   const pageUrl = `${serverOrigin}${definition.pagePath}`;
   const expectedUrl = definition.mediaUrl || `${serverOrigin}${definition.mediaPath}`;
-  const expectedThumbnailUrl = `${serverOrigin}${definition.thumbnailPath}`;
+  const expectedPublicUrl = publicDisplayUrl(expectedUrl);
+  const expectedThumbnailUrl = publicDisplayUrl(`${serverOrigin}${definition.thumbnailPath}`);
   const item = {
     name: definition.name,
     pageUrl,
-    expected: { kind: definition.expectedKind, url: expectedUrl },
+    expected: { kind: definition.expectedKind, observedUrl: expectedUrl, publicUrl: expectedPublicUrl },
     startedAt: new Date(startedAt).toISOString(),
     status: "running"
   };
@@ -338,19 +378,26 @@ async function runCase(definition, devtoolsOrigin) {
         tabId: ${JSON.stringify(tabId)}
       })`);
       if (!response?.ok) throw new Error(response?.error || "GET_TAB_MEDIA failed");
-      item.observed = (response.items || []).map(({ kind, url, source, sources }) => ({ kind, url, source, sources }));
-      const candidate = (response.items || []).find((entry) => entry.kind === definition.expectedKind && entry.url === expectedUrl);
+      item.observed = (response.items || []).map(({ kind, displayUrl, source, sources }) => ({ kind, displayUrl, source, sources }));
+      const candidate = (response.items || []).find((entry) => entry.kind === definition.expectedKind && entry.displayUrl === expectedPublicUrl);
       return candidate ? { response, candidate } : null;
     }, CASE_TIMEOUT_MS, `${definition.name} exact ${definition.expectedKind} detection`);
 
     assert.equal(detection.candidate.kind, definition.expectedKind, "candidate kind mismatch");
-    assert.equal(detection.candidate.url, expectedUrl, "candidate URL mismatch");
+    assert.equal(detection.candidate.displayUrl, expectedPublicUrl, "candidate public display URL mismatch");
+    assert.equal(Object.hasOwn(detection.candidate, "url"), false, "PublicCandidate exposed an executable URL field");
+    assert.match(detection.candidate.generation || "", /^[a-f0-9-]{36}$/, "candidate generation is not opaque");
+    assert.equal(detection.candidate.copyable, false, "signed fixture URLs must not be copyable");
+    assert.equal(detection.candidate.urlIsRedacted, true, "signed fixture URLs must be marked as redacted");
+    assert.doesNotMatch(JSON.stringify(detection.candidate), /token=(?:direct|fast|manifest|observed|caption|dash)/,
+      "signed media values crossed the PublicCandidate boundary");
     assert.equal(detection.candidate.thumbnailUrl, expectedThumbnailUrl, "candidate thumbnail URL mismatch");
     assert.equal(detection.candidate.thumbnailSource, "poster", "video poster must outrank page metadata");
     item.candidate = {
       id: detection.candidate.id,
+      generation: detection.candidate.generation,
       kind: detection.candidate.kind,
-      url: detection.candidate.url,
+      displayUrl: detection.candidate.displayUrl,
       mime: detection.candidate.mime,
       sources: detection.candidate.sources,
       thumbnailUrl: detection.candidate.thumbnailUrl,
@@ -366,9 +413,9 @@ async function runCase(definition, devtoolsOrigin) {
         if (!response?.ok) throw new Error(response?.error || "GET_TAB_MEDIA failed while waiting for HLS grouping");
         const visibleMedia = (response.items || []).filter((entry) => entry.kind !== "segment");
         const streams = visibleMedia.filter((entry) => entry.kind === "hls");
-        const representative = streams.find((entry) => entry.url === expectedUrl);
-        const captionVisible = visibleMedia.some((entry) => entry.url === definition.captionUrl
-          || (() => { try { return /\/embed\/captions\//i.test(new URL(entry.url).pathname); } catch { return false; } })());
+        const representative = streams.find((entry) => entry.displayUrl === expectedPublicUrl);
+        const captionVisible = visibleMedia.some((entry) => entry.displayUrl === publicDisplayUrl(definition.captionUrl)
+          || (() => { try { return /\/embed\/captions\//i.test(new URL(entry.displayUrl).pathname); } catch { return false; } })());
         return visibleMedia.length === 1
           && streams.length === 1
           && representative?.groupSize >= HLS_RENDITIONS.length + 1
@@ -383,20 +430,20 @@ async function runCase(definition, devtoolsOrigin) {
         "one HLS video must be displayed once even when its master and rendition playlists were observed");
       assert.equal(grouped.captionVisible, false,
         "an /embed/captions/*.m3u8 subtitle playlist must not become a downloadable video candidate");
-      assert.equal(grouped.representative.url, expectedUrl,
+      assert.equal(grouped.representative.displayUrl, expectedPublicUrl,
         "the fast-host master must remain the representative instead of a rendition or caption playlist");
       assert.ok(grouped.representative.aliases.length >= HLS_RENDITIONS.length,
         "the grouped HLS item must retain its rendition aliases for diagnostics");
-      const aliasUrls = grouped.representative.aliases.map((alias) => alias.url);
+      const aliasUrls = grouped.representative.aliases.map((alias) => alias.displayUrl);
       for (const observedUrl of definition.observedVariants || []) {
-        assert.ok(aliasUrls.includes(observedUrl),
+        assert.ok(aliasUrls.includes(publicDisplayUrl(observedUrl)),
           `the grouped HLS item lost its observed CDN rendition alias: ${observedUrl}`);
       }
       item.grouping = {
         visibleCandidates: grouped.visibleMedia.length,
         groupSize: grouped.representative.groupSize,
         aliasCount: grouped.representative.aliases.length,
-        representativeUrl: grouped.representative.url,
+        representativeUrl: grouped.representative.displayUrl,
         captionExcluded: !grouped.captionVisible
       };
 
@@ -406,19 +453,22 @@ async function runCase(definition, devtoolsOrigin) {
         candidate: ${JSON.stringify({
           id: detection.candidate.id,
           kind: detection.candidate.kind,
-          url: detection.candidate.url
+          generation: detection.candidate.generation
         })}
       })`);
       assert.equal(probe?.ok, true, `HLS probe failed: ${probe?.error || "unknown error"}`);
       const actualVariants = (probe.probe?.variants || []).map((variant) => variant.url).sort();
-      const expectedVariants = definition.expectedVariants.map((value) => new URL(value, serverOrigin).href).sort();
-      assert.deepEqual(actualVariants, expectedVariants,
-        "HLS master must expose two variants that point to different playlists");
-      assert.equal(new Set(actualVariants).size, expectedVariants.length,
-        "HLS variants unexpectedly point to duplicate playlists");
+      assert.equal(actualVariants.length, definition.expectedVariants.length,
+        "HLS master must expose one opaque selector per rendition");
+      assert.equal(new Set(actualVariants).size, definition.expectedVariants.length,
+        "HLS variants unexpectedly share an opaque selector");
+      assert.ok(actualVariants.every((value) => /^https:\/\/fluxcatch\.invalid\/manifest\/[a-f0-9-]{36}\/[a-f0-9-]{36}$/.test(value)),
+        "HLS variants exposed a media URL instead of an opaque selector");
+      assert.doesNotMatch(JSON.stringify(actualVariants), /run=|token=|signature=|\/deliveries\//i,
+        "HLS variant selectors leaked internal media URLs or queries");
       item.hlsVariants = actualVariants;
 
-      await auditHlsDownloadDialog(tabId, expectedUrl, definition.expectedTitle);
+      await auditHlsDownloadDialog(tabId, expectedPublicUrl, definition.expectedTitle);
     }
 
     item.status = "passed";
@@ -611,16 +661,16 @@ async function auditPopupTaskLifecycle(downloadDir) {
     const detected = await poll(async () => {
       const response = await control(`async () => chrome.runtime.sendMessage({ type: "GET_TAB_MEDIA", tabId: ${JSON.stringify(tabId)} })`);
       if (!response?.ok) throw new Error(response?.error || "GET_TAB_MEDIA failed for task lifecycle fixture");
-      const byUrl = Object.fromEntries((response.items || []).map((candidate) => [candidate.url, candidate]));
-      return Object.values(urls).every((url) => byUrl[url]) ? byUrl : null;
+      const byFilename = Object.fromEntries((response.items || []).map((candidate) => [candidate.suggestedFilename, candidate]));
+      return Object.values(filenames).every((filename) => byFilename[filename]) ? byFilename : null;
     }, CASE_TIMEOUT_MS, "four task lifecycle media candidates");
 
     const start = async (name) => {
-      const candidate = detected[urls[name]];
+      const candidate = detected[filenames[name]];
       const response = await control(`async () => chrome.runtime.sendMessage({
         type: "DOWNLOAD",
         tabId: ${JSON.stringify(tabId)},
-        candidate: ${JSON.stringify({ id: candidate.id, kind: candidate.kind, url: candidate.url })},
+        candidate: ${JSON.stringify({ id: candidate.id, kind: candidate.kind, generation: candidate.generation })},
         options: { filename: ${JSON.stringify(filenames[name])}, saveAs: false }
       })`);
       assert.equal(response?.ok, true, `${name} task did not start: ${response?.error || "unknown error"}`);
@@ -834,8 +884,8 @@ async function captureFlowScreenshot(client, filename) {
 
 async function prepareUiFixtureTab() {
   const pageUrl = `${serverOrigin}/cases/direct.html?run=${encodeURIComponent(`${runId}-ui`)}`;
-  const expectedUrl = `${serverOrigin}/media/direct.mp4?run=${encodeURIComponent(`${runId}-ui`)}`;
-  const expectedThumbnailUrl = `${serverOrigin}/media/poster.png?run=${encodeURIComponent(`${runId}-ui`)}`;
+  const expectedUrl = publicDisplayUrl(`${serverOrigin}/media/direct.mp4?run=${encodeURIComponent(`${runId}-ui`)}`);
+  const expectedThumbnailUrl = publicDisplayUrl(`${serverOrigin}/media/poster.png?run=${encodeURIComponent(`${runId}-ui`)}`);
   const tab = await control(`async () => chrome.tabs.create({ url: ${JSON.stringify(pageUrl)}, active: true })`);
   assert.ok(Number.isInteger(tab?.id), "UI fixture did not create an active tab");
   await waitForTabComplete(tab.id, pageUrl, CASE_TIMEOUT_MS);
@@ -843,7 +893,7 @@ async function prepareUiFixtureTab() {
     const response = await control(`async () => chrome.runtime.sendMessage({ type: "GET_TAB_MEDIA", tabId: ${JSON.stringify(tab.id)} })`);
     if (!response?.ok) throw new Error(response?.error || "GET_TAB_MEDIA failed for UI fixture");
     return response.items?.some((item) => item.kind === "video"
-      && item.url === expectedUrl
+      && item.displayUrl === expectedUrl
       && item.thumbnailUrl === expectedThumbnailUrl
       && item.thumbnailSource === "poster") ? true : null;
   }, CASE_TIMEOUT_MS, "direct candidate for Side Panel quick download");
@@ -928,17 +978,12 @@ async function auditExtensionPage(name, client, width, height, expression, close
     await delay(250);
     // Bringing the synthetic Side Panel tab to the foreground would make it
     // the active content tab and cause its own tabs.onActivated listener to
-    // replace the fixture state. Popup needs the foreground transition so its
-    // lazy thumbnail is actually decoded in headless Chrome.
+    // replace the fixture state.
     if (name !== "sidepanel") await client.send("Page.bringToFront");
     const result = await evaluate(client, expression);
     item.result = result;
-    const screenshot = await client.send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false });
-    if (name === "sidepanel" && result.thumbnailCount > 0 && !result.thumbnailLoaded) {
-      await delay(100);
-      result.thumbnailLoaded = await evaluate(client,
-        `Boolean(document.querySelector(".media-thumbnail")?.complete && document.querySelector(".media-thumbnail")?.naturalWidth > 0)`);
-    }
+    await delay(250);
+    const screenshot = await client.send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false }, CASE_TIMEOUT_MS * 2);
     assert.equal(result?.title?.includes("FluxCatch"), true, `${name} title does not contain FluxCatch`);
     assert.ok(Number(result?.overflow) <= 1, `${name} has horizontal overflow: ${result?.overflow}px`);
     if (name === "options") {
@@ -946,6 +991,15 @@ async function auditExtensionPage(name, client, width, height, expression, close
       assert.equal(result.saveButton, "保存设置");
       assert.equal(result.labelledFields, true, "options contains an unlabelled field");
       assert.ok(["开启高速下载功能", "重新检查"].includes(result.nativePermissionButton));
+      assert.deepEqual(result.deadControls, [], "stable options still exposes unavailable controls");
+      assert.equal(result.capabilities.length, 9, "options capability matrix is incomplete");
+      const capabilityMap = Object.fromEntries(result.capabilities.map((entry) => [entry.feature, entry]));
+      for (const feature of ["directMedia", "staticHls", "staticDash", "bilibiliDashPair"]) {
+        assert.deepEqual(capabilityMap[feature], { feature, enabled: "true", status: "可用" });
+      }
+      for (const feature of ["liveHls", "encryptedHls", "separateAudioHls", "externalToolNetwork", "remoteThumbnails"]) {
+        assert.deepEqual(capabilityMap[feature], { feature, enabled: "false", status: "未启用" });
+      }
     } else if (name === "popup") {
       assert.equal(result.heading, "FluxCatch");
       assert.equal(result.workspaceButton, "打开媒体工作台");
@@ -955,9 +1009,8 @@ async function auditExtensionPage(name, client, width, height, expression, close
       assert.ok(["高速下载功能已就绪", "高速下载功能暂未就绪"].includes(result.hostTitle));
       assert.doesNotMatch(`${result.hostTitle} ${result.hostDetail}`, /FFmpeg|DASH\s*(?:静态规划|原生)|本地高速引擎|v\d+\.\d+/i,
         "popup exposes internal acceleration implementation details");
-      assert.ok(result.thumbnailCount >= 1, "popup did not render the detected video thumbnail");
-      assert.equal(result.thumbnailLoaded, true, "popup thumbnail did not load");
-      assert.match(result.thumbnailSrc, /^blob:/, "popup thumbnail should use a short-lived local Blob URL");
+      assert.equal(result.thumbnailCount, 0, "stable popup must not render a remotely fetched thumbnail");
+      assert.ok(result.fallbackCount >= 1, "popup did not retain the media-type fallback tile");
     } else if (name === "sidepanel") {
       assert.equal(result.brand, "FluxCatch");
       assert.equal(result.mediaHeading, "当前页面媒体");
@@ -967,9 +1020,8 @@ async function auditExtensionPage(name, client, width, height, expression, close
         "Side Panel exposes internal acceleration implementation details");
       assert.ok(result.quickDownloadButtons >= 1, "Side Panel did not render a quick-download action for the detected media");
       assert.equal(result.quickDownloadFinished, true, "Side Panel quick-download action did not settle");
-      assert.ok(result.thumbnailCount >= 1, "Side Panel did not render the detected video thumbnail");
-      assert.equal(result.thumbnailLoaded, true, "Side Panel thumbnail did not load during the rendered screenshot pass");
-      assert.match(result.thumbnailSrc, /^blob:/, "Side Panel thumbnail should use a short-lived local Blob URL");
+      assert.equal(result.thumbnailCount, 0, "stable Side Panel must not render a remotely fetched thumbnail");
+      assert.ok(result.fallbackCount >= 1, "Side Panel did not retain the media-type fallback tile");
       assert.equal(result.globalErrorHidden, true, "Side Panel reported an error during quick download");
       assert.equal(result.hasLiveRegions, true);
     }

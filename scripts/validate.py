@@ -92,6 +92,21 @@ def main() -> int:
     version_match = re.search(r'^VERSION\s*=\s*["\']([^"\']+)["\']', host_source, re.MULTILINE)
     if not version_match or version_match.group(1) != manifest.get("version"):
         raise SystemExit("Native-host VERSION does not match manifest version")
+    build_profile = (EXT / "lib/build-profile.js").read_text("utf-8")
+    build_version = re.search(r'^\s*extensionVersion:\s*["\']([^"\']+)["\']', build_profile, re.MULTILINE)
+    native_protocol = re.search(r'^(?:export\s+const\s+)?NATIVE_PROTOCOL_VERSION\s*=\s*(\d+)', build_profile, re.MULTILINE)
+    profile_version = re.search(r'^(?:export\s+const\s+)?CAPABILITY_PROFILE_VERSION\s*=\s*(\d+)', build_profile, re.MULTILINE)
+    host_protocol = re.search(r'^NATIVE_PROTOCOL_VERSION\s*=\s*(\d+)', host_source, re.MULTILINE)
+    host_profile = re.search(r'^CAPABILITY_PROFILE_VERSION\s*=\s*(\d+)', host_source, re.MULTILINE)
+    if not build_version or build_version.group(1) != manifest.get("version"):
+        raise SystemExit("Build identity version does not match manifest version")
+    if not native_protocol or not host_protocol or native_protocol.group(1) != host_protocol.group(1):
+        raise SystemExit("Extension/native protocol versions do not match")
+    if not profile_version or not host_profile or profile_version.group(1) != host_profile.group(1):
+        raise SystemExit("Extension/native capability profile versions do not match")
+    for closed_feature in ("liveHls", "encryptedHls", "separateAudioHls", "externalToolNetwork", "remoteThumbnails"):
+        if not re.search(rf'^\s*{closed_feature}:\s*false\s*,?$', build_profile, re.MULTILINE):
+            raise SystemExit(f"Stable build capability must remain closed: {closed_feature}")
     required_permissions = set(manifest.get("permissions", []))
     optional_permissions = set(manifest.get("optional_permissions", []))
     if (

@@ -11,12 +11,17 @@ from __future__ import annotations
 
 import concurrent.futures
 import contextlib
+import contextvars
+import hashlib
+import hmac
+import http.client
 import json
 import math
 import os
 import re
 import selectors
 import shutil
+import socket
 import stat
 import struct
 import subprocess
@@ -34,13 +39,28 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-VERSION = "0.2.3"
+_NATIVE_HOST_ROOT = str(Path(__file__).resolve().parent)
+if _NATIVE_HOST_ROOT not in sys.path:
+    sys.path.insert(0, _NATIVE_HOST_ROOT)
+
+from fluxcatch_network_policy import (  # noqa: E402 - local host package
+    NetworkPolicy,
+    NetworkPolicyError,
+    current_network_policy,
+    redact_text,
+    redact_url,
+    reset_current_network_policy,
+    set_current_network_policy,
+)
+
+VERSION = "0.2.4"
+NATIVE_PROTOCOL_VERSION = 1
+CAPABILITY_PROFILE_VERSION = 1
 MAX_MESSAGE = 1024 * 1024
 MAX_MANIFEST = 4 * 1024 * 1024
 ALLOWED_HEADERS = {"accept", "authorization", "cookie", "origin", "referer", "user-agent"}
 USER_AGENT = f"Mozilla/5.0 FluxCatch/{VERSION}"
 SENSITIVE_REDIRECT_HEADERS = {"authorization", "cookie", "origin", "referer"}
-FFMPEG_NETWORK_PROTOCOLS = "http,https,tcp,tls,crypto"
 FFMPEG_PROBE_TIMEOUT = 8
 MAX_DASH_SEGMENTS = 100_000
 DASH_PAIR_WORK_PREFIX = ".fluxcatch-dash-pair-"
@@ -53,6 +73,10 @@ class Cancelled(Exception):
 
 class DownloadError(Exception):
     pass
+
+
+class NetworkPolicyDownloadError(DownloadError):
+    """The requested target is outside the job's explicit network scope."""
 
 
 class UnsupportedDashError(DownloadError):
@@ -75,6 +99,9 @@ class FfmpegCapabilities:
     def as_dict(self) -> dict[str, Any]:
         return {
             "available": self.available,
+            "localProcessing": self.available,
+            "networkInput": False,
+            "networkDisabled": True,
             "path": self.path,
             "version": self.version,
             "demuxers": {"hls": self.hls_demuxer, "dash": self.dash_demuxer},
@@ -155,12 +182,21 @@ class YtDlpCapabilities:
     probe_error: str = ""
 
     @property
-    def available(self) -> bool:
+    def installed(self) -> bool:
         return bool(self.path)
+
+    @property
+    def available(self) -> bool:
+        # yt-dlp owns its DNS, redirect and child-resource connections.  It
+        # remains unavailable until those transfers can be mediated by the
+        # same pinned client as every native HTTP request.
+        return False
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "available": self.available,
+            "installed": self.installed,
+            "networkDisabled": True,
             "path": self.path,
             "version": self.version,
             "probeError": self.probe_error,
@@ -168,12 +204,12 @@ class YtDlpCapabilities:
 
 
 def probe_ytdlp(path: str | None = None) -> YtDlpCapabilities:
-    """Locate a user-installed yt-dlp once during host startup.
+    """Report whether yt-dlp is installed, without enabling network use.
 
-    The experimental YouTube adapter deliberately delegates transfers to the
-    engine the user installed themselves; the extension never bundles or
-    downloads one. FLUXCATCH_YTDLP pins an explicit executable, otherwise the
-    usual PATH entries plus Homebrew/pip install locations are probed.
+    FLUXCATCH_YTDLP pins an explicit executable; otherwise the usual PATH
+    entries plus Homebrew/pip install locations are probed.  Installation is
+    reported separately from availability because external-process networking
+    is fail-closed until a pinned broker exists.
     """
     candidates: list[str] = []
     if path:
@@ -400,27 +436,198 @@ def dash_pair_headers(
     return video, audio
 
 
+_ACTIVE_AUTHORIZED_TARGET: contextvars.ContextVar[Any | None] = contextvars.ContextVar(
+    "fluxcatch_active_authorized_target",
+    default=None,
+)
+_ACTIVE_REQUEST_HEADERS: contextvars.ContextVar[dict[str, str] | None] = contextvars.ContextVar(
+    "fluxcatch_active_request_headers",
+    default=None,
+)
+
+
 class SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
-    """Do not forward captured page credentials to a different origin."""
+    """Re-authorize every redirect and isolate captured credentials."""
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001 - urllib hook
+        policy = current_network_policy()
+        source = _ACTIVE_AUTHORIZED_TARGET.get()
+        if source is None or source.url != req.full_url:
+            source = policy.authorize(req.full_url, purpose="redirect source")
+        _validate_connected_response(fp, policy, source)
+        redirect_target = policy.authorize(newurl, purpose="redirect target")
         redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
         if redirected is not None and not _same_origin(req.full_url, newurl):
             for key in list(redirected.headers):
                 if key.lower() in SENSITIVE_REDIRECT_HEADERS:
                     redirected.remove_header(key)
+            effective_headers = _ACTIVE_REQUEST_HEADERS.get()
+            if effective_headers is not None:
+                # Header authority is monotonic within a redirect chain.  In
+                # particular, A -> B -> A must not restore credentials merely
+                # because the final origin matches the first one again.
+                _ACTIVE_REQUEST_HEADERS.set({
+                    key: value
+                    for key, value in effective_headers.items()
+                    if key not in SENSITIVE_REDIRECT_HEADERS
+                })
+        if redirected is not None:
+            if redirected.full_url != redirect_target.url:
+                redirect_target = policy.authorize(redirected.full_url, purpose="redirect target")
+            _ACTIVE_AUTHORIZED_TARGET.set(redirect_target)
         return redirected
 
 
-HTTP_OPENER = urllib.request.build_opener(SafeRedirectHandler())
+def _create_pinned_connection(
+    requested_address: tuple[str, int],
+    timeout: float | object = socket._GLOBAL_DEFAULT_TIMEOUT,
+    source_address: tuple[str, int] | None = None,
+):
+    """Connect only to an IP already authorized for the active request.
+
+    Passing a numeric address to ``socket.create_connection`` prevents a
+    second attacker-controlled DNS lookup between policy evaluation and the
+    TCP handshake.  HTTPS still uses the original hostname for SNI below.
+    """
+    target = _ACTIVE_AUTHORIZED_TARGET.get()
+    if target is None:
+        raise OSError("No authorized network target is active")
+    requested_host = str(requested_address[0]).strip("[]").rstrip(".").lower()
+    if requested_host != target.hostname or int(requested_address[1]) != target.port:
+        raise OSError("HTTP connection target did not match the authorized network target")
+    policy = current_network_policy()
+    for address in sorted(target.addresses):
+        connection = None
+        try:
+            connection = socket.create_connection(
+                (address, target.port),
+                timeout,
+                source_address,
+            )
+            policy.validate_peer(connection.getpeername()[0], target)
+            return connection
+        except (OSError, NetworkPolicyError):
+            if connection is not None:
+                connection.close()
+    raise OSError(f"Could not connect to authorized network target {target.hostname}")
+
+
+class PinnedHTTPConnection(http.client.HTTPConnection):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._create_connection = _create_pinned_connection
+
+
+class PinnedHTTPSConnection(http.client.HTTPSConnection):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._create_connection = _create_pinned_connection
+
+
+class PinnedHTTPHandler(urllib.request.HTTPHandler):
+    def http_open(self, req):  # noqa: ANN001 - urllib hook
+        return self.do_open(PinnedHTTPConnection, req)
+
+
+class PinnedHTTPSHandler(urllib.request.HTTPSHandler):
+    def https_open(self, req):  # noqa: ANN001 - urllib hook
+        return self.do_open(PinnedHTTPSConnection, req, context=self._context)
+
+
+HTTP_OPENER = urllib.request.build_opener(
+    urllib.request.ProxyHandler({}),
+    SafeRedirectHandler(),
+    PinnedHTTPHandler(),
+    PinnedHTTPSHandler(),
+)
+
+
+def _response_peer_address(response: Any) -> str | None:
+    """Best-effort extraction of urllib's connected peer for DNS pinning."""
+    candidates = [
+        getattr(getattr(getattr(response, "fp", None), "raw", None), "_sock", None),
+        getattr(getattr(response, "fp", None), "_sock", None),
+        getattr(getattr(response, "raw", None), "_sock", None),
+        getattr(response, "_sock", None),
+    ]
+    for candidate in candidates:
+        if candidate is None or not hasattr(candidate, "getpeername"):
+            continue
+        try:
+            peer = candidate.getpeername()
+        except OSError:
+            continue
+        if isinstance(peer, tuple) and peer:
+            return str(peer[0])
+    return None
+
+
+def _validate_connected_response(response: Any, policy: NetworkPolicy, target: Any) -> None:
+    peer = _response_peer_address(response)
+    if peer is None:
+        raise NetworkPolicyError(f"Could not verify the connected peer for {target.hostname}")
+    policy.validate_peer(peer, target)
 
 
 def request(url: str, headers: dict[str, str], *, method: str = "GET", timeout: float = 30, extra: dict[str, str] | None = None):
-    merged = {**headers, **(extra or {})}
-    req = urllib.request.Request(valid_url(url), headers=merged, method=method)
-    response = HTTP_OPENER.open(req, timeout=timeout)
-    valid_url(response.geturl())
-    return response
+    reusable_headers = clean_headers(headers)
+    merged = {**reusable_headers, **(extra or {})}
+    safe_url = valid_url(url)
+    policy = current_network_policy()
+    response = None
+    target_token = None
+    headers_token = None
+    try:
+        initial_target = policy.authorize(safe_url, purpose="HTTP request")
+        target_token = _ACTIVE_AUTHORIZED_TARGET.set(initial_target)
+        headers_token = _ACTIVE_REQUEST_HEADERS.set(dict(reusable_headers))
+        req = urllib.request.Request(safe_url, headers=merged, method=method)
+        response = HTTP_OPENER.open(req, timeout=timeout)
+        final_url = valid_url(response.geturl())
+        final_target = _ACTIVE_AUTHORIZED_TARGET.get()
+        if final_target is None or final_target.url != final_url:
+            raise NetworkPolicyError("HTTP response target did not match the authorized request")
+        _validate_connected_response(response, policy, final_target)
+        # Keep only reusable, allow-listed request headers.  Per-request
+        # controls such as Range must not flow from a manifest into children.
+        response._fluxcatch_request_headers = dict(_ACTIVE_REQUEST_HEADERS.get() or {})
+        return response
+    except NetworkPolicyError as error:
+        if response is not None:
+            response.close()
+        raise NetworkPolicyDownloadError(redact_text(error)) from error
+    except urllib.error.HTTPError as error:
+        try:
+            error_target = _ACTIVE_AUTHORIZED_TARGET.get()
+            if error_target is None or error_target.url != valid_url(error.geturl()):
+                raise NetworkPolicyError("HTTP error target did not match the authorized request")
+            _validate_connected_response(error, policy, error_target)
+        except NetworkPolicyError as policy_error:
+            error.close()
+            raise NetworkPolicyDownloadError(redact_text(policy_error)) from policy_error
+        raise DownloadError(f"HTTP {error.code} for {redact_url(safe_url)}") from error
+    except (urllib.error.URLError, TimeoutError, OSError) as error:
+        reason = getattr(error, "reason", error)
+        raise DownloadError(f"Network request failed for {redact_url(safe_url)}: {redact_text(reason)}") from error
+    finally:
+        if headers_token is not None:
+            _ACTIVE_REQUEST_HEADERS.reset(headers_token)
+        if target_token is not None:
+            _ACTIVE_AUTHORIZED_TARGET.reset(target_token)
+
+
+def authorize_network_urls(values: Iterable[str], *, purpose: str) -> None:
+    """Validate manifest children before the pinned downloader can use them."""
+    try:
+        current_network_policy().authorize_many(values, purpose=purpose)
+    except NetworkPolicyError as error:
+        raise NetworkPolicyDownloadError(redact_text(error)) from error
+
+
+def _submit_with_context(pool: concurrent.futures.Executor, function: Callable[..., Any], *args: Any):
+    """Propagate the per-job NetworkPolicy into bounded worker pools."""
+    context = contextvars.copy_context()
+    return pool.submit(context.run, function, *args)
 
 
 def read_limited(response, maximum: int) -> bytes:
@@ -561,7 +768,9 @@ def probe_direct(url: str, headers: dict[str, str]) -> Probe:
             mime=(head.headers.get("Content-Type") or "").split(";", 1)[0].lower(),
             final_url=head.geturl(),
         )
-    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, ValueError):
+    except NetworkPolicyDownloadError:
+        raise
+    except (DownloadError, urllib.error.HTTPError, urllib.error.URLError, TimeoutError, ValueError):
         info = Probe()
     finally:
         if head is not None:
@@ -584,7 +793,9 @@ def probe_direct(url: str, headers: dict[str, str]) -> Probe:
             info.mime = (response.headers.get("Content-Type") or "").split(";", 1)[0].lower()
         info.final_url = response.geturl()
         response.read(1)
-    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, ValueError):
+    except NetworkPolicyDownloadError:
+        raise
+    except (DownloadError, urllib.error.HTTPError, urllib.error.URLError, TimeoutError, ValueError):
         info.range_supported = False
     finally:
         if response is not None:
@@ -770,6 +981,67 @@ def range_identity(info: Probe) -> str:
     return info.last_modified.strip()
 
 
+def _checkpoint_header(value: str) -> str:
+    """Normalize an in-memory validator before deriving its disk identity."""
+    return re.sub(r"[\x00-\x1f\x7f]", "", str(value or ""))[:512]
+
+
+def _checkpoint_validator_sha256(value: str) -> str:
+    normalized = _checkpoint_header(value)
+    if not normalized:
+        return ""
+    return f"sha256:{hashlib.sha256(normalized.encode('utf-8', 'strict')).hexdigest()}"
+
+
+def checkpoint_entity(info: Probe) -> dict[str, str]:
+    """Persist validator identities without writing opaque header values."""
+    return {
+        "etag": _checkpoint_validator_sha256(info.etag),
+        "lastModified": _checkpoint_validator_sha256(info.last_modified),
+    }
+
+
+def checkpoint_url_sha256(url: str) -> str:
+    return hashlib.sha256(url.encode("utf-8", "strict")).hexdigest()
+
+
+def checkpoint_payload(url: str, info: Probe, completed: Iterable[str]) -> dict[str, Any]:
+    """Checkpoint v2 contains identity hashes, never a recoverable URL."""
+    return {
+        "schemaVersion": 2,
+        "urlSha256": checkpoint_url_sha256(url),
+        "length": info.length,
+        "entity": checkpoint_entity(info),
+        "completed": sorted(completed),
+    }
+
+
+def load_checkpoint_v2(path: Path) -> dict[str, Any] | None:
+    """Load only schema v2 without following symlinks; erase legacy secrets."""
+    if not path.exists() and not path.is_symlink():
+        return None
+    fd = -1
+    try:
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(path, flags)
+        metadata = os.fstat(fd)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > MAX_MESSAGE:
+            raise ValueError("invalid checkpoint file")
+        with os.fdopen(fd, "r", encoding="utf-8", closefd=True) as stream:
+            fd = -1
+            saved = json.load(stream)
+        if not isinstance(saved, dict) or saved.get("schemaVersion") != 2:
+            raise ValueError("legacy checkpoint")
+        return saved
+    except (OSError, UnicodeError, ValueError, TypeError, json.JSONDecodeError):
+        with contextlib.suppress(OSError):
+            path.unlink(missing_ok=True)
+        return None
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+
 def multipart_download(
     url: str,
     target: Path,
@@ -780,52 +1052,74 @@ def multipart_download(
     *,
     allow_resume: bool = True,
 ) -> Path:
+    checkpoint = target.with_suffix(target.suffix + ".part.json")
+    part = target.with_suffix(target.suffix + ".part")
+
+    def discard_cancelled_state() -> None:
+        for path in (part, checkpoint):
+            with contextlib.suppress(OSError):
+                path.unlink(missing_ok=True)
+
     if cancel.is_set():
+        discard_cancelled_state()
         raise Cancelled()
+    saved_checkpoint = load_checkpoint_v2(checkpoint)
+    if not allow_resume and (checkpoint.exists() or checkpoint.is_symlink()):
+        checkpoint.unlink(missing_ok=True)
+        saved_checkpoint = None
     info = probe_direct(url, headers)
     if not info.range_supported or info.length <= 1:
-        result = single_download(url, target, headers, cancel, progress)
-        target.with_suffix(target.suffix + ".part.json").unlink(missing_ok=True)
+        try:
+            result = single_download(url, target, headers, cancel, progress)
+        except Cancelled:
+            discard_cancelled_state()
+            raise
+        checkpoint.unlink(missing_ok=True)
         return result
 
     target.parent.mkdir(parents=True, exist_ok=True)
-    part = target.with_suffix(target.suffix + ".part")
-    checkpoint = target.with_suffix(target.suffix + ".part.json")
     chunks = range_chunks(info.length, max(1, min(24, workers)))
     valid_chunk_keys = {f"{start}-{end}" for start, end in chunks}
     completed: set[str] = set()
     checkpoint_lock = threading.Lock()
     abort = threading.Event()
     expected_identity = range_identity(info)
+    expected_url_hash = checkpoint_url_sha256(url)
+    expected_entity = checkpoint_entity(info)
     # Signed direct DASH URLs can contain short-lived access tokens. Their
     # pair work directories are intentionally non-resumable so no full query
     # string is ever written to a checkpoint that could survive a crash.
     resumable = allow_resume and bool(expected_identity)
 
-    if resumable and checkpoint.is_file() and not checkpoint.is_symlink() and part.is_file() and not part.is_symlink():
+    checkpoint_valid = False
+    if resumable and saved_checkpoint is not None and part.is_file() and not part.is_symlink():
         try:
-            saved = json.loads(checkpoint.read_text("utf-8"))
+            saved = saved_checkpoint
             saved_completed = saved.get("completed")
             if (
-                saved.get("url") == url
+                saved.get("schemaVersion") == 2
+                and isinstance(saved.get("urlSha256"), str)
+                and hmac.compare_digest(saved["urlSha256"], expected_url_hash)
                 and saved.get("length") == info.length
-                and saved.get("identity") == expected_identity
+                and saved.get("entity") == expected_entity
                 and part.stat().st_size == info.length
                 and isinstance(saved_completed, list)
                 and all(isinstance(item, str) and item in valid_chunk_keys for item in saved_completed)
             ):
+                checkpoint_valid = True
                 completed = set(saved_completed)
                 progress.done = sum(end - start + 1 for start, end in chunks if f"{start}-{end}" in completed)
         except (OSError, ValueError, TypeError):
             completed = set()
+    if not checkpoint_valid and (checkpoint.exists() or checkpoint.is_symlink()):
+        checkpoint.unlink(missing_ok=True)
 
     fd = _open_private(part)
     os.ftruncate(fd, info.length)
     write_lock = threading.Lock()
 
     def save_checkpoint() -> None:
-        payload = {"url": url, "length": info.length, "identity": expected_identity, "completed": sorted(completed)}
-        atomic_write_json(checkpoint, payload)
+        atomic_write_json(checkpoint, checkpoint_payload(url, info, completed))
 
     def fetch_chunk(item: tuple[int, int]) -> None:
         start, end = item
@@ -873,6 +1167,9 @@ def multipart_download(
                 return
             except Cancelled:
                 raise
+            except NetworkPolicyDownloadError:
+                abort.set()
+                raise
             except Exception as error:  # noqa: BLE001 - retry network failures
                 last_error = error
                 if attempt_bytes:
@@ -884,6 +1181,7 @@ def multipart_download(
                     response.close()
         raise DownloadError(f"Range {key} failed: {last_error}")
 
+    cancelled = False
     try:
         progress.total = info.length
         progress.add(0, force=True)
@@ -894,7 +1192,7 @@ def multipart_download(
             checkpoint.unlink(missing_ok=True)
         pending = [chunk for chunk in chunks if f"{chunk[0]}-{chunk[1]}" not in completed]
         pool = concurrent.futures.ThreadPoolExecutor(max_workers=max(1, min(24, workers)))
-        futures = [pool.submit(fetch_chunk, chunk) for chunk in pending]
+        futures = [_submit_with_context(pool, fetch_chunk, chunk) for chunk in pending]
         try:
             for future in concurrent.futures.as_completed(futures):
                 future.result()
@@ -906,15 +1204,24 @@ def multipart_download(
         finally:
             pool.shutdown(wait=True, cancel_futures=True)
         os.fsync(fd)
-    except Exception:
+    except Cancelled:
+        cancelled = True
+        raise
+    except Exception as error:
+        if cancel.is_set():
+            cancelled = True
+            raise Cancelled() from error
         if not resumable:
             part.unlink(missing_ok=True)
             checkpoint.unlink(missing_ok=True)
         raise
     finally:
         os.close(fd)
+        if cancelled:
+            discard_cancelled_state()
 
     if cancel.is_set():
+        discard_cancelled_state()
         raise Cancelled()
     if part.stat().st_size != info.length:
         raise DownloadError("Final file length mismatch")
@@ -965,6 +1272,9 @@ def single_download(url: str, target: Path, headers: dict[str, str], cancel: thr
         except Cancelled:
             part.unlink(missing_ok=True)
             raise
+        except NetworkPolicyDownloadError:
+            part.unlink(missing_ok=True)
+            raise
         except Exception as error:  # noqa: BLE001 - restart non-range transfers
             last_error = error
             part.unlink(missing_ok=True)
@@ -999,8 +1309,10 @@ class HlsSegment:
 @dataclass
 class HlsPlaylist:
     url: str
+    request_headers: dict[str, str] = field(default_factory=dict)
     variants: list[dict[str, Any]] = field(default_factory=list)
     audio_tracks: list[dict[str, Any]] = field(default_factory=list)
+    key_urls: list[str] = field(default_factory=list)
     segments: list[HlsSegment] = field(default_factory=list)
     init_map: str = ""
     init_map_range: str = ""
@@ -1011,7 +1323,18 @@ class HlsPlaylist:
     protection: str = "clear"
 
 
-def fetch_manifest(url: str, headers: dict[str, str], cancel: threading.Event | None = None) -> str:
+@dataclass(frozen=True)
+class ManifestFetchResult:
+    text: str
+    final_url: str
+    request_headers: dict[str, str]
+
+
+def fetch_manifest(
+    url: str,
+    headers: dict[str, str],
+    cancel: threading.Event | None = None,
+) -> ManifestFetchResult:
     cancel = cancel or threading.Event()
     last_error: Exception | None = None
     for attempt in range(4):
@@ -1020,8 +1343,14 @@ def fetch_manifest(url: str, headers: dict[str, str], cancel: threading.Event | 
         response = None
         try:
             response = request(url, headers, timeout=30)
-            return read_limited(response, MAX_MANIFEST).decode("utf-8-sig", "replace")
+            return ManifestFetchResult(
+                text=read_limited(response, MAX_MANIFEST).decode("utf-8-sig", "replace"),
+                final_url=valid_url(response.geturl()),
+                request_headers=dict(getattr(response, "_fluxcatch_request_headers", {})),
+            )
         except Cancelled:
+            raise
+        except NetworkPolicyDownloadError:
             raise
         except Exception as error:  # noqa: BLE001 - retry manifest network failures
             last_error = error
@@ -1088,6 +1417,10 @@ def parse_hls(text: str, url: str) -> HlsPlaylist:
                 # observed, a later clear or AES-128 key must not downgrade it.
                 if observed == "drm" or playlist.protection != "drm":
                     playlist.protection = observed
+                if observed == "aes128" and attrs.get("URI"):
+                    key_url = urllib.parse.urljoin(url, attrs["URI"])
+                    valid_url(key_url)
+                    playlist.key_urls.append(key_url)
         elif line == "#EXT-X-DISCONTINUITY":
             playlist.discontinuity = True
         elif line == "#EXT-X-ENDLIST":
@@ -1434,7 +1767,8 @@ def _dash_demuxer_error(capabilities: FfmpegCapabilities, detail: str) -> Downlo
     if capabilities.version:
         identity = f"{identity} (version {capabilities.version})"
     return DownloadError(
-        f"{identity} does not provide the DASH demuxer; the built-in static DASH planner could not handle this MPD: {detail}"
+        f"The pinned built-in static DASH planner could not handle this MPD: {detail}. "
+        f"Direct network access by {identity} is disabled; this structure needs pinned broker support"
     )
 
 
@@ -1504,6 +1838,10 @@ def _fetch_dash_resource(
         except Cancelled:
             destination.unlink(missing_ok=True)
             raise
+        except NetworkPolicyDownloadError:
+            destination.unlink(missing_ok=True)
+            abort.set()
+            raise
         except Exception as error:  # noqa: BLE001 - retry transport failures
             last_error = error
             destination.unlink(missing_ok=True)
@@ -1533,7 +1871,8 @@ def _download_dash_track(
     track_dir.mkdir(mode=0o700)
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=max(1, min(24, workers)))
     futures = {
-        pool.submit(
+        _submit_with_context(
+            pool,
             _fetch_dash_resource,
             resource,
             track_dir / f"{index:08d}.part",
@@ -1582,6 +1921,10 @@ def dash_static_download(
     extract_audio: bool = False,
 ) -> Path:
     tracks = plan_static_dash(manifest, manifest_url)
+    authorize_network_urls(
+        (resource.url for track in tracks for resource in track.resources),
+        purpose="DASH manifest child",
+    )
     resource_headers = scope_subresource_headers(
         manifest_url,
         (resource.url for track in tracks for resource in track.resources),
@@ -1619,16 +1962,24 @@ def select_hls_media(
     variant_url: str | None = None,
     cancel: threading.Event | None = None,
 ) -> tuple[HlsPlaylist, str, HlsPlaylist | None, dict[str, Any] | None]:
-    text = fetch_manifest(url, headers, cancel)
-    playlist = parse_hls(text, url)
+    fetched = fetch_manifest(url, headers, cancel)
+    text = fetched.text
+    playlist = parse_hls(text, fetched.final_url)
+    playlist.request_headers = fetched.request_headers
     master: HlsPlaylist | None = None
     selected: dict[str, Any] | None = None
     if playlist.variants:
         master = playlist
         selected = next((item for item in playlist.variants if variant_url and item["url"] == variant_url), None)
         selected = selected or max(playlist.variants, key=lambda item: (item["height"], item["bandwidth"]))
-        text = fetch_manifest(selected["url"], scope_subresource_headers(url, [selected["url"]], headers), cancel)
-        playlist = parse_hls(text, selected["url"])
+        fetched = fetch_manifest(
+            selected["url"],
+            scope_subresource_headers(master.url, [selected["url"]], master.request_headers),
+            cancel,
+        )
+        text = fetched.text
+        playlist = parse_hls(text, fetched.final_url)
+        playlist.request_headers = fetched.request_headers
     return playlist, text, master, selected
 
 
@@ -1641,6 +1992,18 @@ def hls_media_duration(playlist: HlsPlaylist) -> float:
         for segment in playlist.segments
         if math.isfinite(segment.duration) and segment.duration > 0
     )
+
+
+def authorize_hls_playlist(playlist: HlsPlaylist, *, purpose: str = "HLS manifest child") -> None:
+    children = [
+        *(item["url"] for item in playlist.variants),
+        *(item["url"] for item in playlist.audio_tracks),
+        *(segment.url for segment in playlist.segments),
+        *playlist.key_urls,
+    ]
+    if playlist.init_map:
+        children.append(playlist.init_map)
+    authorize_network_urls(children, purpose=purpose)
 
 
 def hls_fast_download(
@@ -1658,72 +2021,27 @@ def hls_fast_download(
     if cancel.is_set():
         raise Cancelled()
     playlist, _text, master, selected = select_hls_media(url, headers, variant_url, cancel)
+    authorize_hls_playlist(playlist)
+    if master:
+        authorize_hls_playlist(master)
     if playlist.protection == "drm" or (master and master.protection == "drm"):
         raise DownloadError("DRM/SAMPLE-AES HLS is metadata-only")
-    if extract_audio:
-        if not ffmpeg:
-            raise DownloadError("HLS audio extraction requires FFmpeg")
-        input_url = selected["url"] if selected else url
-        input_playlist = playlist
-        if master and selected and selected.get("audio_group"):
-            tracks = [track for track in master.audio_tracks if track.get("GROUP-ID") == selected["audio_group"]]
-            if tracks:
-                preferred = next((track for track in tracks if track.get("DEFAULT") == "YES"), tracks[0])
-                audio_headers = scope_subresource_headers(url, [preferred["url"]], headers)
-                audio, _audio_text, audio_master, audio_selected = select_hls_media(preferred["url"], audio_headers, cancel=cancel)
-                if audio.protection == "drm" or (audio_master and audio_master.protection == "drm"):
-                    raise DownloadError("DRM/SAMPLE-AES HLS audio is metadata-only")
-                input_url = audio_selected["url"] if audio_selected else preferred["url"]
-                input_playlist = audio
-        duration = live_duration if playlist.live or input_playlist.live else 0
-        expected_duration = float(duration) if duration > 0 else hls_media_duration(input_playlist)
-        input_headers = scope_subresource_headers(url, [input_url, *(segment.url for segment in input_playlist.segments)], headers)
-        return ffmpeg_download(
-            input_url,
-            target,
-            input_headers,
-            cancel,
-            progress,
-            ffmpeg,
-            duration=duration,
-            extract_audio=True,
-            expected_duration=expected_duration,
-        )
+    if playlist.encrypted or playlist.protection == "aes128" or (master and (master.encrypted or master.protection == "aes128")):
+        raise DownloadError("AES-128 HLS is not supported in FluxCatch 0.2.4")
+    if extract_audio and not ffmpeg:
+        raise DownloadError("HLS audio extraction requires FFmpeg")
     if master and selected and selected.get("audio_group"):
         tracks = [track for track in master.audio_tracks if track.get("GROUP-ID") == selected["audio_group"]]
         if tracks:
-            if not ffmpeg:
-                raise DownloadError("Separate HLS audio/video requires FFmpeg")
-            preferred = next((track for track in tracks if track.get("DEFAULT") == "YES"), tracks[0])
-            audio_headers = scope_subresource_headers(url, [preferred["url"]], headers)
-            audio, _audio_text, audio_master, audio_selected = select_hls_media(preferred["url"], audio_headers, cancel=cancel)
-            if audio.protection == "drm" or (audio_master and audio_master.protection == "drm"):
-                raise DownloadError("DRM/SAMPLE-AES HLS audio is metadata-only")
-            duration = live_duration if playlist.live else 0
-            audio_url = audio_selected["url"] if audio_selected else preferred["url"]
-            pair_headers = scope_subresource_headers(
-                url,
-                [selected["url"], audio_url, *(segment.url for segment in playlist.segments), *(segment.url for segment in audio.segments)],
-                headers,
-            )
-            return ffmpeg_download_pair(selected["url"], audio_url, target, pair_headers, cancel, progress, ffmpeg, duration=duration)
-    if playlist.live or playlist.encrypted or playlist.discontinuity or playlist.separate_audio or not playlist.segments:
-        if not ffmpeg:
-            raise DownloadError("This HLS playlist requires FFmpeg")
-        duration = live_duration if playlist.live else 0
-        input_url = selected["url"] if selected else url
-        input_headers = scope_subresource_headers(url, [input_url, *(segment.url for segment in playlist.segments)], headers)
-        expected_duration = float(duration) if duration > 0 else hls_media_duration(playlist)
-        return ffmpeg_download(
-            input_url,
-            target,
-            input_headers,
-            cancel,
-            progress,
-            ffmpeg,
-            duration=duration,
-            expected_duration=expected_duration,
-        )
+            raise DownloadError("Separate-audio HLS is not supported in FluxCatch 0.2.4")
+    if playlist.live:
+        raise DownloadError("Live HLS recording is not supported in FluxCatch 0.2.4")
+    if playlist.discontinuity:
+        raise DownloadError("Discontinuous HLS is not supported in FluxCatch 0.2.4")
+    if playlist.separate_audio:
+        raise DownloadError("Separate-audio HLS is not supported in FluxCatch 0.2.4")
+    if not playlist.segments:
+        raise DownloadError("HLS playlist has no downloadable static VOD segments")
 
     temp_dir = Path(tempfile.mkdtemp(prefix="fluxcatch-hls-", dir=str(target.parent)))
     total_segments = len(playlist.segments) + (1 if playlist.init_map else 0)
@@ -1751,7 +2069,12 @@ def hls_fast_download(
             response = None
             attempt_bytes = 0
             try:
-                response = request(segment.url, scope_subresource_headers(url, [segment.url], headers), timeout=45, extra=extra)
+                response = request(
+                    segment.url,
+                    scope_subresource_headers(playlist.url, [segment.url], playlist.request_headers),
+                    timeout=45,
+                    extra=extra,
+                )
                 if segment.byte_range:
                     amount, offset = map(int, segment.byte_range.split("@", 1))
                     validate_range_response(response, offset, offset + amount - 1)
@@ -1779,6 +2102,9 @@ def hls_fast_download(
                 return dest
             except Cancelled:
                 raise
+            except NetworkPolicyDownloadError:
+                abort.set()
+                raise
             except Exception as error:  # noqa: BLE001
                 last_error = error
                 if attempt_bytes:
@@ -1797,7 +2123,10 @@ def hls_fast_download(
         if playlist.init_map:
             init_file = fetch_file(-1, HlsSegment(playlist.init_map, byte_range=playlist.init_map_range))
         pool = concurrent.futures.ThreadPoolExecutor(max_workers=max(1, min(24, workers)))
-        future_paths = {pool.submit(fetch_file, index, segment): index for index, segment in enumerate(playlist.segments)}
+        future_paths = {
+            _submit_with_context(pool, fetch_file, index, segment): index
+            for index, segment in enumerate(playlist.segments)
+        }
         files: list[Path] = []
         try:
             for future in concurrent.futures.as_completed(future_paths):
@@ -1820,6 +2149,35 @@ def hls_fast_download(
             for path in files:
                 with path.open("rb") as source:
                     shutil.copyfileobj(source, output, 1024 * 1024)
+        if extract_audio:
+            assert ffmpeg is not None
+            progress.status("remuxing", "正在从本地媒体提取音频")
+            args = [
+                ffmpeg,
+                "-hide_banner",
+                "-nostdin",
+                "-y",
+                "-i",
+                str(joined),
+                "-vn",
+                "-c:a",
+                "libmp3lame",
+                "-q:a",
+                "2",
+                "-progress",
+                "pipe:1",
+                "-nostats",
+                str(target),
+            ]
+            return run_ffmpeg(
+                args,
+                target,
+                cancel,
+                progress,
+                expected_duration=hls_media_duration(playlist),
+                activity="正在从本地媒体提取音频",
+                report_output_speed=False,
+            )
         if ffmpeg:
             progress.status("remuxing", "正在无损封装")
             return ffmpeg_remux(joined, target, cancel, progress, ffmpeg)
@@ -1831,32 +2189,11 @@ def hls_fast_download(
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
-def ffmpeg_args_for_headers(headers: dict[str, str]) -> list[str]:
-    headers = clean_headers(headers)
-    args: list[str] = []
-    user_agent = headers.get("user-agent")
-    if user_agent:
-        args += ["-user_agent", user_agent]
-    lines = [f"{key.title()}: {value}" for key, value in headers.items() if key != "user-agent"]
-    if lines:
-        args += ["-headers", "\r\n".join(lines) + "\r\n"]
-    return args
-
-
-def ffmpeg_network_args(headers: dict[str, str]) -> list[str]:
-    return [
-        "-protocol_whitelist",
-        FFMPEG_NETWORK_PROTOCOLS,
-        "-rw_timeout",
-        "30000000",
-        "-reconnect",
-        "1",
-        "-reconnect_streamed",
-        "1",
-        "-reconnect_delay_max",
-        "5",
-        *ffmpeg_args_for_headers(headers),
-    ]
+def external_network_process_error(tool: str) -> DownloadError:
+    return DownloadError(
+        f"{tool} 直接联网已由安全策略关闭；请使用内置受控下载路径。"
+        "此媒体结构需要后续 pinned broker 支持"
+    )
 
 
 def ffmpeg_download(
@@ -1871,23 +2208,8 @@ def ffmpeg_download(
     extract_audio: bool = False,
     expected_duration: float = 0,
 ) -> Path:
-    args = [ffmpeg, "-hide_banner", "-nostdin", "-y", *ffmpeg_network_args(headers), "-i", valid_url(url)]
-    if duration > 0:
-        args += ["-t", str(duration)]
-    if extract_audio:
-        args += ["-vn", "-c:a", "libmp3lame", "-q:a", "2"]
-    else:
-        args += ["-map", "0:v:0?", "-map", "0:a:0?", *output_codecs(target)]
-    args += ["-progress", "pipe:1", "-nostats", str(target)]
-    return run_ffmpeg(
-        args,
-        target,
-        cancel,
-        progress,
-        expected_duration=expected_duration or float(duration),
-        activity="正在提取音频" if extract_audio else "正在处理媒体",
-        report_output_speed=not extract_audio,
-    )
+    del url, target, headers, cancel, progress, ffmpeg, duration, extract_audio, expected_duration
+    raise external_network_process_error("FFmpeg")
 
 
 def ffmpeg_remux(source: Path, target: Path, cancel: threading.Event, progress: Progress, ffmpeg: str) -> Path:
@@ -1906,12 +2228,8 @@ def ffmpeg_download_pair(
     *,
     duration: int = 0,
 ) -> Path:
-    network = ffmpeg_network_args(headers)
-    args = [ffmpeg, "-hide_banner", "-nostdin", "-y", *network, "-i", valid_url(video_url), *network, "-i", valid_url(audio_url), "-map", "0:v:0?", "-map", "1:a:0?", *output_codecs(target), "-progress", "pipe:1", "-nostats", str(target)]
-    if duration > 0:
-        output_index = args.index("-progress")
-        args[output_index:output_index] = ["-t", str(duration)]
-    return run_ffmpeg(args, target, cancel, progress)
+    del video_url, audio_url, target, headers, cancel, progress, ffmpeg, duration
+    raise external_network_process_error("FFmpeg")
 
 
 def dash_pair_download(
@@ -1973,8 +2291,8 @@ def dash_pair_download(
 
         pool = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="fluxcatch-dash-pair")
         futures = [
-            pool.submit(fetch_track, "video", video_url, video_path, video_headers),
-            pool.submit(fetch_track, "audio", audio_url, audio_path, audio_headers),
+            _submit_with_context(pool, fetch_track, "video", video_url, video_path, video_headers),
+            _submit_with_context(pool, fetch_track, "audio", audio_url, audio_path, audio_headers),
         ]
         first_error: Exception | None = None
         try:
@@ -2179,6 +2497,33 @@ def _media_time(value: float) -> str:
     return f"{minutes}:{seconds:02d}"
 
 
+def local_only_ffmpeg_args(args: list[str]) -> list[str]:
+    """Pin every FFmpeg input to an existing local file.
+
+    FFmpeg demuxers may otherwise follow URLs embedded in a downloaded file.
+    A per-input protocol whitelist makes that fail closed even when content is
+    mislabeled as a regular media file.  ``pipe`` is retained solely for the
+    progress channel; network protocols are never present.
+    """
+    result: list[str] = []
+    index = 0
+    while index < len(args):
+        value = args[index]
+        if value != "-i":
+            result.append(value)
+            index += 1
+            continue
+        if index + 1 >= len(args):
+            raise DownloadError("Internal FFmpeg input argument is missing")
+        source = args[index + 1]
+        source_path = Path(source)
+        if not source_path.is_absolute() or source_path.is_symlink() or not source_path.is_file():
+            raise DownloadError("FFmpeg input must be an existing local regular file")
+        result.extend(["-protocol_whitelist", "file,pipe", "-i", str(source_path)])
+        index += 2
+    return result
+
+
 def run_ffmpeg(
     args: list[str],
     target: Path,
@@ -2194,7 +2539,7 @@ def run_ffmpeg(
     if target.exists() or target.is_symlink():
         raise DownloadError("Output filename became occupied")
     staging = target.with_name(f".{target.stem}.{uuid.uuid4().hex}.part{target.suffix}")
-    process_args = [*args[:-1], str(staging)]
+    process_args = local_only_ffmpeg_args([*args[:-1], str(staging)])
     error_log = tempfile.TemporaryFile(mode="w+b")
     proc: subprocess.Popen[bytes] | None = None
     selector = selectors.DefaultSelector()
@@ -2304,7 +2649,7 @@ def run_ffmpeg(
         if proc.returncode != 0:
             error_log.seek(0)
             tail = error_log.read().decode("utf-8", "replace")[-4000:]
-            raise DownloadError(f"FFmpeg failed ({proc.returncode}): {tail.strip()}")
+            raise DownloadError(f"FFmpeg failed ({proc.returncode}): {redact_text(tail.strip())}")
         if not staging.exists() or staging.stat().st_size == 0:
             raise DownloadError("FFmpeg produced no output")
         staging.chmod(0o600)
@@ -2327,39 +2672,6 @@ def run_ffmpeg(
             staging.unlink(missing_ok=True)
 
 
-YTDLP_PROGRESS_RE = re.compile(
-    r"\[download\]\s+(\d+(?:\.\d+)?)%\s+of\s+(?:~\s*)?([\d.]+)\s*(B|KiB|MiB|GiB|TiB)"
-)
-YTDLP_SIZE_MULTIPLIERS = {"B": 1, "KiB": 1024, "MiB": 1024**2, "GiB": 1024**3, "TiB": 1024**4}
-
-
-def parse_ytdlp_progress(line: str) -> tuple[float, int] | None:
-    """Parse a ``yt-dlp --newline`` progress line into (percent, total_bytes)."""
-    match = YTDLP_PROGRESS_RE.search(line)
-    if not match:
-        return None
-    percent = float(match.group(1))
-    total = int(float(match.group(2)) * YTDLP_SIZE_MULTIPLIERS[match.group(3)])
-    return percent, total
-
-
-def build_ytdlp_args(
-    executable: str,
-    url: str,
-    target: Path,
-    *,
-    container: str,
-    extract_audio: bool,
-) -> list[str]:
-    args = [executable, "--no-playlist", "--newline", "--no-warnings", "-o", str(target)]
-    if extract_audio:
-        args += ["-f", "ba/b", "-x", "--audio-format", "mp3", "--audio-quality", "2"]
-    else:
-        args += ["-f", "bv*+ba/b", "--merge-output-format", container]
-    args.append(url)
-    return args
-
-
 def youtube_download(
     url: str,
     target: Path,
@@ -2369,72 +2681,9 @@ def youtube_download(
     progress: Progress,
     executable: str | None,
 ) -> Path:
-    """Delegate the transfer to the user-installed yt-dlp engine.
-
-    The extension never touches YouTube media URLs; it only forwards the watch
-    page URL here. Progress lines are parsed into the shared job protocol so
-    the popup shows the same progress bar as every other download.
-    """
-    if not executable:
-        raise DownloadError("YouTube 下载需要本机安装 yt-dlp，安装方法见 FluxCatch 设置页")
-    args = build_ytdlp_args(executable, url, target, container=container, extract_audio=extract_audio)
-    progress.status("downloading", "yt-dlp 正在解析视频")
-    process = subprocess.Popen(
-        args,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
-    )
-
-    def watch_cancel() -> None:
-        if cancel.wait():
-            with contextlib.suppress(OSError):
-                process.terminate()
-
-    watcher = threading.Thread(target=watch_cancel, daemon=True)
-    watcher.start()
-    completed_bytes = 0
-    file_total = 0
-    prev_percent = 0.0
-    last_overall = 0
-    tail: list[str] = []
-    assert process.stdout is not None
-    for raw_line in process.stdout:
-        line = raw_line.strip()
-        if not line:
-            continue
-        tail.append(line)
-        del tail[:-12]
-        parsed = parse_ytdlp_progress(line)
-        if parsed:
-            percent, total = parsed
-            # yt-dlp downloads bestvideo and bestaudio as two separate files;
-            # a percent reset after a finished file banks the previous bytes.
-            if prev_percent >= 99.0 and percent < 50.0:
-                completed_bytes += file_total
-                last_overall = completed_bytes
-            prev_percent = percent
-            file_total = total
-            overall = completed_bytes + int(round(total * percent / 100.0))
-            if overall > last_overall:
-                progress.total = max(progress.total, completed_bytes + file_total)
-                progress.add(overall - last_overall, message="yt-dlp 正在下载")
-                last_overall = overall
-        elif "[Merger]" in line or "[ExtractAudio]" in line:
-            progress.status("remuxing", "正在合并音视频轨")
-    return_code = process.wait(timeout=60)
-    if cancel.is_set():
-        process.stdout.close()
-        raise Cancelled()
-    if return_code != 0:
-        detail = " | ".join(tail[-3:])[-400:]
-        process.stdout.close()
-        raise DownloadError(f"yt-dlp exited with code {return_code}: {detail}")
-    process.stdout.close()
-    if not target.is_file():
-        raise DownloadError("yt-dlp finished without producing the expected file")
-    return target
+    """Fail closed until yt-dlp can use the native pinned HTTP broker."""
+    del url, target, container, extract_audio, cancel, progress, executable
+    raise external_network_process_error("yt-dlp")
 
 
 class Host:
@@ -2448,7 +2697,7 @@ class Host:
         self.ffmpeg_capabilities = probe_ffmpeg(os.environ.get("FLUXCATCH_FFMPEG") or None)
         self.ffmpeg = self.ffmpeg_capabilities.path or None
         self.ytdlp_capabilities = probe_ytdlp(os.environ.get("FLUXCATCH_YTDLP") or None)
-        self.ytdlp = self.ytdlp_capabilities.path or None
+        self.ytdlp = None
         configured = os.environ.get("FLUXCATCH_DOWNLOAD_DIR")
         self.download_dir = Path(configured).expanduser() if configured else Path.home() / "Downloads" / "FluxCatch"
         self.download_dir.mkdir(parents=True, exist_ok=True)
@@ -2466,22 +2715,23 @@ class Host:
     def handle(self, message: dict[str, Any]) -> None:
         kind = message.get("type")
         if kind == "ping":
-            # yt-dlp is a user-installed moving target (brew/pip), unlike the
-            # ffmpeg path baked into the launcher at install time. Re-probe on
-            # every ping so a freshly installed engine is visible to the
-            # extension's "重新检查" without a host process restart.
+            # Re-probe installation truth, but keep external-process network
+            # access unavailable until yt-dlp can use a pinned broker.
             self.ytdlp_capabilities = probe_ytdlp(os.environ.get("FLUXCATCH_YTDLP") or None)
-            self.ytdlp = self.ytdlp_capabilities.path or None
+            self.ytdlp = None
             self.send({
                 "type": "pong",
                 "requestId": message.get("requestId"),
                 "version": VERSION,
+                "protocolVersion": NATIVE_PROTOCOL_VERSION,
+                "capabilityProfileVersion": CAPABILITY_PROFILE_VERSION,
                 "ffmpeg": bool(self.ffmpeg),
                 "capabilities": {
                     "ffmpeg": self.ffmpeg_capabilities.as_dict(),
                     "ytdlp": self.ytdlp_capabilities.as_dict(),
                     "dashPlanner": "static-v1",
                     "dashPair": "direct-v1",
+                    "externalNetworkProcesses": "disabled",
                 },
             })
             return
@@ -2508,10 +2758,13 @@ class Host:
         source_suffix = Path(filename).suffix or ".bin"
         reserved_target: Path | None = None
         work_dir: Path | None = None
+        options = message.get("options") if isinstance(message.get("options"), dict) else {}
+        network_token = set_current_network_policy(NetworkPolicy(
+            allow_private_network_media=options.get("allowPrivateNetworkMedia") is True,
+        ))
         try:
             if cancel.is_set():
                 raise Cancelled()
-            options = message.get("options") if isinstance(message.get("options"), dict) else {}
             kind = str(message.get("mediaKind") or "video").strip().lower()
             url = valid_url(message.get("videoUrl") or options.get("videoUrl") or message.get("url")) if kind == "dash_pair" else valid_url(message.get("url"))
             headers = clean_headers(message.get("headers"))
@@ -2625,36 +2878,25 @@ class Host:
                 if not self.ffmpeg:
                     raise DownloadError("DASH download requires FFmpeg")
                 dash_manifest = fetch_manifest(url, headers, cancel)
-                if dash_is_protected(dash_manifest):
+                if dash_is_protected(dash_manifest.text):
                     raise DownloadError("Protected DASH is metadata-only")
-                if self.ffmpeg_capabilities.dash_demuxer:
-                    try:
-                        planned = plan_static_dash(dash_manifest, url)
-                        ffmpeg_headers = scope_subresource_headers(
-                            url,
-                            (resource.url for track in planned for resource in track.resources),
-                            headers,
-                        )
-                    except DownloadError:
-                        # Unsupported/dynamic MPDs may introduce arbitrary origins
-                        # inside FFmpeg, so do not forward page credentials.
-                        ffmpeg_headers = scope_subresource_headers(url, ["https://cross-origin.invalid/"], headers)
-                    target = ffmpeg_download(url, target, ffmpeg_headers, cancel, progress, self.ffmpeg, duration=live_duration, extract_audio=extract_audio)
-                else:
-                    try:
-                        target = dash_static_download(
-                            url,
-                            dash_manifest,
-                            target,
-                            headers,
-                            concurrent_fragments,
-                            cancel,
-                            progress,
-                            self.ffmpeg,
-                            extract_audio=extract_audio,
-                        )
-                    except UnsupportedDashError as error:
-                        raise _dash_demuxer_error(self.ffmpeg_capabilities, str(error)) from error
+                try:
+                    # Always download MPD children through the pinned native
+                    # client, then give FFmpeg local files only.  Availability
+                    # of FFmpeg's own DASH demuxer never weakens this boundary.
+                    target = dash_static_download(
+                        dash_manifest.final_url,
+                        dash_manifest.text,
+                        target,
+                        dash_manifest.request_headers,
+                        concurrent_fragments,
+                        cancel,
+                        progress,
+                        self.ffmpeg,
+                        extract_audio=extract_audio,
+                    )
+                except UnsupportedDashError as error:
+                    raise _dash_demuxer_error(self.ffmpeg_capabilities, str(error)) from error
             elif kind == "youtube":
                 target = youtube_download(
                     url,
@@ -2693,7 +2935,8 @@ class Host:
         except Cancelled:
             self.send({"type": "cancelled", "jobId": job_id, "filename": filename, "status": "cancelled", "message": "任务已取消"})
         except Exception as error:  # noqa: BLE001 - report all job failures to Chrome
-            self.send({"type": "failed", "jobId": job_id, "filename": filename, "status": "failed", "error": str(error), "message": str(error)})
+            detail = redact_text(error)
+            self.send({"type": "failed", "jobId": job_id, "filename": filename, "status": "failed", "error": detail, "message": detail})
         finally:
             if work_dir is not None:
                 shutil.rmtree(work_dir, ignore_errors=True)
@@ -2702,6 +2945,7 @@ class Host:
                     self.reserved_targets.discard(reserved_target)
             with self.jobs_lock:
                 self.jobs.pop(job_id, None)
+            reset_current_network_policy(network_token)
 
     def close(self) -> None:
         with self.jobs_lock:
@@ -2750,8 +2994,11 @@ def main() -> int:
         for message in read_messages():
             host.handle(message)
     except Exception as error:  # Native Messaging logs stderr in Chrome diagnostics.
-        print(f"FluxCatch host error: {error}", file=sys.stderr)
-        traceback.print_exc(file=sys.stderr)
+        print(f"FluxCatch host error: {redact_text(error)}", file=sys.stderr)
+        # ``traceback.print_exc`` would append the original exception message,
+        # which can contain a signed query string from a third-party library.
+        for frame in traceback.format_tb(error.__traceback__):
+            print(frame.rstrip(), file=sys.stderr)
         return 1
     finally:
         host.close()

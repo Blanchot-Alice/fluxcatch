@@ -113,9 +113,24 @@ main{width:min(680px,calc(100% - 32px));margin:36px auto 72px;position:relative;
 
 .blocked-domains{margin-top:10px}
 
+.diagnostic-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px 16px}
+.diagnostic-grid>div{min-width:0}
+.diagnostic-grid dt{font-size:10.5px;color:var(--muted);margin-bottom:2px}
+.diagnostic-grid dd{font-size:11.5px;font-weight:600;overflow-wrap:anywhere}
+.diagnostic-grid #diagnosticExtensionId,.diagnostic-grid #diagnosticBuild{font-family:var(--mono);font-size:10.5px}
+.capability-summary{margin-top:14px;padding-top:13px;border-top:1px solid var(--border)}
+.capability-summary h3{font-size:11.5px;margin-bottom:9px}
+.capability-list{display:grid;grid-template-columns:1fr 1fr;gap:7px 16px;list-style:none}
+.capability-list li{display:flex;align-items:center;justify-content:space-between;gap:10px;min-width:0;font-size:10.5px;color:var(--muted)}
+.capability-list li span{min-width:0;overflow-wrap:anywhere}
+.capability-list li strong{flex:none;font-size:10.5px;color:var(--muted)}
+.capability-list li[data-enabled="true"] strong{color:var(--success-strong)}
+.diagnostic-actions{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-top:14px;padding-top:13px;border-top:1px solid var(--border)}
+.diagnostic-actions p{font-size:10.5px;line-height:1.5;color:var(--muted);max-width:430px}
+
 button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--primary-strong);outline-offset:2px}
 
-@media(max-width:600px){.opt-grid{grid-template-columns:1fr}.permission-row{align-items:flex-start;flex-direction:column}.secondary-btn{width:100%}}
+@media(max-width:600px){.opt-grid,.diagnostic-grid,.capability-list{grid-template-columns:1fr}.permission-row,.diagnostic-actions{align-items:flex-start;flex-direction:column}.secondary-btn{width:100%}}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important;scroll-behavior:auto!important}}
 
 /* ===== 安装指引（可折叠） ===== */

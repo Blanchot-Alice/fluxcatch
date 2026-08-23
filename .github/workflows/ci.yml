@@ -5,18 +5,207 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
+  fast:
+    name: Unit, native and validation gates
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
+      - name: Read bounded build metadata
+        id: metadata
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from "node:fs";
+          import { BUILD_IDENTITY, BUILD_PROFILE } from "./extension/lib/build-profile.js";
+
+          const version = BUILD_IDENTITY.extensionVersion;
+          const channel = BUILD_PROFILE.channel;
+          const profileVersion = String(BUILD_PROFILE.profileVersion);
+          const commit = process.env.GITHUB_SHA.slice(0, 12);
+          if (!/^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/.test(version)) throw new Error("invalid build version");
+          if (!/^[a-z][a-z0-9-]{0,31}$/.test(channel)) throw new Error("invalid build channel");
+          if (!/^\d{1,4}$/.test(profileVersion)) throw new Error("invalid capability profile version");
+          if (!/^[0-9a-f]{12}$/.test(commit)) throw new Error("invalid tested commit");
+          fs.appendFileSync(process.env.GITHUB_OUTPUT,
+            `version=${version}\nchannel=${channel}\nprofile_version=${profileVersion}\ncommit=${commit}\n`);
+          NODE
       - name: Extension unit and UI static tests
-        run: npm test
+        id: extension_tests
+        run: |
+          set -o pipefail
+          log="$RUNNER_TEMP/extension-tests.log"
+          npm test 2>&1 | tee "$log"
+          total="$(awk '$2 == "tests" && $3 ~ /^[0-9]+$/ { value=$3 } END { print value }' "$log")"
+          passed="$(awk '$2 == "pass" && $3 ~ /^[0-9]+$/ { value=$3 } END { print value }' "$log")"
+          failed="$(awk '$2 == "fail" && $3 ~ /^[0-9]+$/ { value=$3 } END { print value }' "$log")"
+          [[ "$total" =~ ^[0-9]+$ && "$passed" =~ ^[0-9]+$ && "$failed" =~ ^[0-9]+$ ]] || {
+            echo "test result counts were not available" >&2
+            exit 1
+          }
+          printf 'total=%s\npassed=%s\nfailed=%s\n' "$total" "$passed" "$failed" >> "$GITHUB_OUTPUT"
+      - name: Native-host unit and security tests
+        id: native_tests
+        run: |
+          set -o pipefail
+          log="$RUNNER_TEMP/native-tests.log"
+          python3 -m unittest discover -s native-host/tests -v 2>&1 | tee "$log"
+          total="$(sed -n 's/^Ran \([0-9][0-9]*\) tests in .*$/\1/p' "$log" | tail -n 1)"
+          [[ "$total" =~ ^[0-9]+$ ]] || {
+            echo "native test count was not available" >&2
+            exit 1
+          }
+          printf 'total=%s\n' "$total" >> "$GITHUB_OUTPUT"
       - name: Manifest and syntax validation
         run: python3 scripts/validate.py
+      - name: Compile native Python sources
+        run: python3 -m compileall -q native-host
+      - name: Package and verify development artifacts
+        id: package
+        run: |
+          npm run package
+          cd dist
+          sha256sum -c SHA256SUMS
+          extension_sha="$(awk '$2 ~ /^fluxcatch-extension-/ {print $1}' SHA256SUMS)"
+          native_sha="$(awk '$2 ~ /^fluxcatch-native-host-/ {print $1}' SHA256SUMS)"
+          [[ "$extension_sha" =~ ^[0-9a-f]{64}$ && "$native_sha" =~ ^[0-9a-f]{64}$ ]] || {
+            echo "package checksums were not available" >&2
+            exit 1
+          }
+          printf 'extension_sha=%s\nnative_sha=%s\n' "$extension_sha" "$native_sha" >> "$GITHUB_OUTPUT"
+      - name: Record fast-gate evidence
+        if: always()
+        env:
+          VERSION: ${{ steps.metadata.outputs.version }}
+          TESTED_COMMIT: ${{ steps.metadata.outputs.commit }}
+          PROFILE_CHANNEL: ${{ steps.metadata.outputs.channel }}
+          PROFILE_VERSION: ${{ steps.metadata.outputs.profile_version }}
+          EXTENSION_TOTAL: ${{ steps.extension_tests.outputs.total }}
+          EXTENSION_PASSED: ${{ steps.extension_tests.outputs.passed }}
+          EXTENSION_FAILED: ${{ steps.extension_tests.outputs.failed }}
+          NATIVE_TOTAL: ${{ steps.native_tests.outputs.total }}
+          EXTENSION_SHA: ${{ steps.package.outputs.extension_sha }}
+          NATIVE_SHA: ${{ steps.package.outputs.native_sha }}
+        run: |
+          value_or_unavailable() { if [[ -n "$1" ]]; then printf '%s' "$1"; else printf 'unavailable'; fi; }
+          {
+            echo "### Fast verification evidence"
+            echo
+            echo "| Field | Verified value |"
+            echo "| --- | --- |"
+            printf '| Version | `%s` |\n' "$(value_or_unavailable "$VERSION")"
+            printf '| Tested commit | `%s` |\n' "$(value_or_unavailable "$TESTED_COMMIT")"
+            printf '| Capability profile | `%s / v%s` |\n' \
+              "$(value_or_unavailable "$PROFILE_CHANNEL")" "$(value_or_unavailable "$PROFILE_VERSION")"
+            printf '| Extension tests | `%s/%s passed; %s failed` |\n' \
+              "$(value_or_unavailable "$EXTENSION_PASSED")" "$(value_or_unavailable "$EXTENSION_TOTAL")" \
+              "$(value_or_unavailable "$EXTENSION_FAILED")"
+            printf '| Native tests | `%s passed` |\n' "$(value_or_unavailable "$NATIVE_TOTAL")"
+            printf '| Extension package SHA-256 | `%s` |\n' "$(value_or_unavailable "$EXTENSION_SHA")"
+            printf '| Native package SHA-256 | `%s` |\n' "$(value_or_unavailable "$NATIVE_SHA")"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  browser:
+    name: Chrome for Testing E2E
+    runs-on: macos-14
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - name: Read bounded build metadata
+        id: metadata
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from "node:fs";
+          import { BUILD_IDENTITY, BUILD_PROFILE } from "./extension/lib/build-profile.js";
+
+          const version = BUILD_IDENTITY.extensionVersion;
+          const channel = BUILD_PROFILE.channel;
+          const profileVersion = String(BUILD_PROFILE.profileVersion);
+          const commit = process.env.GITHUB_SHA.slice(0, 12);
+          if (!/^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/.test(version)) throw new Error("invalid build version");
+          if (!/^[a-z][a-z0-9-]{0,31}$/.test(channel)) throw new Error("invalid build channel");
+          if (!/^\d{1,4}$/.test(profileVersion)) throw new Error("invalid capability profile version");
+          if (!/^[0-9a-f]{12}$/.test(commit)) throw new Error("invalid tested commit");
+          fs.appendFileSync(process.env.GITHUB_OUTPUT,
+            `version=${version}\nchannel=${channel}\nprofile_version=${profileVersion}\ncommit=${commit}\n`);
+          NODE
+      - name: Install pinned Chrome for Testing
+        id: chrome
+        uses: browser-actions/setup-chrome@48ad923757ca74d66703209fe939badbdf80f2f4 # v2.2.0
+        with:
+          chrome-version: 143.0.7499.4
+      - name: Run browser E2E
+        id: e2e
+        env:
+          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
+        run: |
+          npm run test:e2e
+          node <<'NODE'
+          const fs = require("node:fs");
+          const report = JSON.parse(fs.readFileSync("e2e/artifacts/latest.json", "utf8"));
+          const counts = {
+            detection: Array.isArray(report.cases) ? report.cases.length : -1,
+            ui: Array.isArray(report.ui) ? report.ui.length : -1,
+            flows: Array.isArray(report.flows) ? report.flows.length : -1
+          };
+          if (report.status !== "passed" || Object.values(counts).some((value) => !Number.isSafeInteger(value) || value < 0)) {
+            throw new Error("E2E evidence is incomplete");
+          }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT,
+            `detection=${counts.detection}\nui=${counts.ui}\nflows=${counts.flows}\n`);
+          NODE
+      - name: Upload redacted E2E evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fluxcatch-e2e-${{ github.run_id }}
+          path: |
+            e2e/artifacts/latest.json
+            e2e/artifacts/screenshots/
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Record browser-gate evidence
+        if: always()
+        env:
+          VERSION: ${{ steps.metadata.outputs.version }}
+          TESTED_COMMIT: ${{ steps.metadata.outputs.commit }}
+          PROFILE_CHANNEL: ${{ steps.metadata.outputs.channel }}
+          PROFILE_VERSION: ${{ steps.metadata.outputs.profile_version }}
+          DETECTION_COUNT: ${{ steps.e2e.outputs.detection }}
+          UI_COUNT: ${{ steps.e2e.outputs.ui }}
+          FLOW_COUNT: ${{ steps.e2e.outputs.flows }}
+        run: |
+          value_or_unavailable() { if [[ -n "$1" ]]; then printf '%s' "$1"; else printf 'unavailable'; fi; }
+          {
+            echo "### Browser verification evidence"
+            echo
+            echo "| Field | Verified value |"
+            echo "| --- | --- |"
+            printf '| Version | `%s` |\n' "$(value_or_unavailable "$VERSION")"
+            printf '| Tested commit | `%s` |\n' "$(value_or_unavailable "$TESTED_COMMIT")"
+            printf '| Capability profile | `%s / v%s` |\n' \
+              "$(value_or_unavailable "$PROFILE_CHANNEL")" "$(value_or_unavailable "$PROFILE_VERSION")"
+            printf '| Detection cases | `%s passed` |\n' "$(value_or_unavailable "$DETECTION_COUNT")"
+            printf '| UI pages | `%s passed` |\n' "$(value_or_unavailable "$UI_COUNT")"
+            printf '| Interaction flows | `%s passed` |\n' "$(value_or_unavailable "$FLOW_COUNT")"
+          } >> "$GITHUB_STEP_SUMMARY"

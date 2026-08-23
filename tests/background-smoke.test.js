@@ -21,6 +21,7 @@ test("MV3 worker registers network and message listeners during module load", as
   const nativeOnMessage = event();
   const nativeOnDisconnect = event();
   const extensionId = "gpnojfocoanelgibidlhholjobljefab";
+  const opaqueIdPattern = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
   let nativePermission = false;
   const nativeOutgoing = [];
   let nativeConnectCalls = 0;
@@ -32,6 +33,7 @@ test("MV3 worker registers network and message listeners during module load", as
   let releaseBrowserSearch = null;
   let browserSearchState = "complete";
   let browserDownloadId = 42;
+  const browserDownloadRequests = [];
   let blockSettingsRead = false;
   let settingsReadEntered = null;
   let releaseSettingsRead = null;
@@ -63,6 +65,7 @@ test("MV3 worker registers network and message listeners during module load", as
   });
   const biliPageUrl = "https://www.bilibili.com/video/BV14N8G6pEAf/";
   const biliAvPageUrl = "https://www.bilibili.com/video/av99999/";
+  const biliOptInPageUrl = "https://www.bilibili.com/video/av424242/";
   const biliAvVideo = "https://upos-sz-mirror08c.bilivideo.cn/upgcxcode/77/88/88001-1-30080.m4s?deadline=1999999999&upsig=AV_1080_SECRET";
   const biliAvAudio = "https://upos-sz-mirror08c.bilivideo.cn/upgcxcode/77/88/88001-1-30280.m4s?deadline=1999999999&upsig=AV_AUDIO_SECRET";
   const youtubeWatchUrl = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
@@ -80,6 +83,25 @@ test("MV3 worker registers network and message listeners during module load", as
     text: JSON.stringify({ code: 0, data: [{ cid: 88001, page: 1, part: "Auto Badge Fixture" }] })
   });
   manifestFixtures.set("https://api.bilibili.com/x/player/playurl?avid=99999&cid=88001&qn=127&fnval=16&fourk=1", {
+    text: JSON.stringify({
+      code: 0,
+      data: {
+        dash: {
+          duration: 92,
+          video: [
+            { id: 80, baseUrl: biliAvVideo, width: 1920, height: 1080, bandwidth: 2_600_000, codecs: "avc1.640828", mimeType: "video/mp4" }
+          ],
+          audio: [
+            { id: 30280, baseUrl: biliAvAudio, bandwidth: 128_000, codecs: "mp4a.40.2", mimeType: "audio/mp4" }
+          ]
+        }
+      }
+    })
+  });
+  manifestFixtures.set("https://api.bilibili.com/x/player/pagelist?avid=424242", {
+    text: JSON.stringify({ code: 0, data: [{ cid: 88001, page: 1, part: "Opt-in Fixture" }] })
+  });
+  manifestFixtures.set("https://api.bilibili.com/x/player/playurl?avid=424242&cid=88001&qn=127&fnval=16&fourk=1", {
     text: JSON.stringify({
       code: 0,
       data: {
@@ -126,7 +148,10 @@ test("MV3 worker registers network and message listeners during module load", as
     [28, { id: 28, title: "YouTube Fixture - FluxCatch", url: `${youtubeWatchUrl}&t=42s` }],
     [29, { id: 29, title: "Auto Badge Fixture - 哔哩哔哩", url: biliAvPageUrl }],
     [30, { id: 30, title: "Instagram Fixture", url: "https://www.instagram.com/reel/Cxyz1234567/" }],
-    [31, { id: 31, title: "X Fixture", url: "https://x.com/fluxcatch/status/1899999999999999999" }]
+    [31, { id: 31, title: "X Fixture", url: "https://x.com/fluxcatch/status/1899999999999999999" }],
+    [32, { id: 32, title: "Opt-in Bilibili Fixture", url: biliOptInPageUrl }],
+    [33, { id: 33, title: "Generic page title", url: "https://page.example.test/direct" }],
+    [34, { id: 34, title: "Unobserved redirect hint", url: "https://page.example.test/hint" }]
   ]);
   const restoredJobs = Array.from({ length: 205 }, (_, index) => ({
     jobId: `old-${index}`,
@@ -168,6 +193,9 @@ test("MV3 worker registers network and message listeners during module load", as
         ext: "mp4",
         contentLength: 2_000_000,
         title: "Fixture video",
+        source: "webRequest",
+        sources: ["webRequest"],
+        provenance: "observed_response",
         firstSeen: Date.now() - 1_000,
         lastSeen: Date.now()
       }],
@@ -179,6 +207,9 @@ test("MV3 worker registers network and message listeners during module load", as
           mime: "application/vnd.apple.mpegurl",
           ext: "m3u8",
           contentLength: 2100,
+          source: "webRequest",
+          sources: ["webRequest"],
+          provenance: "observed_response",
           pageTitle: "Legacy Workshop",
           firstSeen: Date.now() - 3_000,
           lastSeen: Date.now() - 1_000
@@ -190,6 +221,9 @@ test("MV3 worker registers network and message listeners during module load", as
           mime: "application/vnd.apple.mpegurl",
           ext: "m3u8",
           contentLength: 1700,
+          source: "webRequest",
+          sources: ["webRequest"],
+          provenance: "observed_response",
           pageTitle: "Legacy Workshop",
           firstSeen: Date.now() - 2_900,
           lastSeen: Date.now() - 900
@@ -201,6 +235,9 @@ test("MV3 worker registers network and message listeners during module load", as
           mime: "application/vnd.apple.mpegurl",
           ext: "m3u8",
           contentLength: 1500,
+          source: "webRequest",
+          sources: ["webRequest"],
+          provenance: "observed_response",
           pageTitle: "Legacy Workshop",
           firstSeen: Date.now() - 2_800,
           lastSeen: Date.now() - 800
@@ -226,6 +263,7 @@ test("MV3 worker registers network and message listeners during module load", as
     runtime: {
       id: extensionId,
       getURL: (path = "") => `chrome-extension://${extensionId}/${path}`,
+      getManifest: () => ({ name: "FluxCatch", version: "0.2.4" }),
       onConnect,
       onMessage,
       lastError: null,
@@ -239,9 +277,27 @@ test("MV3 worker registers network and message listeners during module load", as
           if (message.type === "ping") queueMicrotask(() => nativeOnMessage.listeners[0]?.fn({
             type: "pong",
             requestId: message.requestId,
-            version: "0.2.0",
+            version: "0.2.4",
+            protocolVersion: 1,
+            capabilityProfileVersion: 1,
             ffmpeg: true,
-            capabilities: { dashPlanner: true }
+            path: "/Users/private/HOST_TOP_PATH",
+            capabilities: {
+              ffmpeg: {
+                available: true,
+                path: "/Users/private/FFMPEG_PATH",
+                version: "8.1",
+                demuxers: { hls: true, dash: false },
+                encoders: { libmp3lame: true },
+                probeError: "FFMPEG_PROBE_SECRET",
+                future: "FFMPEG_FUTURE_SECRET"
+              },
+              ytdlp: { available: true, networkDisabled: false, path: "/Users/private/YTDLP_PATH", version: "2026.08", probeError: "YTDLP_PROBE_SECRET" },
+              dashPlanner: "static-v1",
+              dashPair: "direct-v1",
+              future: "HOST_CAPABILITY_FUTURE"
+            },
+            future: "HOST_PONG_FUTURE"
           }));
         }
       });
@@ -255,7 +311,10 @@ test("MV3 worker registers network and message listeners during module load", as
     },
     downloads: {
       onChanged: onDownloadChanged,
-      download: async () => browserDownloadId,
+      download: async (options) => {
+        browserDownloadRequests.push(structuredClone(options));
+        return browserDownloadId;
+      },
       cancel: async (id) => {
         cancelledDownloads.push(id);
         if (cancelRejects) throw new Error("fixture cancellation rejected");
@@ -353,6 +412,40 @@ test("MV3 worker registers network and message listeners during module load", as
   assert.equal(response.ok, true);
   assert.equal(response.settings.concurrentFragments, 8);
   assert.equal(response.settings.minimumBytes, 500 * 1024);
+  assert.equal(response.settings.autoEnrichSiteQuality, false);
+  assert.equal(response.settings.allowPrivateNetworkMedia, false);
+  const unknownHostYoutube = await sendRuntimeMessage({ type: "SAVE_SETTINGS", settings: { youtubeEnabled: true } });
+  assert.equal(unknownHostYoutube.settings.youtubeEnabled, false,
+    "an unknown or unpermitted native capability cannot persist the YouTube switch");
+  assert.equal(settingsState.settings.youtubeEnabled, false);
+
+  onHeadersReceived.listeners[0].fn({
+    requestId: "content-disposition-name",
+    tabId: 33,
+    url: "https://media.example.test/direct.mp4?token=PRIVATE_TOKEN",
+    type: "media",
+    responseHeaders: [
+      { name: "content-type", value: "video/mp4" },
+      { name: "content-length", value: String(900 * 1024) },
+      { name: "content-disposition", value: "attachment; filename=server_course_title.mp4" }
+    ]
+  });
+  let namedDirect = null;
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    namedDirect = (await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 33 })).items[0] || null;
+    if (namedDirect) break;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  assert.equal(namedDirect?.suggestedFilename, "server_course_title.mp4",
+    "a readable Content-Disposition filename takes precedence over a generic page title without rewriting its safe stem");
+  assert.match(namedDirect?.id || "", opaqueIdPattern, "new candidates use collision-resistant random opaque IDs");
+  assert.equal(namedDirect?.displayUrl, "https://media.example.test/direct.mp4",
+    "the public candidate keeps the opaque id while hiding the signed query");
+  assert.equal(namedDirect?.urlIsRedacted, true);
+  assert.equal(namedDirect?.copyable, false);
+  assert.equal(namedDirect?.requiresRefresh, true);
+  assert.equal(Object.hasOwn(namedDirect || {}, "url"), false, "PublicCandidate never publishes an executable URL field");
+  assert.doesNotMatch(JSON.stringify({ namedDirect, sessionState }), /PRIVATE_TOKEN/);
 
   let biliApiMedia = null;
   for (let attempt = 0; attempt < 20; attempt += 1) {
@@ -363,8 +456,11 @@ test("MV3 worker registers network and message listeners during module load", as
   assert.equal(biliApiMedia.ok, true);
   assert.equal(biliApiMedia.items.length, 1, "one Bilibili playback becomes one paired DASH candidate");
   const biliApiCandidate = biliApiMedia.items[0];
+  assert.match(biliApiCandidate.id, opaqueIdPattern, "Bilibili candidates do not expose deterministic FNV identifiers");
   assert.equal(biliApiCandidate.kind, "dash_pair");
-  assert.equal(biliApiCandidate.url, biliPageUrl, "public candidate key is a stable queryless page URL");
+  assert.equal(biliApiCandidate.displayUrl, biliPageUrl, "public candidate key is a stable queryless page URL");
+  assert.equal(biliApiCandidate.copyable, false);
+  assert.equal(biliApiCandidate.requiresRefresh, true);
   assert.equal(biliApiCandidate.height, 480);
   assert.equal(biliApiCandidate.duration, 185);
   assert.equal(biliApiCandidate.videoTrackCount, 3);
@@ -455,7 +551,7 @@ test("MV3 worker registers network and message listeners during module load", as
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
   assert.equal(observedBiliMedia.items.length, 1, "audio-first webRequest observations pair by document and asset family");
-  assert.equal(observedBiliMedia.items[0].url, "https://www.bilibili.com/video/av12345/");
+  assert.equal(observedBiliMedia.items[0].displayUrl, "https://www.bilibili.com/video/av12345/");
   observeBiliTrack("bili-video-range-repeat", 22, observedVideoB, "document-A");
   for (let attempt = 0; attempt < 20; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 0));
   observedBiliMedia = await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 22 });
@@ -552,8 +648,8 @@ test("MV3 worker registers network and message listeners during module load", as
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
   assert.equal(legacyRestored.items.length, 1, "legacy session candidates are re-inspected and regrouped after worker upgrade");
-  assert.equal(legacyRestored.items[0].url, legacyRootUrl);
-  assert.deepEqual(new Set(legacyRestored.items[0].aliases.map((item) => item.url)), new Set([legacyHighUrl, legacyLowUrl]));
+  assert.equal(legacyRestored.items[0].displayUrl, legacyRootUrl);
+  assert.deepEqual(new Set(legacyRestored.items[0].aliases.map((item) => item.displayUrl)), new Set([legacyHighUrl, legacyLowUrl]));
   assert.equal(legacyRestored.items[0].contentLength, 0);
   assert.equal(legacyRestored.items[0].manifestSize, 2100);
 
@@ -583,7 +679,7 @@ test("MV3 worker registers network and message listeners during module load", as
     type: "PAGE_PREVIEW",
     tabId: 123,
     data: {
-      thumbnailUrl: "https://preview-user:preview-pass@images.example.test/cover.jpg#private-fragment",
+      thumbnailUrl: "https://page.example.test/cover.jpg?token=THUMBNAIL_TOKEN#private-fragment",
       source: "og:image",
       tabId: 123,
       cookie: "PAGE_PREVIEW_COOKIE"
@@ -592,24 +688,35 @@ test("MV3 worker registers network and message listeners during module load", as
   assert.equal(pagePreview.ok, true);
   assert.equal(pagePreview.accepted, true);
   let mediaWithPreview = await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 9 });
-  assert.equal(mediaWithPreview.items[0].thumbnailUrl, "https://images.example.test/cover.jpg");
+  assert.equal(mediaWithPreview.items[0].thumbnailUrl, "https://page.example.test/cover.jpg");
   assert.equal(mediaWithPreview.items[0].thumbnailSource, "og:image");
   assert.equal(mediaWithPreview.items[0].thumbnailFrameId, 0);
-  assert.equal(sessionState.tabPreviews[9].thumbnailUrl, "https://images.example.test/cover.jpg", "preview URL survives MV3 worker suspension");
+  assert.equal(sessionState.tabPreviews[9], undefined, "a query-bearing preview remains memory-only across MV3 suspension");
   assert.deepEqual((await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 123 })).items, [], "payload tabId cannot escape sender.tab");
-  assert.doesNotMatch(JSON.stringify(sessionState.tabMedia), /preview-user|preview-pass|private-fragment|PAGE_PREVIEW_COOKIE/);
+  assert.doesNotMatch(JSON.stringify({ mediaWithPreview, uiMessages, sessionState }), /THUMBNAIL_TOKEN|preview-user|preview-pass|private-fragment|PAGE_PREVIEW_COOKIE/);
+
+  const credentialPreview = await sendRuntimeMessage({
+    type: "PAGE_PREVIEW",
+    data: { thumbnailUrl: "https://preview-user:preview-pass@page.example.test/credential.jpg", source: "og:image" }
+  }, contentSender);
+  assert.equal(credentialPreview.ignored, true, "embedded thumbnail credentials fail closed instead of being rewritten");
+  const crossOriginPreview = await sendRuntimeMessage({
+    type: "PAGE_PREVIEW",
+    data: { thumbnailUrl: "https://attacker.example/poster.jpg", source: "og:image" }
+  }, contentSender);
+  assert.equal(crossOriginPreview.ignored, true, "page metadata cannot make the extension fetch an arbitrary thumbnail origin");
 
   const posterPreview = await sendRuntimeMessage({
     type: "PAGE_PREVIEW",
     data: {
-      thumbnailUrl: "https://poster-user:poster-pass@images.example.test/poster.jpg#secret",
+      thumbnailUrl: "https://page.example.test/poster.jpg#secret",
       source: "poster",
       thumbnailFrameId: 0
     }
   }, { ...contentSender, frameId: 7 });
   assert.equal(posterPreview.ok, true);
   mediaWithPreview = await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 9 });
-  assert.equal(mediaWithPreview.items[0].thumbnailUrl, "https://images.example.test/poster.jpg");
+  assert.equal(mediaWithPreview.items[0].thumbnailUrl, "https://page.example.test/poster.jpg");
   assert.equal(mediaWithPreview.items[0].thumbnailSource, "poster", "video poster outranks page metadata");
   assert.equal(mediaWithPreview.items[0].thumbnailFrameId, 7, "frame identity comes from sender, not message data");
 
@@ -625,17 +732,17 @@ test("MV3 worker registers network and message listeners during module load", as
   }, dashSender);
   await sendRuntimeMessage({
     type: "PAGE_PREVIEW",
-    data: { thumbnailUrl: "https://images.example.test/existing-dash.jpg", source: "og:image" }
+    data: { thumbnailUrl: "https://page.example.test/existing-dash.jpg", source: "og:image" }
   }, dashSender);
   const existingDash = (await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 11 })).items.find((item) => item.kind === "dash");
-  assert.equal(existingDash?.thumbnailUrl, "https://images.example.test/existing-dash.jpg", "existing DASH candidates receive later page previews");
+  assert.equal(existingDash?.thumbnailUrl, "https://page.example.test/existing-dash.jpg", "existing DASH candidates receive later page previews");
 
   await sendRuntimeMessage({
     type: "PAGE_PREVIEW",
-    data: { thumbnailUrl: "https://images.example.test/twitter.jpg", source: "twitter:image" }
+    data: { thumbnailUrl: "https://page.example.test/twitter.jpg", source: "twitter:image" }
   }, contentSender);
   mediaWithPreview = await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 9 });
-  assert.equal(mediaWithPreview.items[0].thumbnailUrl, "https://images.example.test/poster.jpg", "lower-priority metadata cannot replace poster");
+  assert.equal(mediaWithPreview.items[0].thumbnailUrl, "https://page.example.test/poster.jpg", "lower-priority metadata cannot replace poster");
 
   for (const thumbnailUrl of [
     "data:image/png;base64,AAAA",
@@ -666,7 +773,7 @@ test("MV3 worker registers network and message listeners during module load", as
   await new Promise((resolve) => setTimeout(resolve, 0));
   mediaWithPreview = await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 9 });
   const futureHls = mediaWithPreview.items.find((item) => item.kind === "hls");
-  assert.equal(futureHls?.thumbnailUrl, "https://images.example.test/poster.jpg", "future HLS candidates inherit the tab poster");
+  assert.equal(futureHls?.thumbnailUrl, "https://page.example.test/poster.jpg", "future HLS candidates inherit the tab poster");
 
   const groupedRootUrl = "https://manifest.example.test/embed/media/77994wpv0p.m3u8";
   const groupedHighUrl = "https://cdn-a.example.test/deliveries/d03df398cd8e29f29e3cc137a2385f72.m3u8";
@@ -729,18 +836,18 @@ test("MV3 worker registers network and message listeners during module load", as
   let groupedResponse = null;
   for (let attempt = 0; attempt < 100; attempt += 1) {
     groupedResponse = await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 12 });
-    const root = groupedResponse.items.find((item) => item.url === groupedRootUrl);
+    const root = groupedResponse.items.find((item) => item.displayUrl === groupedRootUrl);
     if (groupedResponse.items.length === 2 && root?.aliases?.length === 2) break;
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
   assert.equal(groupedResponse.ok, true);
   assert.equal(groupedResponse.items.length, 2, "only graph-linked manifests merge; another video on the same page remains visible");
-  const groupedRoot = groupedResponse.items.find((item) => item.url === groupedRootUrl);
+  const groupedRoot = groupedResponse.items.find((item) => item.displayUrl === groupedRootUrl);
   assert.ok(groupedRoot, "the parseable master is the group representative");
   assert.equal(groupedRoot.manifestType, "master");
   assert.equal(groupedRoot.manifestVariantCount, 2);
   assert.equal(groupedRoot.groupSize, 3);
-  assert.deepEqual(new Set(groupedRoot.aliases.map((item) => item.url)), new Set([groupedHighUrl, groupedLowUrl]));
+  assert.deepEqual(new Set(groupedRoot.aliases.map((item) => item.displayUrl)), new Set([groupedHighUrl, groupedLowUrl]));
   assert.equal(groupedRoot.title, "Generative Motion Workshop", "readable page title replaces delivery hashes");
   assert.equal(groupedRoot.suggestedFilename, "Generative Motion Workshop.mp4", "card title and default download stem agree");
   assert.equal(groupedRoot.contentLength, 0, "playlist response bytes are not presented as media size");
@@ -752,14 +859,26 @@ test("MV3 worker registers network and message listeners during module load", as
   const groupedProbe = await sendRuntimeMessage({
     type: "PROBE_MANIFEST",
     tabId: 12,
-    candidate: { id: groupedRoot.id, kind: "hls", url: groupedRoot.url }
+    candidate: { id: groupedRoot.id, kind: "hls", generation: groupedRoot.generation }
   });
   assert.deepEqual(groupedProbe.probe.variants.map((item) => item.height), [1080, 720], "one visible candidate retains the master quality list");
-  const hiddenHigh = groupedRoot.aliases.find((item) => item.url === groupedHighUrl);
+  assert.ok(groupedProbe.probe.variants.every((item) => /\/manifest\/[a-f0-9-]{36}\/[a-f0-9-]{36}$/.test(item.url)),
+    "manifest selectors use random opaque candidate and URL tokens");
+  const repeatedGroupedProbe = await sendRuntimeMessage({
+    type: "PROBE_MANIFEST",
+    tabId: 12,
+    candidate: { id: groupedRoot.id, kind: "hls", generation: groupedRoot.generation }
+  });
+  assert.deepEqual(
+    repeatedGroupedProbe.probe.variants.map((item) => item.url),
+    groupedProbe.probe.variants.map((item) => item.url),
+    "repeated probes reuse the selector token for the same private URL"
+  );
+  const hiddenHigh = groupedRoot.aliases.find((item) => item.displayUrl === groupedHighUrl);
   const staleAliasProbe = await sendRuntimeMessage({
     type: "PROBE_MANIFEST",
     tabId: 12,
-    candidate: { id: hiddenHigh.id, kind: "hls", url: hiddenHigh.url }
+    candidate: { id: hiddenHigh.id, kind: "hls", generation: groupedRoot.generation }
   });
   assert.deepEqual(staleAliasProbe.probe.variants.map((item) => item.height), [1080, 720], "stale alias references resolve to the representative safely");
 
@@ -846,26 +965,102 @@ test("MV3 worker registers network and message listeners during module load", as
   }, wistiaSender);
 
   const preProbeWistia = await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 14 });
-  assert.equal(preProbeWistia.items.some((item) => item.url === wistiaCaptionsUrl), false, "caption playlists never appear as video candidates");
-  const wistiaCandidate = preProbeWistia.items.find((item) => item.url === wistiaMasterUrl);
+  assert.equal(preProbeWistia.items.some((item) => item.displayUrl === wistiaCaptionsUrl), false, "caption playlists never appear as video candidates");
+  const wistiaCandidate = preProbeWistia.items.find((item) => item.displayUrl === wistiaMasterUrl);
   assert.ok(wistiaCandidate, "the master remains the user-facing candidate");
+  assert.equal(
+    manifestFetches.some((item) => item.url === wistiaMasterUrl),
+    false,
+    "a DOM hint is displayed but never fetched until the user requests a probe"
+  );
   const wistiaProbe = await sendRuntimeMessage({
     type: "PROBE_MANIFEST",
     tabId: 14,
-    candidate: { id: wistiaCandidate.id, kind: "hls", url: wistiaCandidate.url }
+    candidate: { id: wistiaCandidate.id, kind: "hls", generation: wistiaCandidate.generation }
   });
   assert.deepEqual(wistiaProbe.probe.variants.map((item) => item.height), [1080, 720]);
   const afterWistiaProbe = await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 14 });
   assert.equal(afterWistiaProbe.items.length, 2, "an explicit master probe folds token/CDN aliases immediately while preserving another video");
-  const finalWistia = afterWistiaProbe.items.find((item) => item.url === wistiaMasterUrl);
+  const finalWistia = afterWistiaProbe.items.find((item) => item.displayUrl === wistiaMasterUrl);
   assert.equal(finalWistia.manifestType, "master");
   assert.equal(finalWistia.manifestVariantCount, 2);
   assert.equal(finalWistia.manifestSubtitleTrackCount, 1);
   assert.equal(finalWistia.groupSize, 3);
-  assert.deepEqual(new Set(finalWistia.aliases.map((item) => item.url)), new Set([wistiaHighObserved, wistiaLowObserved]));
+  assert.deepEqual(
+    new Set(finalWistia.aliases.map((item) => item.displayUrl)),
+    new Set([wistiaHighObserved, wistiaLowObserved].map((value) => { const url = new URL(value); url.search = ""; return url.href; })),
+    "public alias metadata omits signed query parameters"
+  );
   assert.equal(finalWistia.title, "Volume of Distribution Interactive | Pharmacokinetics - Part 1");
   assert.equal(finalWistia.suggestedFilename, "Volume of Distribution Interactive _ Pharmacokinetics - Part 1.mp4");
-  assert.ok(afterWistiaProbe.items.some((item) => item.url === secondMasterUrl), "an unrelated video is never merged by page title");
+  assert.ok(afterWistiaProbe.items.some((item) => item.displayUrl === secondMasterUrl), "an unrelated video is never merged by page title");
+
+  // Manifest children and redirect destinations cross the same NetworkPolicy
+  // boundary as the root URL. A public manifest cannot smuggle a private
+  // alternate audio URL or redirect target into the extension/native path.
+  const privateChildManifest = "https://security.example.test/private-child.m3u8";
+  manifestFixtures.set(privateChildManifest, {
+    text: [
+      "#EXTM3U",
+      "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"audio\",NAME=\"Local\",URI=\"http://127.0.0.1/private-audio.m3u8?token=CHILD_SECRET\"",
+      "#EXT-X-STREAM-INF:BANDWIDTH=1200000,RESOLUTION=1280x720,AUDIO=\"audio\"",
+      "https://security-cdn.example.test/public-720.m3u8"
+    ].join("\n")
+  });
+  observeWistia("private-child-root", privateChildManifest);
+  let privateChildCandidate = null;
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    privateChildCandidate = (await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 14 })).items.find((item) => item.displayUrl === privateChildManifest);
+    if (privateChildCandidate) break;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  const privateChildProbe = await sendRuntimeMessage({ type: "PROBE_MANIFEST", tabId: 14, candidate: privateChildCandidate });
+  assert.equal(privateChildProbe.ok, false);
+  assert.match(privateChildProbe.error, /blocked_private/);
+  assert.doesNotMatch(privateChildProbe.error, /CHILD_SECRET|token/);
+  const privateChildDownload = await sendRuntimeMessage({ type: "DOWNLOAD", tabId: 14, candidate: privateChildCandidate, options: {} });
+  assert.equal(privateChildDownload.ok, false);
+  assert.match(privateChildDownload.error, /blocked_private/);
+
+  const aesManifest = "https://security.example.test/encrypted-vod.m3u8";
+  manifestFixtures.set(aesManifest, {
+    text: [
+      "#EXTM3U",
+      "#EXT-X-KEY:METHOD=AES-128,URI=\"https://security-cdn.example.test/key.bin\"",
+      "#EXTINF:6,",
+      "https://security-cdn.example.test/encrypted-segment.ts",
+      "#EXT-X-ENDLIST"
+    ].join("\n")
+  });
+  observeWistia("encrypted-vod-root", aesManifest);
+  let aesCandidate = null;
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    aesCandidate = (await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 14 })).items.find((item) => item.displayUrl === aesManifest);
+    if (aesCandidate) break;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  const aesProbe = await sendRuntimeMessage({ type: "PROBE_MANIFEST", tabId: 14, candidate: aesCandidate });
+  assert.equal(aesProbe.probe.protection, "aes128");
+  const aesDownload = await sendRuntimeMessage({ type: "DOWNLOAD", tabId: 14, candidate: aesCandidate, options: {} });
+  assert.equal(aesDownload.ok, false, "AES-128 HLS is metadata-only in 0.2.4");
+  assert.match(aesDownload.error, /0\.2\.4.*AES-128/);
+
+  const redirectManifest = "https://security.example.test/private-redirect.m3u8";
+  manifestFixtures.set(redirectManifest, {
+    finalUrl: "http://127.0.0.1/final.m3u8?token=REDIRECT_SECRET",
+    text: ["#EXTM3U", "#EXTINF:6,", "https://security-cdn.example.test/segment.ts", "#EXT-X-ENDLIST"].join("\n")
+  });
+  observeWistia("private-redirect-root", redirectManifest);
+  let redirectCandidate = null;
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    redirectCandidate = (await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 14 })).items.find((item) => item.displayUrl === redirectManifest);
+    if (redirectCandidate) break;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  const redirectProbe = await sendRuntimeMessage({ type: "PROBE_MANIFEST", tabId: 14, candidate: redirectCandidate });
+  assert.equal(redirectProbe.ok, false);
+  assert.match(redirectProbe.error, /blocked_private/);
+  assert.doesNotMatch(redirectProbe.error, /REDIRECT_SECRET|token/);
 
   const permissionGate = await new Promise((resolve) => {
     onMessage.listeners[0].fn(
@@ -898,14 +1093,58 @@ test("MV3 worker registers network and message listeners during module load", as
   assert.equal(blocked.ok, true);
   assert.deepEqual(blocked.items, []);
 
-  const candidate = { id: "fixture-video", kind: "video", url: "https://media.example.test/movie.mp4" };
+  const unobservedAccepted = await sendRuntimeMessage({
+    type: "CONTENT_MEDIA",
+    data: {
+      url: "https://redirect.example.test/public-video.mp4",
+      mime: "video/mp4",
+      contentLength: 2_000_000,
+      source: "dom"
+    }
+  }, {
+    id: extensionId,
+    url: "https://page.example.test/hint",
+    frameId: 0,
+    tab: tabFixtures.get(34)
+  });
+  assert.equal(unobservedAccepted.accepted, true);
+  const [unobservedCandidate] = (await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 34 })).items;
+  assert.equal(unobservedCandidate.provenance, "dom_media_element");
+  const browserRequestsBeforeHint = browserDownloadRequests.length;
+  const unobservedStart = await sendRuntimeMessage({
+    type: "DOWNLOAD",
+    tabId: 34,
+    candidate: unobservedCandidate,
+    options: { filename: "unobserved.mp4" }
+  });
+  assert.equal(unobservedStart.ok, false, "an unobserved public URL is routed to the controlled native path");
+  assert.match(unobservedStart.error, /授权连接本地引擎/);
+  assert.equal(browserDownloadRequests.length, browserRequestsBeforeHint,
+    "an unobserved public URL that may redirect never enters chrome.downloads");
+
+  const restoredDirect = (await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 9 })).items
+    .find((item) => item.displayUrl === "https://media.example.test/movie.mp4");
+  assert.match(restoredDirect?.id || "", opaqueIdPattern, "legacy persisted candidate IDs rotate at the trust-boundary upgrade");
+  assert.equal(restoredDirect.copyable, true, "an exact queryless direct URL may be copied");
+  assert.equal(restoredDirect.urlIsRedacted, false);
+  const candidate = { id: restoredDirect.id, kind: restoredDirect.kind, generation: restoredDirect.generation };
   const browserPersistReached = new Promise((resolve) => { browserPersistEntered = resolve; });
   const browserSearchReached = new Promise((resolve) => { browserSearchEntered = resolve; });
   blockBrowserPersist = true;
   blockBrowserSearch = true;
   const browserStartPromise = new Promise((resolve) => {
     onMessage.listeners[0].fn(
-      { type: "DOWNLOAD", tabId: 9, candidate, options: { filename: "browser.mp4" } },
+      {
+        type: "DOWNLOAD",
+        tabId: 9,
+        candidate: {
+          ...candidate,
+          displayUrl: "https://attacker.example/forged.mp4",
+          url: "https://attacker.example/forged.mp4?token=FORGED_TARGET_SECRET",
+          headers: { authorization: "Bearer FORGED_HEADER_SECRET" }
+        },
+        options: { filename: "browser.mp4" }
+      },
       { id: extensionId, url: `chrome-extension://${extensionId}/sidepanel/sidepanel.html` },
       resolve
     );
@@ -944,6 +1183,9 @@ test("MV3 worker registers network and message listeners during module load", as
   assert.deepEqual({ method: browserStart.method, downloadId: browserStart.downloadId, jobId: browserStart.jobId }, {
     method: "browser", downloadId: 42, jobId: "browser:42"
   });
+  assert.equal(browserDownloadRequests.at(-1)?.url, "https://media.example.test/movie.mp4",
+    "UI candidate tampering cannot replace the worker-private download target");
+  assert.doesNotMatch(JSON.stringify(browserDownloadRequests), /FORGED_TARGET_SECRET|FORGED_HEADER_SECRET/);
   assert.equal(
     (await getJobs()).jobs.find((job) => job.jobId === "browser:42")?.status,
     "completed",
@@ -1007,6 +1249,58 @@ test("MV3 worker registers network and message listeners during module load", as
   })));
   assert.equal(nativeConnectCalls, 1, "concurrent PING_HOST requests share one native connection");
   assert.ok(pingResponses.every((response) => response.ok && response.hostStatus.connected), "PING_HOST waits for pong before reporting status");
+  assert.ok(pingResponses.every((response) => response.hostStatus.capabilities?.ffmpeg?.available));
+  assert.ok(pingResponses.every((response) => response.hostStatus.capabilities?.ytdlp?.networkDisabled === false),
+    "only an explicit networkDisabled=false capability opens the future adapter gate");
+  assert.ok(pingResponses.every((response) => response.hostStatus.compatible === true));
+  const diagnosticsResponse = await sendRuntimeMessage({ type: "GET_DIAGNOSTICS" });
+  assert.equal(diagnosticsResponse.diagnostics.extension.version, "0.2.4");
+  assert.equal(diagnosticsResponse.diagnostics.extension.id, extensionId);
+  assert.equal(diagnosticsResponse.diagnostics.native.compatible, true);
+  assert.doesNotMatch(JSON.stringify(diagnosticsResponse),
+    /HOST_TOP_PATH|FFMPEG_PATH|FFMPEG_PROBE_SECRET|YTDLP_PATH|YTDLP_PROBE_SECRET|https?:\/\//,
+    "copied diagnostics expose no paths, probe details or URLs");
+  assert.doesNotMatch(JSON.stringify({ pingResponses, uiMessages }),
+    /HOST_TOP_PATH|FFMPEG_PATH|FFMPEG_PROBE_SECRET|FFMPEG_FUTURE_SECRET|YTDLP_PATH|YTDLP_PROBE_SECRET|HOST_CAPABILITY_FUTURE|HOST_PONG_FUTURE/,
+    "native status and pong broadcasts pass through an explicit public allowlist");
+  assert.ok(uiMessages.filter((message) => message.type === "HOST_EVENT")
+    .every((message) => JSON.stringify(Object.keys(message.event || {}).sort()) === JSON.stringify(["type"])),
+  "native task payloads never ride the HOST_EVENT compatibility channel");
+
+  nativeOnMessage.listeners[0].fn({
+    type: "pong",
+    requestId: "mismatch-audit",
+    version: "0.2.3",
+    protocolVersion: 1,
+    capabilityProfileVersion: 1,
+    ffmpeg: true,
+    capabilities: { ffmpeg: { available: true } }
+  });
+  const mismatchStatus = await sendRuntimeMessage({ type: "GET_JOBS" });
+  assert.equal(mismatchStatus.hostStatus.connected, true);
+  assert.equal(mismatchStatus.hostStatus.compatible, false);
+  const mismatchDownload = await sendRuntimeMessage({
+    type: "DOWNLOAD",
+    tabId: 9,
+    candidate,
+    options: { filename: "mismatch.mp4", useNativeForDirect: true }
+  });
+  assert.equal(mismatchDownload.ok, false);
+  assert.match(mismatchDownload.error, /版本不匹配/);
+  nativeOnMessage.listeners[0].fn({
+    type: "pong",
+    requestId: "compatible-reset",
+    version: "0.2.4",
+    protocolVersion: 1,
+    capabilityProfileVersion: 1,
+    ffmpeg: true,
+    capabilities: {
+      ffmpeg: { available: true, version: "8.1", demuxers: { hls: true, dash: false }, encoders: { libmp3lame: true } },
+      ytdlp: { available: true, networkDisabled: false },
+      dashPlanner: "static-v1",
+      dashPair: "direct-v1"
+    }
+  });
 
   const biliStart = await sendRuntimeMessage({
     type: "DOWNLOAD",
@@ -1033,82 +1327,101 @@ test("MV3 worker registers network and message listeners during module load", as
   nativeOnMessage.listeners[0].fn({
     type: "complete",
     jobId: biliStart.jobId,
-    filename: "Bilibili Fixture.mp4",
+    filename: "/Users/private/Bilibili Fixture.mp4",
+    path: "/Users/private/COMPLETE_PATH_SECRET",
     status: "completed",
     progress: 1,
-    size: 5_800_000
+    size: 5_800_000,
+    future: "COMPLETE_FUTURE_SECRET"
   });
   await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.doesNotMatch(JSON.stringify(uiMessages), /COMPLETE_PATH_SECRET|COMPLETE_FUTURE_SECRET|\/Users\/private/,
+    "native completion paths and future fields never reach popup or side panel ports");
 
-  // ===== Badge realtime: Bilibili discovery fires on page completion, before
-  // any popup ever opens, and tab activation re-applies restored badges. =====
+  // ===== Passive default: page completion does not call the credentialed
+  // Bilibili metadata API. Opening a UI (GET_TAB_MEDIA) enriches on demand. =====
   const badgeCountFor = (tabId) => badgeUpdates.filter((item) => item.tabId === 29).length;
   const badgeBefore = badgeCountFor(29);
+  const metadataFetchesBefore = manifestFetches.filter((item) => item.url.startsWith("https://api.bilibili.com/")).length;
   onTabUpdated.listeners[0].fn(29, { status: "complete" });
-  let autoBadge = null;
-  for (let attempt = 0; attempt < 50; attempt += 1) {
-    autoBadge = badgeUpdates.filter((item) => item.tabId === 29).at(-1);
-    if (autoBadge?.text === "1") break;
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
-  assert.equal(autoBadge?.text, "1", "page completion alone sets the toolbar badge without opening the popup");
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(badgeCountFor(29), badgeBefore, "page completion does not synthesize an enriched candidate by default");
+  assert.equal(
+    manifestFetches.filter((item) => item.url.startsWith("https://api.bilibili.com/")).length,
+    metadataFetchesBefore,
+    "passive default makes no site metadata request"
+  );
   const autoBadgeMedia = await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 29 });
   assert.equal(autoBadgeMedia.items.length, 1);
   assert.equal(autoBadgeMedia.items[0].kind, "dash_pair");
   assert.equal(autoBadgeMedia.items[0].height, 1080, "logged-in av discovery carries the full quality ladder fixture");
+  assert.equal((await sendRuntimeMessage({ type: "GET_SETTINGS" })).settings.autoEnrichSiteQuality, false);
+  const enrichSave = await sendRuntimeMessage({ type: "SAVE_SETTINGS", settings: { autoEnrichSiteQuality: true } });
+  assert.equal(enrichSave.settings.autoEnrichSiteQuality, true);
+  onTabUpdated.listeners[0].fn(32, { status: "complete" });
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    if (manifestFetches.some((item) => item.url.includes("pagelist?avid=424242"))) break;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.ok(
+    manifestFetches.some((item) => item.url.includes("pagelist?avid=424242")),
+    "automatic site metadata enrichment runs only after the explicit opt-in"
+  );
+  const optedInMedia = await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 32 });
+  assert.equal(optedInMedia.items[0]?.kind, "dash_pair");
+  await sendRuntimeMessage({ type: "SAVE_SETTINGS", settings: {} });
   const activatedBefore = badgeCountFor(29);
   onTabActivated.listeners[0].fn({ tabId: 29 });
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.ok(badgeCountFor(29) > activatedBefore, "tab activation re-applies the badge from restored state");
 
-  // ===== YouTube experimental adapter: default off means zero trace; the
-  // toggle publishes one page candidate and delegates to the local engine. =====
+  // ===== YouTube experimental adapter source remains present, but every
+  // setting/candidate/download gate is hard-closed in the 0.2.4 build. =====
   const youtubeDefaultOff = await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 28 });
   assert.deepEqual(youtubeDefaultOff.items, [], "YouTube stays invisible while the experimental toggle is off");
   assert.equal((await sendRuntimeMessage({ type: "GET_SETTINGS" })).settings.youtubeEnabled, false);
   const youtubeSave = await sendRuntimeMessage({ type: "SAVE_SETTINGS", settings: { youtubeEnabled: true } });
-  assert.equal(youtubeSave.settings.youtubeEnabled, true, "the toggle persists through storage.local");
+  assert.equal(youtubeSave.settings.youtubeEnabled, false,
+    "even an explicitly network-enabled host cannot open the 0.2.4 build gate");
   onTabUpdated.listeners[0].fn(28, { status: "complete" });
-  let youtubeMedia = null;
-  for (let attempt = 0; attempt < 30; attempt += 1) {
-    youtubeMedia = await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 28 });
-    if (youtubeMedia.items.length) break;
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
-  assert.equal(youtubeMedia.items.length, 1, "enabling the toggle surfaces exactly one YouTube page candidate");
-  const youtubeCandidate = youtubeMedia.items[0];
-  assert.equal(youtubeCandidate.kind, "youtube");
-  assert.equal(youtubeCandidate.url, youtubeWatchUrl, "tracking parameters are stripped from the canonical watch URL");
-  assert.equal(youtubeCandidate.site, "youtube");
-  let youtubeBadge = null;
-  for (let attempt = 0; attempt < 50; attempt += 1) {
-    youtubeBadge = badgeUpdates.filter((item) => item.tabId === 28).at(-1);
-    if (youtubeBadge?.text === "1") break;
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
-  assert.equal(youtubeBadge?.text, "1", "the YouTube candidate drives the badge too");
-  const youtubeStart = await sendRuntimeMessage({
-    type: "DOWNLOAD",
-    tabId: 28,
-    candidate: youtubeCandidate,
-    options: { filename: "YouTube Fixture.mp4" }
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.deepEqual((await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 28 })).items, [],
+    "the build gate publishes no YouTube candidate");
+  assert.notEqual(badgeUpdates.filter((item) => item.tabId === 28).at(-1)?.text, "1",
+    "the closed adapter never increments the badge");
+  nativeOnMessage.listeners[0].fn({
+    type: "pong",
+    requestId: "network-disabled-audit",
+    version: "0.2.4",
+    protocolVersion: 1,
+    capabilityProfileVersion: 1,
+    ffmpeg: true,
+    capabilities: {
+      ffmpeg: { available: true, networkInput: false, version: "8.1" },
+      ytdlp: { available: false, networkDisabled: true }
+    }
   });
-  assert.equal(youtubeStart.ok, true);
-  assert.equal(youtubeStart.method, "native", "YouTube downloads always delegate to the local engine");
-  const youtubeNativeMessage = nativeOutgoing.find((message) => message.type === "download" && message.jobId === youtubeStart.jobId);
-  assert.equal(youtubeNativeMessage.mediaKind, "youtube");
-  assert.equal(youtubeNativeMessage.url, youtubeWatchUrl, "the host receives the watch page, never a googlevideo URL");
-  assert.deepEqual(youtubeNativeMessage.headers, {}, "no captured credentials travel with the page delegation");
-  nativeOnMessage.listeners[0].fn({ type: "complete", jobId: youtubeStart.jobId, filename: "YouTube Fixture.mp4", status: "completed", progress: 1, size: 9_800_000 });
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  const youtubeDisabled = await sendRuntimeMessage({ type: "SAVE_SETTINGS", settings: {} });
-  assert.equal(youtubeDisabled.settings.youtubeEnabled, false);
+  const networkDisabledYoutube = await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 28 });
+  assert.deepEqual(networkDisabledYoutube.items, [], "network-disabled external engines withdraw stale YouTube candidates");
+  assert.equal(networkDisabledYoutube.hostStatus.capabilities.ytdlp.networkDisabled, true);
+  nativeOnMessage.listeners[0].fn({
+    type: "pong",
+    requestId: "network-enabled-fixture-reset",
+    version: "0.2.4",
+    protocolVersion: 1,
+    capabilityProfileVersion: 1,
+    ffmpeg: true,
+    capabilities: { ytdlp: { available: true, networkDisabled: false, version: "2026.08" } }
+  });
+  const stillClosed = await sendRuntimeMessage({ type: "SAVE_SETTINGS", settings: { youtubeEnabled: true } });
+  assert.equal(stillClosed.settings.youtubeEnabled, false,
+    "an explicit false networkDisabled capability still cannot bypass the version gate");
   assert.deepEqual(
     (await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 28 })).items,
     [],
-    "turning the toggle off withdraws the published YouTube candidate immediately"
+    "the candidate gate remains closed after a forged open capability"
   );
-  assert.equal(badgeUpdates.filter((item) => item.tabId === 28).at(-1)?.text, "", "the badge clears together with the withdrawn candidate");
+  assert.notEqual(badgeUpdates.filter((item) => item.tabId === 28).at(-1)?.text, "1", "the closed adapter never leaves a media badge");
 
   // ===== Instagram / X adapters reuse the generic pipeline; private media
   // downloads replay the cookie the page itself sent to the same CDN URL. =====
@@ -1192,7 +1505,7 @@ test("MV3 worker registers network and message listeners during module load", as
     speed: 1024,
     bytes: 1000,
     total: 2000,
-    message: "读取 https://user:pass@media.example.test/video?token=TOP_SECRET Cookie=SESSION_SECRET",
+    message: "读取 https://user:pass@media.example.test/video?token=TOP_SECRET Cookie=SESSION_SECRET；FFmpeg /Users/Alice Smith/Secret Folder/ffmpeg；临时文件 /private/var/folders/secret/input.ts",
     headers: { authorization: "Bearer TOP_SECRET" },
     manifestText: "#EXTM3U TOP_SECRET"
   });
@@ -1201,8 +1514,8 @@ test("MV3 worker registers network and message listeners during module load", as
   assert.equal(nativeRunning.status, "downloading");
   assert.equal(nativeRunning.progress, 0.5);
   assert.equal(nativeRunning.speed, 1024);
-  assert.doesNotMatch(JSON.stringify(nativeRunning), /TOP_SECRET|SESSION_SECRET|headers|manifestText/);
-  assert.doesNotMatch(JSON.stringify(sessionState.jobs), /TOP_SECRET|SESSION_SECRET|headers|manifestText|\/Users\/private/);
+  assert.doesNotMatch(JSON.stringify(nativeRunning), /TOP_SECRET|SESSION_SECRET|headers|manifestText|Alice|Secret Folder|\/private\/var/);
+  assert.doesNotMatch(JSON.stringify(sessionState.jobs), /TOP_SECRET|SESSION_SECRET|headers|manifestText|\/Users\/private|Alice|Secret Folder|\/private\/var/);
 
   nativeOnMessage.listeners[0].fn({
     type: "complete",
@@ -1253,6 +1566,14 @@ test("MV3 worker registers network and message listeners during module load", as
   assert.equal(clearTabAndHistory.removedJobs, 1, "clearing detections also removes ended task rows");
   assert.equal(clearTabAndHistory.jobs.some((job) => job.jobId === failedBeforeClear.jobId), false);
   assert.equal(clearTabAndHistory.jobs.some((job) => job.jobId === activeDuringClear.jobId), true, "clearing detections never cancels an active download");
+  const staleGeneration = await sendRuntimeMessage({
+    type: "DOWNLOAD",
+    tabId: 9,
+    candidate,
+    options: { filename: "stale.mp4" }
+  });
+  assert.equal(staleGeneration.ok, false, "a reference from the previous tab generation is rejected");
+  assert.match(staleGeneration.error, /已失效/);
 
   nativeOnMessage.listeners[0].fn({
     type: "complete",
@@ -1288,13 +1609,13 @@ test("MV3 worker registers network and message listeners during module load", as
   };
   await sendRuntimeMessage({
     type: "PAGE_PREVIEW",
-    data: { thumbnailUrl: "https://images.example.test/closing.jpg", source: "poster" }
+    data: { thumbnailUrl: "https://page.example.test/closing.jpg", source: "poster" }
   }, closingSender);
   await sendRuntimeMessage({
     type: "CONTENT_MEDIA",
     data: { url: "https://media.example.test/closing.mpd", mime: "application/dash+xml", source: "dom" }
   }, closingSender);
-  assert.equal((await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 10 })).items[0]?.thumbnailUrl, "https://images.example.test/closing.jpg");
+  assert.equal((await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 10 })).items[0]?.thumbnailUrl, "https://page.example.test/closing.jpg");
   onTabRemoved.listeners[0].fn(10);
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.deepEqual((await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 10 })).items, [], "closing a tab clears media and preview state");
@@ -1304,7 +1625,7 @@ test("MV3 worker registers network and message listeners during module load", as
   assert.deepEqual((await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 9 })).items, [], "navigation clears media and preview state");
 });
 
-test("content script discovers page preview metadata without carrying credentials or fragments", async () => {
+test("content script discovers page preview metadata while rejecting credentials and fragments", async () => {
   const source = await readFile(new URL("../extension/content/content.js", import.meta.url), "utf8");
   for (const marker of [
     "video[poster]",
@@ -1315,8 +1636,8 @@ test("content script discovers page preview metadata without carrying credential
     "image_src"
   ]) assert.match(source, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.match(source, /type:\s*"PAGE_PREVIEW"/);
-  assert.match(source, /url\.username\s*=\s*""/);
-  assert.match(source, /url\.password\s*=\s*""/);
+  assert.match(source, /if \(url\.username \|\| url\.password\) return null/);
+  assert.doesNotMatch(source, /url\.(?:username|password)\s*=\s*""/);
   assert.match(source, /url\.hash\s*=\s*""/);
   assert.match(source, /MAX_PREVIEW_URL_LENGTH\s*=\s*4096/);
   assert.doesNotMatch(source, /\bcookie\b/i);

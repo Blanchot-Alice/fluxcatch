@@ -1,25 +1,29 @@
+import { BUILD_PROFILE, HOST_MISMATCH_MESSAGE } from "../lib/build-profile.js";
+
 const form = document.querySelector("#settingsForm");
 const status = document.querySelector("#saveStatus");
 const nativePermissionButton = document.querySelector("#nativePermissionButton");
 const nativePermissionStatus = document.querySelector("#nativePermissionStatus");
-const ytdlpRefreshButton = document.querySelector("#ytdlpRefreshButton");
-const ytdlpStatus = document.querySelector("#ytdlpStatus");
-const ytdlpGuide = document.querySelector("#ytdlpGuide");
+
+const CAPABILITY_LABELS = Object.freeze({
+  directMedia: "普通视频与音频文件",
+  staticHls: "静态 HLS 视频",
+  staticDash: "静态 DASH 视频",
+  bilibiliDashPair: "哔哩哔哩分离音视频合并",
+  liveHls: "HLS 直播",
+  encryptedHls: "加密 HLS",
+  separateAudioHls: "HLS 独立音轨",
+  externalToolNetwork: "外部下载工具联网",
+  remoteThumbnails: "远程视频封面"
+});
 
 document.addEventListener("DOMContentLoaded", load);
 form.addEventListener("submit", save);
 nativePermissionButton.addEventListener("click", requestNativeAccess);
-ytdlpRefreshButton.addEventListener("click", async () => {
-  ytdlpRefreshButton.disabled = true;
-  try {
-    await refreshYtdlp();
-  } finally {
-    ytdlpRefreshButton.disabled = false;
-  }
-});
-form.youtubeEnabled.addEventListener("change", () => syncYtdlpGuide());
+document.querySelector("#copyDiagnosticsButton").addEventListener("click", copyDiagnostics);
 
 async function load() {
+  renderCapabilities();
   try {
     const response = await chrome.runtime.sendMessage({ type: "GET_SETTINGS" });
     if (!response?.ok) throw new Error(response?.error || "读取设置失败");
@@ -27,14 +31,15 @@ async function load() {
     form.concurrentFragments.value = s.concurrentFragments;
     form.concurrentRanges.value = s.concurrentRanges;
     form.outputContainer.value = s.outputContainer;
-    form.liveDuration.value = s.liveDuration;
     form.minimumKiB.value = Math.round(s.minimumBytes / 1024);
     form.filenameTemplate.value = s.filenameTemplate;
     form.blockedDomains.value = (s.blockedDomains || []).join("\n");
-    for (const key of ["saveAs", "useNativeForDirect", "youtubeEnabled"]) form[key].checked = Boolean(s[key]);
+    for (const key of ["saveAs", "useNativeForDirect", "allowPrivateNetworkMedia", "autoEnrichSiteQuality"]) {
+      form[key].checked = Boolean(s[key]);
+    }
     form.showNotifications.checked = Boolean(s.showNotifications) && await chrome.permissions.contains({ permissions: ["notifications"] });
     await refreshNativeAccess();
-    await refreshYtdlp();
+    await refreshDiagnostics();
   } catch (error) {
     showStatus(error?.message || "读取设置失败");
     nativePermissionStatus.textContent = "暂时未能检查高速下载功能";
@@ -54,10 +59,13 @@ async function requestNativeAccess() {
     const response = await chrome.runtime.sendMessage({ type: "PING_HOST" });
     if (!response?.ok) throw new Error("暂时未能检查高速下载功能");
     const host = response.hostStatus || {};
-    nativePermissionStatus.textContent = host.connected
+    nativePermissionStatus.textContent = host.connected && host.compatible !== true
+      ? HOST_MISMATCH_MESSAGE
+      : host.connected
       ? "已就绪 · 可加速大文件、合并视频片段并转换格式"
       : "已获授权，但配套程序尚未就绪";
     nativePermissionButton.textContent = "重新检查";
+    await refreshDiagnostics();
   } catch (error) {
     nativePermissionStatus.textContent = "检查失败，请确认配套程序已安装后重试";
   } finally {
@@ -73,29 +81,50 @@ async function refreshNativeAccess() {
   nativePermissionButton.textContent = granted ? "重新检查" : "开启高速下载功能";
 }
 
-async function refreshYtdlp() {
-  try {
-    const response = await chrome.runtime.sendMessage({ type: "PING_HOST" });
-    if (!response?.ok) throw new Error(response?.error || "暂时未能检查 yt-dlp");
-    const host = response.hostStatus || {};
-    if (host.needsPermission) {
-      ytdlpStatus.textContent = "需要先开启高速下载功能，才能检查 yt-dlp";
-    } else if (!host.connected) {
-      ytdlpStatus.textContent = "本地引擎未连接，暂时无法检查 yt-dlp（安装方法见下方）";
-    } else {
-      const ytdlp = host.capabilities?.ytdlp || {};
-      ytdlpStatus.textContent = ytdlp.available
-        ? `已就绪${ytdlp.version ? ` · 版本 ${ytdlp.version}` : ""}`
-        : "未检测到 yt-dlp（安装方法见下方）";
-    }
-  } catch (error) {
-    ytdlpStatus.textContent = error?.message || "检查失败，请确认本地引擎已安装后重试";
+function renderCapabilities() {
+  const list = document.querySelector("#capabilityList");
+  list.replaceChildren();
+  for (const [feature, label] of Object.entries(CAPABILITY_LABELS)) {
+    const enabled = BUILD_PROFILE.features[feature] === true;
+    const item = document.createElement("li");
+    item.dataset.feature = feature;
+    item.dataset.enabled = String(enabled);
+    const name = document.createElement("span");
+    name.textContent = label;
+    const value = document.createElement("strong");
+    value.textContent = enabled ? "可用" : "未启用";
+    item.append(name, value);
+    list.append(item);
   }
-  syncYtdlpGuide();
 }
 
-function syncYtdlpGuide() {
-  ytdlpGuide.open = form.youtubeEnabled.checked && /未检测到|未连接/.test(ytdlpStatus.textContent);
+let diagnostics = null;
+
+async function refreshDiagnostics() {
+  const response = await chrome.runtime.sendMessage({ type: "GET_DIAGNOSTICS" });
+  if (!response?.ok) throw new Error(response?.error || "读取诊断信息失败");
+  diagnostics = response.diagnostics;
+  const extension = diagnostics.extension || {};
+  const native = diagnostics.native || {};
+  document.querySelector("#diagnosticExtensionVersion").textContent = extension.version || "未知";
+  document.querySelector("#diagnosticExtensionId").textContent = extension.id || "未知";
+  document.querySelector("#diagnosticBuild").textContent = `${extension.channel || "未知"} · ${extension.commit || "未知"}`;
+  document.querySelector("#diagnosticNativeVersion").textContent = native.connected ? native.version || "未知" : "未连接";
+  document.querySelector("#diagnosticProtocol").textContent = native.compatible === true
+    ? `匹配 · 协议 ${native.protocolVersion} · 能力配置 ${native.capabilityProfileVersion}`
+    : native.connected
+      ? "不匹配"
+      : "等待连接";
+}
+
+async function copyDiagnostics() {
+  try {
+    if (!diagnostics) await refreshDiagnostics();
+    await navigator.clipboard.writeText(JSON.stringify(diagnostics, null, 2));
+    showStatus("诊断信息已复制");
+  } catch (error) {
+    showStatus(error?.message || "复制诊断信息失败");
+  }
 }
 
 async function save(event) {
@@ -115,13 +144,15 @@ async function save(event) {
     concurrentFragments: Number(form.concurrentFragments.value),
     concurrentRanges: Number(form.concurrentRanges.value),
     outputContainer: form.outputContainer.value,
-    liveDuration: Number(form.liveDuration.value),
+    liveDuration: 0,
     minimumBytes: Number(form.minimumKiB.value) * 1024,
     filenameTemplate: form.filenameTemplate.value,
     blockedDomains: form.blockedDomains.value.split(/\r?\n/),
     saveAs: form.saveAs.checked,
     useNativeForDirect: form.useNativeForDirect.checked,
-    youtubeEnabled: form.youtubeEnabled.checked,
+    allowPrivateNetworkMedia: form.allowPrivateNetworkMedia.checked,
+    autoEnrichSiteQuality: form.autoEnrichSiteQuality.checked,
+    youtubeEnabled: false,
     showNotifications
   };
   try {

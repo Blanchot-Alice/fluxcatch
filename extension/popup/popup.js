@@ -1,7 +1,8 @@
 import { MEDIA_EXTENSIONS, humanBytes, sanitizeFilename } from "../lib/media.js";
 import { loadPrivacySafeThumbnail } from "../lib/thumbnail.js";
+import { BUILD_PROFILE, HOST_MISMATCH_MESSAGE } from "../lib/build-profile.js";
 
-const SITE_LABELS = { instagram: "Instagram", twitter: "X", youtube: "YouTube" };
+const SITE_LABELS = { instagram: "Instagram", twitter: "X" };
 const state = { tabId: null, windowId: null, items: [], settings: {}, hostStatus: {}, jobs: new Map(), selected: null, probes: new Map(), filter: "all", toastTimer: null, refreshSequence: 0 };
 const $ = (selector) => document.querySelector(selector);
 const mediaList = $("#mediaList");
@@ -100,7 +101,7 @@ async function refresh() {
   const sequence = ++state.refreshSequence;
   const result = await call({ type: "GET_TAB_MEDIA", tabId: state.tabId });
   if (sequence !== state.refreshSequence) return;
-  state.items = result.items || [];
+  state.items = (result.items || []).filter((item) => item.kind !== "youtube" || BUILD_PROFILE.features.externalToolNetwork);
   state.settings = result.settings || {};
   $("#mediaCount").textContent = state.items.length;
   updateHost(result.hostStatus || {});
@@ -131,8 +132,8 @@ function createMediaCard(item) {
   title.textContent = readableMediaTitle(item);
   title.title = title.textContent;
   const url = el("p", "media-url");
-  url.textContent = compactUrl(item.url);
-  url.title = item.url;
+  url.textContent = compactUrl(item.displayUrl);
+  url.title = item.displayUrl;
   const chips = el("div", "chips");
   for (const { text, cls } of mediaChips(item)) { const chip = el("span", cls ? `chip ${cls}` : "chip"); chip.textContent = text; chips.append(chip); }
   info.append(title, url, chips);
@@ -141,12 +142,12 @@ function createMediaCard(item) {
   download.textContent = "下载";
   download.addEventListener("click", () => void prepareDownload(item, download));
   actions.append(download);
-  if (!stream) {
+  if (item.copyable === true) {
     const copy = el("button", "more-button");
     copy.textContent = "复制链接";
     copy.addEventListener("click", async () => {
       try {
-        await navigator.clipboard.writeText(item.url);
+        await navigator.clipboard.writeText(item.displayUrl);
         copy.textContent = "已复制";
         setTimeout(() => { if (copy.isConnected) copy.textContent = "复制链接"; }, 1000);
       } catch (error) {
@@ -163,7 +164,11 @@ function createMediaVisual(item) {
   const stream = isStreamKind(item);
   const fallback = el("div", `kind-icon ${stream ? "stream" : item.kind || "video"}`);
   fallback.textContent = stream ? streamTypeLabel(item) : item.kind === "audio" ? "♫" : "▶";
-  return loadPrivacySafeThumbnail(item.thumbnailUrl, fallback);
+  return loadPrivacySafeThumbnail(item.thumbnailUrl, fallback, {
+    allowedThumbnailOrigins: item.thumbnailAllowedOrigins || [],
+    adapterImageHosts: item.thumbnailAdapterImageHosts || [],
+    networkScope: state.settings.allowPrivateNetworkMedia ? "private_network_opt_in" : "public_only"
+  });
 }
 
 async function prepareDownload(item, button) {
@@ -180,7 +185,7 @@ async function prepareDownload(item, button) {
   try {
     const key = mediaKey(item);
     if (!state.probes.has(key)) {
-      const result = await call({ type: "PROBE_MANIFEST", tabId: state.tabId, candidate: item });
+      const result = await call({ type: "PROBE_MANIFEST", tabId: state.tabId, candidate: candidateReference(item) });
       state.probes.set(key, result.probe);
     }
   } catch (error) {
@@ -191,6 +196,20 @@ async function prepareDownload(item, button) {
     button.removeAttribute("aria-busy");
   }
   openDownloadDialog(item, { probeWarning });
+}
+
+function manifestDownloadBlockReason(probe) {
+  if (probe?.kind === "hls") {
+    if (probe.protection === "drm" || probe.protected) return "检测到 DRM/SAMPLE-AES 内容保护，仅显示媒体信息。";
+    if (probe.protection === "aes128" || probe.encrypted) return "FluxCatch 0.2.4 暂不支持 AES-128 加密的 HLS 下载。";
+    if (probe.type === "media" && probe.live) return "FluxCatch 0.2.4 暂不支持 HLS 直播录制。";
+    if (probe.discontinuity) return "FluxCatch 0.2.4 暂不支持包含时间线切换的 HLS 下载。";
+    if (Number(probe.audioTrackCount || 0) > 0 || probe.variants?.some((variant) => variant.audioGroup)) {
+      return "FluxCatch 0.2.4 暂不支持独立音轨 HLS 下载。";
+    }
+  }
+  if (probe?.protection === "drm" || probe?.protected) return "检测到 DRM/内容保护，受保护内容暂不支持下载。";
+  return "";
 }
 
 function openDownloadDialog(item, { probeWarning = false } = {}) {
@@ -222,21 +241,14 @@ function openDownloadDialog(item, { probeWarning = false } = {}) {
     variantLabel.hidden = false;
   } else variantLabel.hidden = true;
   syncVariantVisibility();
-  const protectedMedia = probe?.protection === "drm" || probe?.protected;
-  const ytdlpReady = item.kind === "youtube" ? Boolean(state.hostStatus?.capabilities?.ytdlp?.available) : true;
-  $("#confirmDownload").disabled = Boolean(protectedMedia) || (item.kind === "youtube" && !ytdlpReady);
-  $("#dialogNote").style.color = item.kind === "youtube" && !ytdlpReady ? "var(--warning-strong)" : "";
-  $("#dialogNote").textContent = item.kind === "youtube"
-    ? ytdlpReady
-      ? "实验性功能：由本机安装的 yt-dlp 引擎下载，画质与格式以本机 yt-dlp 为准。"
-      : "实验性功能需要先安装 yt-dlp：请打开设置 → 站点适配器，按安装指引完成后再回来下载。"
-    : protectedMedia
-    ? "检测到 DRM/内容保护，受保护内容暂不支持下载。"
+  const manifestBlockReason = manifestDownloadBlockReason(probe);
+  $("#confirmDownload").disabled = Boolean(manifestBlockReason);
+  $("#dialogNote").style.color = manifestBlockReason ? "var(--warning-strong)" : "";
+  $("#dialogNote").textContent = manifestBlockReason
+    ? manifestBlockReason
     : probeWarning
       ? "未读取到清晰度选项，将自动选择并生成一个可直接播放的文件。"
-    : probe?.protection === "aes128"
-      ? "检测到可处理的加密流媒体，将使用高速下载功能完成下载。"
-      : item.kind === "dash_pair"
+    : item.kind === "dash_pair"
         ? "这个网站把画面和声音分开传送。FluxCatch 会分别下载并无损合并，最后保存为一个可以直接播放的文件。"
       : isStreamKind(item)
         ? "这类在线视频由许多小片段组成。FluxCatch 会逐段下载并自动组合，最后保存为一个可直接播放的文件。"
@@ -264,12 +276,13 @@ async function submitDownload(event) {
   const confirm = $("#confirmDownload");
   try {
     confirm.disabled = true;
-    const advanced = isStreamKind(item) || item.kind === "youtube" || options.extractAudio || options.convert || options.useNativeForDirect;
+    const advanced = isStreamKind(item) || item.provenance !== "observed_response"
+      || options.extractAudio || options.convert || options.useNativeForDirect;
     if (advanced) {
       const granted = await chrome.permissions.request({ permissions: ["nativeMessaging"] });
       if (!granted) throw new Error("请先允许使用高速下载功能，再继续下载");
     }
-    const result = await call({ type: "DOWNLOAD", tabId: state.tabId, candidate: item, options });
+    const result = await call({ type: "DOWNLOAD", tabId: state.tabId, candidate: candidateReference(item), options });
     dialog.close();
     if (result.method === "native") {
       state.jobs.set(result.jobId, { jobId: result.jobId, filename: options.filename, status: "queued", progress: 0, speed: 0 });
@@ -280,8 +293,8 @@ async function submitDownload(event) {
     $("#dialogNote").textContent = friendlyErrorMessage(error?.message);
     $("#dialogNote").style.color = "var(--danger-strong)";
   } finally {
-    const probe = state.probes.get(item.id);
-    confirm.disabled = Boolean(probe?.protection === "drm" || probe?.protected);
+    const probe = state.probes.get(mediaKey(item));
+    confirm.disabled = Boolean(manifestDownloadBlockReason(probe));
   }
 }
 
@@ -370,13 +383,19 @@ function announceJobChange(previous, current) {
 }
 
 function updateHost(status = {}) {
+  state.hostStatus = status;
   const dot = $("#hostDot");
-  dot.className = `dot ${status.connected ? "ok" : status.lastError ? "bad" : ""}`;
-  $("#hostTitle").textContent = status.connected ? "高速下载功能已就绪" : "高速下载功能暂未就绪";
+  const mismatch = status.connected && status.compatible !== true;
+  dot.className = `dot ${status.connected && !mismatch ? "ok" : status.lastError || mismatch ? "bad" : ""}`;
+  $("#hostTitle").textContent = mismatch ? "高速下载功能版本不匹配" : status.connected ? "高速下载功能已就绪" : "高速下载功能暂未就绪";
   const installHelp = $("#installHelpButton");
   // The connect attempt itself failed (engine missing / not registered):
   // point the user at the install guidance instead of a bare error.
-  installHelp.hidden = Boolean(status.connected || status.needsPermission || !status.lastError);
+  installHelp.hidden = Boolean((status.connected && !mismatch) || status.needsPermission || (!status.lastError && !mismatch));
+  if (mismatch) {
+    $("#hostDetail").textContent = HOST_MISMATCH_MESSAGE;
+    return;
+  }
   if (!status.connected) {
     $("#hostDetail").textContent = status.needsPermission
       ? "需要加速、合并或转换格式时会请你授权"
@@ -414,10 +433,9 @@ async function call(message) {
 }
 
 function mediaChips(item) {
-  if (item.kind === "youtube") return [{ text: "YouTube", cls: "hls" }, { text: "实验性", cls: "fmt" }];
   const stream = isStreamKind(item);
   const values = [{ text: streamTypeLabel(item), cls: stream ? "hls" : "fmt" }];
-  if (item.site && SITE_LABELS[item.site] && item.site !== "youtube") values.push({ text: SITE_LABELS[item.site], cls: "fmt" });
+  if (item.site && SITE_LABELS[item.site]) values.push({ text: SITE_LABELS[item.site], cls: "fmt" });
   if (item.height) values.push({ text: `${item.height}p`, cls: "hd" });
   if (!stream && item.contentLength) values.push({ text: humanBytes(item.contentLength), cls: "" });
   if (item.duration) values.push({ text: formatDuration(item.duration), cls: "" });
@@ -430,13 +448,17 @@ function syncVariantVisibility() {
   $("#variantLabel").hidden = !hasChoices || $("#containerSelect").value === "mp3";
 }
 
-function mediaKey(item) { return item.id || item.url; }
+function mediaKey(item) { return item.id || item.displayUrl; }
+
+function candidateReference(item) {
+  return { id: item?.id, kind: item?.kind, generation: item?.generation };
+}
 function readableMediaTitle(item) {
   for (const value of [item.displayTitle, item.title, item.suggestedFilename, item.pageTitle]) {
     const title = String(value || "").trim();
     if (title) return title;
   }
-  return fileLabel(item.url);
+  return fileLabel(item.displayUrl);
 }
 function defaultFilename(item, format) {
   const title = readableMediaTitle(item);
