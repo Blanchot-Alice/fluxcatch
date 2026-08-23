@@ -205,6 +205,40 @@ class LoopbackServer(http.server.ThreadingHTTPServer):
         self.server_port = port
 
 
+class HeaderLineageHandler(http.server.BaseHTTPRequestHandler):
+    """Configurable redirect fixture that records every received header."""
+
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, _format, *_args):
+        pass
+
+    def do_GET(self):
+        path = urlsplit(self.path).path
+        headers = {key.lower(): value for key, value in self.headers.items()}
+        with self.server.log_lock:
+            self.server.request_log.append((path, headers))
+        route = self.server.routes.get(path)
+        if route is None:
+            self.send_error(404)
+            return
+        if "redirect" in route:
+            self.send_response(302)
+            self.send_header("Location", route["redirect"])
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        body = route["body"]
+        self.send_response(200)
+        self.send_header("Content-Type", route.get("mime", "application/octet-stream"))
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+
 class ChunkedReader(io.BytesIO):
     def read(self, size=-1):
         return super().read(1 if size < 0 else min(size, 1))
@@ -257,6 +291,18 @@ class HostTests(unittest.TestCase):
 
     def tearDown(self):
         host.reset_current_network_policy(self.network_token)
+
+    def start_lineage_server(self):
+        server = LoopbackServer(("127.0.0.1", 0), HeaderLineageHandler)
+        server.routes = {}
+        server.request_log = []
+        server.log_lock = threading.Lock()
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        # Cleanups run in reverse registration order: shutdown, then close.
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        return server, f"http://127.0.0.1:{server.server_port}"
 
     def test_validation_and_filename_byte_limit(self):
         self.assertEqual(host.valid_url("https://example.test/a"), "https://example.test/a")
@@ -786,6 +832,87 @@ class HostTests(unittest.TestCase):
             self.assertIn("/dash/chunk-stream0-00001.m4s", requested)
             self.assertIn("/dash/chunk-stream1-00003.m4s", requested)
 
+    def test_dash_redirect_final_url_and_headers_reach_static_children(self):
+        server_a, base_a = self.start_lineage_server()
+        server_b, base_b = self.start_lineage_server()
+        server_c, base_c = self.start_lineage_server()
+        server_a.routes["/dash/entry/out.mpd"] = {"redirect": f"{base_b}/dash/hop/out.mpd"}
+        server_b.routes["/dash/hop/out.mpd"] = {"redirect": f"{base_c}/dash/final/out.mpd"}
+        dash_manifest = b'''<?xml version="1.0"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static" mediaPresentationDuration="PT1S">
+  <Period><AdaptationSet contentType="video">
+    <SegmentList><Initialization sourceURL="parts/init.mp4"/><SegmentURL media="parts/one.m4s"/></SegmentList>
+    <Representation id="v" bandwidth="1000"/>
+  </AdaptationSet></Period>
+</MPD>'''
+        server_c.routes.update({
+            "/dash/final/out.mpd": {"body": dash_manifest, "mime": "application/dash+xml"},
+            "/dash/final/parts/init.mp4": {"body": b"dash-init|", "mime": "video/mp4"},
+            "/dash/final/parts/one.m4s": {"body": b"dash-one", "mime": "video/iso.segment"},
+        })
+        request_headers = {
+            "Authorization": "Bearer DASH_SECRET",
+            "Cookie": "session=DASH_SECRET",
+            "Origin": "https://page.example",
+            "Referer": "https://page.example/watch",
+            "Accept": "application/dash+xml",
+        }
+        capability = host.FfmpegCapabilities(path="/fixture/ffmpeg", libmp3lame=True)
+        events = []
+
+        def fake_ffmpeg(args, output, _cancel, _progress, **_kwargs):
+            inputs = [pathlib.Path(args[index + 1]) for index, value in enumerate(args[:-1]) if value == "-i"]
+            self.assertEqual(len(inputs), 1)
+            self.assertEqual(inputs[0].read_bytes(), b"dash-init|dash-one")
+            output.write_bytes(b"dash-lineage-output")
+            return output
+
+        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(
+            os.environ,
+            {"FLUXCATCH_DOWNLOAD_DIR": directory},
+        ), mock.patch.object(host, "probe_ffmpeg", return_value=capability), mock.patch.object(
+            host,
+            "run_ffmpeg",
+            side_effect=fake_ffmpeg,
+        ):
+            native = host.Host()
+            try:
+                with mock.patch.object(native, "send", side_effect=events.append):
+                    native.run_job("dash-lineage", {
+                        "type": "download",
+                        "mediaKind": "dash",
+                        "url": f"{base_a}/dash/entry/out.mpd",
+                        "filename": "lineage.mp4",
+                        "headers": request_headers,
+                        "options": {
+                            "outputContainer": "mp4",
+                            "concurrentFragments": 2,
+                            "allowPrivateNetworkMedia": True,
+                        },
+                    }, threading.Event())
+                completed = next(event for event in events if event.get("type") == "complete")
+                self.assertEqual(pathlib.Path(completed["path"]).read_bytes(), b"dash-lineage-output")
+            finally:
+                native.close()
+
+        def observed_headers(server, path):
+            return [headers for observed_path, headers in server.request_log if observed_path == path]
+
+        initial = observed_headers(server_a, "/dash/entry/out.mpd")[0]
+        for key in host.SENSITIVE_REDIRECT_HEADERS:
+            self.assertIn(key, initial)
+        for server, path in (
+            (server_b, "/dash/hop/out.mpd"),
+            (server_c, "/dash/final/out.mpd"),
+            (server_c, "/dash/final/parts/init.mp4"),
+            (server_c, "/dash/final/parts/one.m4s"),
+        ):
+            headers = observed_headers(server, path)[0]
+            for key in host.SENSITIVE_REDIRECT_HEADERS:
+                self.assertNotIn(key, headers)
+            self.assertEqual(headers["accept"], "application/dash+xml")
+        self.assertFalse(any(path.startswith("/dash/entry/parts/") for path, _headers in server_a.request_log))
+
     def test_host_dash_always_uses_pinned_static_planner_even_with_dash_demuxer(self):
         capability = host.FfmpegCapabilities(
             path="/fixture/ffmpeg",
@@ -799,8 +926,10 @@ class HostTests(unittest.TestCase):
             native = host.Host()
             events = []
 
-            def fake_static(_url, manifest, target, _headers, _workers, _cancel, _progress, ffmpeg, **_kwargs):
+            def fake_static(manifest_url, manifest, target, request_headers, _workers, _cancel, _progress, ffmpeg, **_kwargs):
+                self.assertEqual(manifest_url, "https://media.example/final/out.mpd")
                 self.assertEqual(manifest, DASH_MPD.decode())
+                self.assertEqual(request_headers, {"user-agent": "fixture"})
                 self.assertEqual(ffmpeg, "/fixture/ffmpeg")
                 target.write_bytes(b"pinned-static-dash")
                 return target
@@ -809,7 +938,11 @@ class HostTests(unittest.TestCase):
                 with mock.patch.object(native, "send", side_effect=events.append), mock.patch.object(
                     host,
                     "fetch_manifest",
-                    return_value=DASH_MPD.decode(),
+                    return_value=host.ManifestFetchResult(
+                        DASH_MPD.decode(),
+                        "https://media.example/final/out.mpd",
+                        {"user-agent": "fixture"},
+                    ),
                 ), mock.patch.object(host, "dash_static_download", side_effect=fake_static) as static, mock.patch.object(
                     host,
                     "ffmpeg_download",
@@ -1284,6 +1417,92 @@ class HostTests(unittest.TestCase):
             self.assertEqual(result.read_bytes(), b"".join(SEGMENTS[f"/seg{i}.ts"] for i in range(3)))
             self.assertEqual(result.stat().st_mode & 0o777, 0o600)
             self.assertTrue(any(event.get("progress") == 1 for event in events))
+
+    def test_hls_redirect_final_url_and_headers_follow_the_response_chain(self):
+        server_a, base_a = self.start_lineage_server()
+        server_b, base_b = self.start_lineage_server()
+        server_c, base_c = self.start_lineage_server()
+        server_a.routes.update({
+            "/hls/entry/master.m3u8": {"redirect": f"{base_a}/hls/same/master.m3u8"},
+            "/hls/same/master.m3u8": {"redirect": f"{base_b}/hls/hop/master.m3u8"},
+            "/hls/final/master.m3u8": {
+                "body": b"#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1000,RESOLUTION=640x360\nchild/media.m3u8\n",
+                "mime": "application/vnd.apple.mpegurl",
+            },
+            "/hls/final/child/media.m3u8": {"redirect": f"{base_c}/hls/final/media.m3u8"},
+        })
+        server_b.routes["/hls/hop/master.m3u8"] = {"redirect": f"{base_a}/hls/final/master.m3u8"}
+        server_c.routes.update({
+            "/hls/final/media.m3u8": {
+                "body": b"#EXTM3U\n#EXTINF:4,\nsegments/seg0.ts\n#EXT-X-ENDLIST\n",
+                "mime": "application/vnd.apple.mpegurl",
+            },
+            "/hls/final/segments/seg0.ts": {"body": b"lineage-segment", "mime": "video/mp2t"},
+        })
+        request_headers = {
+            "Authorization": "Bearer HLS_SECRET",
+            "Cookie": "session=HLS_SECRET",
+            "Origin": "https://page.example",
+            "Referer": "https://page.example/watch",
+            "Accept": "application/vnd.apple.mpegurl",
+        }
+
+        playlist, text, master, selected = host.select_hls_media(
+            f"{base_a}/hls/entry/master.m3u8",
+            request_headers,
+        )
+        self.assertIsNotNone(master)
+        self.assertIsNotNone(selected)
+        self.assertEqual(master.url, f"{base_a}/hls/final/master.m3u8")
+        self.assertEqual(selected["url"], f"{base_a}/hls/final/child/media.m3u8")
+        self.assertEqual(playlist.url, f"{base_c}/hls/final/media.m3u8")
+        self.assertEqual(playlist.segments[0].url, f"{base_c}/hls/final/segments/seg0.ts")
+        self.assertIn("segments/seg0.ts", text)
+        for key in host.SENSITIVE_REDIRECT_HEADERS:
+            self.assertNotIn(key, master.request_headers)
+            self.assertNotIn(key, playlist.request_headers)
+        self.assertEqual(playlist.request_headers["accept"], "application/vnd.apple.mpegurl")
+
+        def observed_headers(server, path):
+            return [headers for observed_path, headers in server.request_log if observed_path == path]
+
+        initial = observed_headers(server_a, "/hls/entry/master.m3u8")[0]
+        same_origin = observed_headers(server_a, "/hls/same/master.m3u8")[0]
+        for key in host.SENSITIVE_REDIRECT_HEADERS:
+            self.assertIn(key, initial)
+            self.assertIn(key, same_origin)
+        for server, path in (
+            (server_b, "/hls/hop/master.m3u8"),
+            (server_a, "/hls/final/master.m3u8"),
+            (server_a, "/hls/final/child/media.m3u8"),
+            (server_c, "/hls/final/media.m3u8"),
+        ):
+            for headers in observed_headers(server, path):
+                for key in host.SENSITIVE_REDIRECT_HEADERS:
+                    self.assertNotIn(key, headers)
+
+        for server in (server_a, server_b, server_c):
+            with server.log_lock:
+                server.request_log.clear()
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            host,
+            "select_hls_media",
+            return_value=(playlist, text, master, selected),
+        ):
+            target = pathlib.Path(directory) / "lineage.ts"
+            result = host.hls_fast_download(
+                f"{base_a}/hls/entry/master.m3u8",
+                target,
+                request_headers,
+                1,
+                threading.Event(),
+                host.Progress(lambda _event: None, "hls-lineage", target.name),
+                None,
+            )
+            self.assertEqual(result.read_bytes(), b"lineage-segment")
+        segment_headers = observed_headers(server_c, "/hls/final/segments/seg0.ts")[0]
+        for key in host.SENSITIVE_REDIRECT_HEADERS:
+            self.assertNotIn(key, segment_headers)
 
     def test_hls_byte_ranges_are_strict(self):
         with tempfile.TemporaryDirectory() as directory:

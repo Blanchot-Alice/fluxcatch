@@ -440,6 +440,10 @@ _ACTIVE_AUTHORIZED_TARGET: contextvars.ContextVar[Any | None] = contextvars.Cont
     "fluxcatch_active_authorized_target",
     default=None,
 )
+_ACTIVE_REQUEST_HEADERS: contextvars.ContextVar[dict[str, str] | None] = contextvars.ContextVar(
+    "fluxcatch_active_request_headers",
+    default=None,
+)
 
 
 class SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -457,6 +461,16 @@ class SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
             for key in list(redirected.headers):
                 if key.lower() in SENSITIVE_REDIRECT_HEADERS:
                     redirected.remove_header(key)
+            effective_headers = _ACTIVE_REQUEST_HEADERS.get()
+            if effective_headers is not None:
+                # Header authority is monotonic within a redirect chain.  In
+                # particular, A -> B -> A must not restore credentials merely
+                # because the final origin matches the first one again.
+                _ACTIVE_REQUEST_HEADERS.set({
+                    key: value
+                    for key, value in effective_headers.items()
+                    if key not in SENSITIVE_REDIRECT_HEADERS
+                })
         if redirected is not None:
             if redirected.full_url != redirect_target.url:
                 redirect_target = policy.authorize(redirected.full_url, purpose="redirect target")
@@ -556,14 +570,17 @@ def _validate_connected_response(response: Any, policy: NetworkPolicy, target: A
 
 
 def request(url: str, headers: dict[str, str], *, method: str = "GET", timeout: float = 30, extra: dict[str, str] | None = None):
-    merged = {**headers, **(extra or {})}
+    reusable_headers = clean_headers(headers)
+    merged = {**reusable_headers, **(extra or {})}
     safe_url = valid_url(url)
     policy = current_network_policy()
     response = None
     target_token = None
+    headers_token = None
     try:
         initial_target = policy.authorize(safe_url, purpose="HTTP request")
         target_token = _ACTIVE_AUTHORIZED_TARGET.set(initial_target)
+        headers_token = _ACTIVE_REQUEST_HEADERS.set(dict(reusable_headers))
         req = urllib.request.Request(safe_url, headers=merged, method=method)
         response = HTTP_OPENER.open(req, timeout=timeout)
         final_url = valid_url(response.geturl())
@@ -571,6 +588,9 @@ def request(url: str, headers: dict[str, str], *, method: str = "GET", timeout: 
         if final_target is None or final_target.url != final_url:
             raise NetworkPolicyError("HTTP response target did not match the authorized request")
         _validate_connected_response(response, policy, final_target)
+        # Keep only reusable, allow-listed request headers.  Per-request
+        # controls such as Range must not flow from a manifest into children.
+        response._fluxcatch_request_headers = dict(_ACTIVE_REQUEST_HEADERS.get() or {})
         return response
     except NetworkPolicyError as error:
         if response is not None:
@@ -590,6 +610,8 @@ def request(url: str, headers: dict[str, str], *, method: str = "GET", timeout: 
         reason = getattr(error, "reason", error)
         raise DownloadError(f"Network request failed for {redact_url(safe_url)}: {redact_text(reason)}") from error
     finally:
+        if headers_token is not None:
+            _ACTIVE_REQUEST_HEADERS.reset(headers_token)
         if target_token is not None:
             _ACTIVE_AUTHORIZED_TARGET.reset(target_token)
 
@@ -1287,6 +1309,7 @@ class HlsSegment:
 @dataclass
 class HlsPlaylist:
     url: str
+    request_headers: dict[str, str] = field(default_factory=dict)
     variants: list[dict[str, Any]] = field(default_factory=list)
     audio_tracks: list[dict[str, Any]] = field(default_factory=list)
     key_urls: list[str] = field(default_factory=list)
@@ -1300,7 +1323,18 @@ class HlsPlaylist:
     protection: str = "clear"
 
 
-def fetch_manifest(url: str, headers: dict[str, str], cancel: threading.Event | None = None) -> str:
+@dataclass(frozen=True)
+class ManifestFetchResult:
+    text: str
+    final_url: str
+    request_headers: dict[str, str]
+
+
+def fetch_manifest(
+    url: str,
+    headers: dict[str, str],
+    cancel: threading.Event | None = None,
+) -> ManifestFetchResult:
     cancel = cancel or threading.Event()
     last_error: Exception | None = None
     for attempt in range(4):
@@ -1309,7 +1343,11 @@ def fetch_manifest(url: str, headers: dict[str, str], cancel: threading.Event | 
         response = None
         try:
             response = request(url, headers, timeout=30)
-            return read_limited(response, MAX_MANIFEST).decode("utf-8-sig", "replace")
+            return ManifestFetchResult(
+                text=read_limited(response, MAX_MANIFEST).decode("utf-8-sig", "replace"),
+                final_url=valid_url(response.geturl()),
+                request_headers=dict(getattr(response, "_fluxcatch_request_headers", {})),
+            )
         except Cancelled:
             raise
         except NetworkPolicyDownloadError:
@@ -1924,16 +1962,24 @@ def select_hls_media(
     variant_url: str | None = None,
     cancel: threading.Event | None = None,
 ) -> tuple[HlsPlaylist, str, HlsPlaylist | None, dict[str, Any] | None]:
-    text = fetch_manifest(url, headers, cancel)
-    playlist = parse_hls(text, url)
+    fetched = fetch_manifest(url, headers, cancel)
+    text = fetched.text
+    playlist = parse_hls(text, fetched.final_url)
+    playlist.request_headers = fetched.request_headers
     master: HlsPlaylist | None = None
     selected: dict[str, Any] | None = None
     if playlist.variants:
         master = playlist
         selected = next((item for item in playlist.variants if variant_url and item["url"] == variant_url), None)
         selected = selected or max(playlist.variants, key=lambda item: (item["height"], item["bandwidth"]))
-        text = fetch_manifest(selected["url"], scope_subresource_headers(url, [selected["url"]], headers), cancel)
-        playlist = parse_hls(text, selected["url"])
+        fetched = fetch_manifest(
+            selected["url"],
+            scope_subresource_headers(master.url, [selected["url"]], master.request_headers),
+            cancel,
+        )
+        text = fetched.text
+        playlist = parse_hls(text, fetched.final_url)
+        playlist.request_headers = fetched.request_headers
     return playlist, text, master, selected
 
 
@@ -2023,7 +2069,12 @@ def hls_fast_download(
             response = None
             attempt_bytes = 0
             try:
-                response = request(segment.url, scope_subresource_headers(url, [segment.url], headers), timeout=45, extra=extra)
+                response = request(
+                    segment.url,
+                    scope_subresource_headers(playlist.url, [segment.url], playlist.request_headers),
+                    timeout=45,
+                    extra=extra,
+                )
                 if segment.byte_range:
                     amount, offset = map(int, segment.byte_range.split("@", 1))
                     validate_range_response(response, offset, offset + amount - 1)
@@ -2827,17 +2878,17 @@ class Host:
                 if not self.ffmpeg:
                     raise DownloadError("DASH download requires FFmpeg")
                 dash_manifest = fetch_manifest(url, headers, cancel)
-                if dash_is_protected(dash_manifest):
+                if dash_is_protected(dash_manifest.text):
                     raise DownloadError("Protected DASH is metadata-only")
                 try:
                     # Always download MPD children through the pinned native
                     # client, then give FFmpeg local files only.  Availability
                     # of FFmpeg's own DASH demuxer never weakens this boundary.
                     target = dash_static_download(
-                        url,
-                        dash_manifest,
+                        dash_manifest.final_url,
+                        dash_manifest.text,
                         target,
-                        headers,
+                        dash_manifest.request_headers,
                         concurrent_fragments,
                         cancel,
                         progress,
