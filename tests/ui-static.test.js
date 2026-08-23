@@ -54,27 +54,27 @@ test("options fields retain programmatic labels and keyboard-focusable switches"
 
 test("download settings explain their effect in user-facing language", () => {
   const fields = [
-    ["concurrentFragments", "concurrentFragmentsHelp", "同时下载几个视频片段", /一个视频通常由许多小片段组成。这里设置一次同时下载几个片段；推荐 8。数值越大不一定越快，下载出错时可改为 4。/],
-    ["concurrentRanges", "concurrentRangesHelp", "大文件同时下载几部分", /开启“自动加速大文件”后，较大的 MP4、MP3 等文件会拆开下载。这里设置一次同时下载几部分；推荐 8。数值越大不一定越快，下载出错时可改为 4。/],
-    ["outputContainer", "outputContainerHelp", "下载文件保存格式", /推荐 MP4，兼容性最好；合并流媒体或转换格式时生效/]
+    ["concurrentFragments", "concurrentFragmentsHelp", "HLS 视频片段并发数", /同时获取的视频片段数量，允许 1–24/],
+    ["concurrentRanges", "concurrentRangesHelp", "直接文件 Range 并发数", /大文件分段同时获取的数量，允许 1–24/],
+    ["outputContainer", "outputContainerHelp", "默认保存格式", /推荐 MP4，兼容性最好；合并流媒体或转换格式时生效/]
   ];
   for (const [id, helperId, label, helper] of fields) {
     assert.match(optionsHtml, new RegExp(`<label\\s+for="${id}">${label}</label>`));
-    assert.match(optionsHtml, new RegExp(`<(?:input|select)\\s+id="${id}"[^>]+aria-describedby="${helperId}"`));
-    assert.match(optionsHtml, new RegExp(`<small\\s+id="${helperId}"\\s+class="field-help">[^<]+</small>`));
+    assert.match(optionsHtml, new RegExp(`<(?:input|select)\\s+id="${id}"[^>]+aria-describedby="${helperId}`));
+    assert.match(optionsHtml, new RegExp(`<p\\s+id="${helperId}"\\s+class="field-help">[^<]+</p>`));
     assert.match(optionsHtml, helper);
   }
   assert.doesNotMatch(optionsHtml, /HLS 分片并发数|直接文件连接数|流媒体同时下载数量|大文件同时连接数量|大文件使用多连接加速|默认容器|直播录制时长（秒，0 为手动）/);
   assert.match(optionsHtml, /每次下载前选择保存位置/);
   assert.match(optionsHtml, /自动加速大文件/);
-  assert.match(optionsHtml, /关闭后由浏览器普通下载/);
+  assert.match(optionsHtml, /源站支持 Range.*高速下载功能可用/);
   assert.match(optionsHtml, /下载完成或失败时提醒我/);
   assert.match(optionsHtml, /id="allowPrivateNetworkMedia"/);
-  assert.match(optionsHtml, /允许本地网络媒体/);
-  assert.match(optionsHtml, /云服务元数据地址和保留网络始终禁止访问/);
+  assert.match(optionsHtml, /允许访问局域网媒体/);
+  assert.match(optionsHtml, /云 metadata、link-local、multicast、unspecified 与 reserved 目标/);
   assert.match(optionsHtml, /id="autoEnrichSiteQuality"/);
-  assert.match(optionsHtml, /自动补全站点画质/);
-  assert.match(optionsHtml, /使用你当前的登录会话，请求该站点自己的播放信息接口/);
+  assert.match(optionsHtml, /自动补全支持站点的画质/);
+  assert.match(optionsHtml, /使用当前站点登录会话，请求代码中固定的播放信息接口/);
   assert.match(optionsJs, /allowPrivateNetworkMedia: form\.allowPrivateNetworkMedia\.checked/);
   assert.match(optionsJs, /autoEnrichSiteQuality: form\.autoEnrichSiteQuality\.checked/);
   assert.match(optionsJs, /liveDuration: 0/);
@@ -83,11 +83,15 @@ test("download settings explain their effect in user-facing language", () => {
   for (const deadControl of ["liveDuration", "youtubeEnabled", "ytdlpStatus", "ytdlpRefreshButton", "ytdlpGuide"]) {
     assert.doesNotMatch(optionsHtml, new RegExp(`id="${deadControl}"`));
   }
-  assert.doesNotMatch(`${optionsHtml}\n${optionsJs}`, /yt-dlp|安装 yt-dlp|refreshYtdlp|ytdlpNetworkDisabled/);
-  assert.match(optionsCss, /\.field-help\{[^}]*color:var\(--muted\)[^}]*line-height:1\.45/);
-  assert.match(optionsHtml, /id="diagnosticsHeading"/);
+  assert.doesNotMatch(optionsHtml, /id="(?:refreshYtdlp|ytdlpNetworkDisabled|youtubeEnabled|liveDuration)"/);
+  assert.match(optionsHtml, /id="capabilityYtDlp"/);
+  assert.match(optionsCss, /\.field-help\{[^}]*color:var\(--muted\)[^}]*line-height:1\.55/);
+  assert.match(optionsHtml, /id="runtimeHeading"/);
   assert.match(optionsHtml, /id="copyDiagnosticsButton"/);
   assert.match(optionsHtml, /id="capabilityList"/);
+  assert.match(optionsHtml, /id="privateNetworkDialog"/);
+  assert.equal((optionsHtml.match(/<fieldset\b/g) || []).length, 6);
+  assert.match(optionsHtml, /class="save-btn" disabled/);
   for (const feature of ["directMedia", "staticHls", "staticDash", "bilibiliDashPair", "liveHls", "encryptedHls", "separateAudioHls", "externalToolNetwork", "remoteThumbnails"]) {
     assert.match(optionsJs, new RegExp(`${feature}:`));
   }
