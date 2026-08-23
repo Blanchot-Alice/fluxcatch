@@ -6,6 +6,8 @@ test("host status exposes capabilities without executable paths, probe errors or
   const status = hostStatusForUi({
     connected: true,
     version: "0.2.4",
+    protocolVersion: 1,
+    capabilityProfileVersion: 1,
     ffmpeg: true,
     capabilities: {
       ffmpeg: {
@@ -26,11 +28,15 @@ test("host status exposes capabilities without executable paths, probe errors or
     lastError: "failed at /opt/homebrew/bin/STATUS_PATH token=STATUS_SECRET",
     future: "STATUS_FUTURE"
   });
-  assert.deepEqual(Object.keys(status).sort(), ["capabilities", "connected", "ffmpeg", "lastError", "needsPermission", "version"].sort());
+  assert.deepEqual(Object.keys(status).sort(), [
+    "capabilities", "capabilityProfileCompatible", "capabilityProfileVersion", "compatible", "connected", "ffmpeg",
+    "lastError", "needsPermission", "protocolCompatible", "protocolVersion", "version", "versionCompatible"
+  ].sort());
   assert.deepEqual(Object.keys(status.capabilities).sort(), ["dashPair", "dashPlanner", "ffmpeg", "ytdlp"].sort());
   assert.deepEqual(Object.keys(status.capabilities.ffmpeg).sort(), ["available", "demuxers", "encoders", "networkInput", "version"].sort());
   assert.equal(status.capabilities.ffmpeg.networkInput, false);
   assert.equal(status.capabilities.ytdlp.networkDisabled, true);
+  assert.equal(status.compatible, true);
   assert.doesNotMatch(JSON.stringify(status), /FFMPEG_PATH|PROBE_SECRET|DEMUX_SECRET|FFMPEG_FUTURE|YTDLP_PATH|YTDLP_PROBE|CAPABILITY_FUTURE|STATUS_PATH|STATUS_SECRET|STATUS_FUTURE/);
 });
 
@@ -41,6 +47,15 @@ test("host status does not turn an unknown network gate into explicit permission
   });
   assert.equal(status.capabilities.ytdlp.available, true);
   assert.equal(Object.hasOwn(status.capabilities.ytdlp, "networkDisabled"), false);
+  assert.equal(status.compatible, false, "a legacy host without protocol metadata fails closed");
+});
+
+test("host compatibility requires exact extension, protocol and profile versions", () => {
+  const base = { connected: true, version: "0.2.4", protocolVersion: 1, capabilityProfileVersion: 1 };
+  assert.equal(hostStatusForUi(base).compatible, true);
+  assert.equal(hostStatusForUi({ ...base, version: "0.2.3" }).versionCompatible, false);
+  assert.equal(hostStatusForUi({ ...base, protocolVersion: 2 }).protocolCompatible, false);
+  assert.equal(hostStatusForUi({ ...base, capabilityProfileVersion: 2 }).capabilityProfileCompatible, false);
 });
 
 test("host status redacts local paths containing spaces through the end of the status line", () => {

@@ -65,12 +65,16 @@ test("download settings explain their effect in user-facing language", () => {
   assert.match(optionsHtml, /id="liveDuration"[^>]+disabled[^>]+aria-disabled="true"/);
   assert.match(optionsJs, /liveDuration: 0/);
   assert.match(optionsJs, /let ytdlpNetworkDisabled = true/);
-  assert.match(optionsJs, /const EXTERNAL_TOOL_NETWORK_ENABLED = false/);
-  assert.match(optionsJs, /EXTERNAL_TOOL_NETWORK_ENABLED[\s\S]*host\.connected === true[\s\S]*ytdlp\.available === true[\s\S]*ytdlp\.networkDisabled === false/);
+  assert.match(optionsJs, /import \{ BUILD_PROFILE, HOST_MISMATCH_MESSAGE \} from "\.\.\/lib\/build-profile\.js"/);
+  assert.match(optionsJs, /BUILD_PROFILE\.features\.externalToolNetwork[\s\S]*host\.connected === true[\s\S]*ytdlp\.available === true[\s\S]*ytdlp\.networkDisabled === false/);
   assert.match(optionsJs, /form\.youtubeEnabled\.disabled = ytdlpNetworkDisabled/);
   assert.match(optionsJs, /youtubeEnabled: form\.youtubeEnabled\.checked && !ytdlpNetworkDisabled/);
   assert.match(optionsHtml, /0\.2\.4 暂停外部引擎联网，等待受控网络代理/);
   assert.match(optionsCss, /\.field-help\{[^}]*color:var\(--muted\)[^}]*line-height:1\.45/);
+  assert.match(optionsHtml, /id="diagnosticsHeading"/);
+  assert.match(optionsHtml, /id="copyDiagnosticsButton"/);
+  assert.match(optionsJs, /type: "GET_DIAGNOSTICS"/);
+  assert.match(optionsJs, /navigator\.clipboard\.writeText\(JSON\.stringify\(diagnostics, null, 2\)\)/);
 });
 
 test("popup tabs expose complete ARIA state and keyboard navigation", () => {
@@ -89,10 +93,17 @@ test("popup requests the controlled native path for candidates not observed by t
 });
 
 test("popup reports the 0.2.4 external-engine network pause instead of installation advice", () => {
-  assert.match(popupJs, /const EXTERNAL_TOOL_NETWORK_ENABLED = false/);
-  assert.match(popupJs, /!EXTERNAL_TOOL_NETWORK_ENABLED \|\| ytdlp\.networkDisabled !== false/);
-  assert.match(popupJs, /EXTERNAL_TOOL_NETWORK_ENABLED && Boolean\(ytdlp\.available\) && !ytdlpNetworkDisabled/);
+  assert.match(popupJs, /import \{ BUILD_PROFILE, HOST_MISMATCH_MESSAGE \} from "\.\.\/lib\/build-profile\.js"/);
+  assert.match(popupJs, /!BUILD_PROFILE\.features\.externalToolNetwork \|\| ytdlp\.networkDisabled !== false/);
+  assert.match(popupJs, /BUILD_PROFILE\.features\.externalToolNetwork && Boolean\(ytdlp\.available\) && !ytdlpNetworkDisabled/);
   assert.match(popupJs, /0\.2\.4 暂停外部引擎联网，等待受控网络代理/);
+});
+
+test("popup and side panel report native build mismatches without hiding ordinary downloads", () => {
+  for (const source of [popupJs, sidepanelJs]) {
+    assert.match(source, /HOST_MISMATCH_MESSAGE/);
+    assert.match(source, /status\.connected && status\.compatible !== true/);
+  }
 });
 
 test("HLS UI exposes the clear static VOD boundary and blocks unsupported modes", () => {

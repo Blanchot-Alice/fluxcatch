@@ -1,5 +1,6 @@
 import { humanBytes } from "../lib/media.js";
 import { loadPrivacySafeThumbnail } from "../lib/thumbnail.js";
+import { HOST_MISMATCH_MESSAGE } from "../lib/build-profile.js";
 
 const state = {
   tabId: null,
@@ -327,8 +328,13 @@ function createJobRow(job) {
 function updateHost(status = {}) {
   state.hostStatus = status;
   const dot = $("#hostDot");
-  dot.className = `status-dot ${status.connected ? "ok" : status.lastError ? "bad" : ""}`;
-  $("#hostTitle").textContent = status.connected ? "高速下载功能已就绪" : "高速下载功能暂未就绪";
+  const mismatch = status.connected && status.compatible !== true;
+  dot.className = `status-dot ${status.connected && !mismatch ? "ok" : status.lastError || mismatch ? "bad" : ""}`;
+  $("#hostTitle").textContent = mismatch ? "高速下载功能版本不匹配" : status.connected ? "高速下载功能已就绪" : "高速下载功能暂未就绪";
+  if (mismatch) {
+    $("#hostDetail").textContent = HOST_MISMATCH_MESSAGE;
+    return;
+  }
   if (!status.connected) {
     $("#hostDetail").textContent = status.needsPermission
       ? "需要加速、合并或转换格式时会请你授权"

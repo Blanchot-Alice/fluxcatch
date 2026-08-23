@@ -122,6 +122,16 @@ try {
     version: manifest.version
   }, "runtime manifest differs from the checked-in manifest");
   report.extension.runtimeManifest = runtimeManifest;
+  const buildInfo = await control(`async () => chrome.runtime.sendMessage({ type: "GET_DIAGNOSTICS" })`);
+  assert.equal(buildInfo?.ok, true, buildInfo?.error || "GET_DIAGNOSTICS failed");
+  assert.equal(buildInfo.diagnostics?.extension?.version, manifest.version, "runtime build version differs from manifest");
+  assert.equal(buildInfo.diagnostics?.extension?.id, EXPECTED_EXTENSION_ID, "runtime build identity has the wrong extension ID");
+  assert.equal(buildInfo.diagnostics?.extension?.channel, "github", "runtime build channel mismatch");
+  assert.equal(buildInfo.diagnostics?.extension?.commit, "development", "unpacked E2E must identify a development source tree");
+  assert.equal(buildInfo.diagnostics?.capabilities?.externalToolNetwork, false, "stable external-tool gate must stay closed");
+  assert.equal(buildInfo.diagnostics?.capabilities?.remoteThumbnails, false, "stable remote thumbnail gate must stay closed");
+  report.extension.buildIdentity = buildInfo.diagnostics.extension;
+  report.extension.capabilityProfile = buildInfo.diagnostics.capabilities;
 
   await auditExistingExtensionPage("options", controlPage, 720, 900, `(() => ({
     title: document.title,

@@ -54,6 +54,8 @@ from fluxcatch_network_policy import (  # noqa: E402 - local host package
 )
 
 VERSION = "0.2.4"
+NATIVE_PROTOCOL_VERSION = 1
+CAPABILITY_PROFILE_VERSION = 1
 MAX_MESSAGE = 1024 * 1024
 MAX_MANIFEST = 4 * 1024 * 1024
 ALLOWED_HEADERS = {"accept", "authorization", "cookie", "origin", "referer", "user-agent"}
@@ -2670,6 +2672,8 @@ class Host:
                 "type": "pong",
                 "requestId": message.get("requestId"),
                 "version": VERSION,
+                "protocolVersion": NATIVE_PROTOCOL_VERSION,
+                "capabilityProfileVersion": CAPABILITY_PROFILE_VERSION,
                 "ffmpeg": bool(self.ffmpeg),
                 "capabilities": {
                     "ffmpeg": self.ffmpeg_capabilities.as_dict(),

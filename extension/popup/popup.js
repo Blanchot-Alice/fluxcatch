@@ -1,5 +1,6 @@
 import { MEDIA_EXTENSIONS, humanBytes, sanitizeFilename } from "../lib/media.js";
 import { loadPrivacySafeThumbnail } from "../lib/thumbnail.js";
+import { BUILD_PROFILE, HOST_MISMATCH_MESSAGE } from "../lib/build-profile.js";
 
 const SITE_LABELS = { instagram: "Instagram", twitter: "X", youtube: "YouTube" };
 const state = { tabId: null, windowId: null, items: [], settings: {}, hostStatus: {}, jobs: new Map(), selected: null, probes: new Map(), filter: "all", toastTimer: null, refreshSequence: 0 };
@@ -10,7 +11,6 @@ const jobsList = $("#jobsList");
 const jobsEmpty = $("#jobsEmpty");
 const dialog = $("#downloadDialog");
 const port = chrome.runtime.connect({ name: "fluxcatch-popup" });
-const EXTERNAL_TOOL_NETWORK_ENABLED = false;
 
 function isStreamKind(value) {
   const kind = typeof value === "string" ? value : value?.kind;
@@ -243,8 +243,8 @@ function openDownloadDialog(item, { probeWarning = false } = {}) {
   syncVariantVisibility();
   const manifestBlockReason = manifestDownloadBlockReason(probe);
   const ytdlp = state.hostStatus?.capabilities?.ytdlp || {};
-  const ytdlpNetworkDisabled = item.kind === "youtube" && (!EXTERNAL_TOOL_NETWORK_ENABLED || ytdlp.networkDisabled !== false);
-  const ytdlpReady = item.kind === "youtube" ? EXTERNAL_TOOL_NETWORK_ENABLED && Boolean(ytdlp.available) && !ytdlpNetworkDisabled : true;
+  const ytdlpNetworkDisabled = item.kind === "youtube" && (!BUILD_PROFILE.features.externalToolNetwork || ytdlp.networkDisabled !== false);
+  const ytdlpReady = item.kind === "youtube" ? BUILD_PROFILE.features.externalToolNetwork && Boolean(ytdlp.available) && !ytdlpNetworkDisabled : true;
   $("#confirmDownload").disabled = Boolean(manifestBlockReason) || (item.kind === "youtube" && !ytdlpReady);
   $("#dialogNote").style.color = manifestBlockReason || (item.kind === "youtube" && !ytdlpReady) ? "var(--warning-strong)" : "";
   $("#dialogNote").textContent = item.kind === "youtube"
@@ -304,7 +304,7 @@ async function submitDownload(event) {
   } finally {
     const probe = state.probes.get(mediaKey(item));
     const ytdlp = state.hostStatus?.capabilities?.ytdlp || {};
-    const ytdlpReady = item.kind !== "youtube" || (EXTERNAL_TOOL_NETWORK_ENABLED && Boolean(ytdlp.available) && ytdlp.networkDisabled === false);
+    const ytdlpReady = item.kind !== "youtube" || (BUILD_PROFILE.features.externalToolNetwork && Boolean(ytdlp.available) && ytdlp.networkDisabled === false);
     confirm.disabled = Boolean(manifestDownloadBlockReason(probe)) || !ytdlpReady;
   }
 }
@@ -394,13 +394,19 @@ function announceJobChange(previous, current) {
 }
 
 function updateHost(status = {}) {
+  state.hostStatus = status;
   const dot = $("#hostDot");
-  dot.className = `dot ${status.connected ? "ok" : status.lastError ? "bad" : ""}`;
-  $("#hostTitle").textContent = status.connected ? "高速下载功能已就绪" : "高速下载功能暂未就绪";
+  const mismatch = status.connected && status.compatible !== true;
+  dot.className = `dot ${status.connected && !mismatch ? "ok" : status.lastError || mismatch ? "bad" : ""}`;
+  $("#hostTitle").textContent = mismatch ? "高速下载功能版本不匹配" : status.connected ? "高速下载功能已就绪" : "高速下载功能暂未就绪";
   const installHelp = $("#installHelpButton");
   // The connect attempt itself failed (engine missing / not registered):
   // point the user at the install guidance instead of a bare error.
-  installHelp.hidden = Boolean(status.connected || status.needsPermission || !status.lastError);
+  installHelp.hidden = Boolean((status.connected && !mismatch) || status.needsPermission || (!status.lastError && !mismatch));
+  if (mismatch) {
+    $("#hostDetail").textContent = HOST_MISMATCH_MESSAGE;
+    return;
+  }
   if (!status.connected) {
     $("#hostDetail").textContent = status.needsPermission
       ? "需要加速、合并或转换格式时会请你授权"

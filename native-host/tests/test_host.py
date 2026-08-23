@@ -608,6 +608,8 @@ class HostTests(unittest.TestCase):
                 self.assertEqual(message["capabilities"]["dashPlanner"], "static-v1")
                 self.assertEqual(message["capabilities"]["dashPair"], "direct-v1")
                 self.assertEqual(message["capabilities"]["externalNetworkProcesses"], "disabled")
+                self.assertEqual(message["protocolVersion"], host.NATIVE_PROTOCOL_VERSION)
+                self.assertEqual(message["capabilityProfileVersion"], host.CAPABILITY_PROFILE_VERSION)
             finally:
                 native.close()
 

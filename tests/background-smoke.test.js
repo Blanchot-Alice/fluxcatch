@@ -263,6 +263,7 @@ test("MV3 worker registers network and message listeners during module load", as
     runtime: {
       id: extensionId,
       getURL: (path = "") => `chrome-extension://${extensionId}/${path}`,
+      getManifest: () => ({ name: "FluxCatch", version: "0.2.4" }),
       onConnect,
       onMessage,
       lastError: null,
@@ -276,7 +277,9 @@ test("MV3 worker registers network and message listeners during module load", as
           if (message.type === "ping") queueMicrotask(() => nativeOnMessage.listeners[0]?.fn({
             type: "pong",
             requestId: message.requestId,
-            version: "0.2.0",
+            version: "0.2.4",
+            protocolVersion: 1,
+            capabilityProfileVersion: 1,
             ffmpeg: true,
             path: "/Users/private/HOST_TOP_PATH",
             capabilities: {
@@ -1227,12 +1230,55 @@ test("MV3 worker registers network and message listeners during module load", as
   assert.ok(pingResponses.every((response) => response.hostStatus.capabilities?.ffmpeg?.available));
   assert.ok(pingResponses.every((response) => response.hostStatus.capabilities?.ytdlp?.networkDisabled === false),
     "only an explicit networkDisabled=false capability opens the future adapter gate");
+  assert.ok(pingResponses.every((response) => response.hostStatus.compatible === true));
+  const diagnosticsResponse = await sendRuntimeMessage({ type: "GET_DIAGNOSTICS" });
+  assert.equal(diagnosticsResponse.diagnostics.extension.version, "0.2.4");
+  assert.equal(diagnosticsResponse.diagnostics.extension.id, extensionId);
+  assert.equal(diagnosticsResponse.diagnostics.native.compatible, true);
+  assert.doesNotMatch(JSON.stringify(diagnosticsResponse),
+    /HOST_TOP_PATH|FFMPEG_PATH|FFMPEG_PROBE_SECRET|YTDLP_PATH|YTDLP_PROBE_SECRET|https?:\/\//,
+    "copied diagnostics expose no paths, probe details or URLs");
   assert.doesNotMatch(JSON.stringify({ pingResponses, uiMessages }),
     /HOST_TOP_PATH|FFMPEG_PATH|FFMPEG_PROBE_SECRET|FFMPEG_FUTURE_SECRET|YTDLP_PATH|YTDLP_PROBE_SECRET|HOST_CAPABILITY_FUTURE|HOST_PONG_FUTURE/,
     "native status and pong broadcasts pass through an explicit public allowlist");
   assert.ok(uiMessages.filter((message) => message.type === "HOST_EVENT")
     .every((message) => JSON.stringify(Object.keys(message.event || {}).sort()) === JSON.stringify(["type"])),
   "native task payloads never ride the HOST_EVENT compatibility channel");
+
+  nativeOnMessage.listeners[0].fn({
+    type: "pong",
+    requestId: "mismatch-audit",
+    version: "0.2.3",
+    protocolVersion: 1,
+    capabilityProfileVersion: 1,
+    ffmpeg: true,
+    capabilities: { ffmpeg: { available: true } }
+  });
+  const mismatchStatus = await sendRuntimeMessage({ type: "GET_JOBS" });
+  assert.equal(mismatchStatus.hostStatus.connected, true);
+  assert.equal(mismatchStatus.hostStatus.compatible, false);
+  const mismatchDownload = await sendRuntimeMessage({
+    type: "DOWNLOAD",
+    tabId: 9,
+    candidate,
+    options: { filename: "mismatch.mp4", useNativeForDirect: true }
+  });
+  assert.equal(mismatchDownload.ok, false);
+  assert.match(mismatchDownload.error, /版本不匹配/);
+  nativeOnMessage.listeners[0].fn({
+    type: "pong",
+    requestId: "compatible-reset",
+    version: "0.2.4",
+    protocolVersion: 1,
+    capabilityProfileVersion: 1,
+    ffmpeg: true,
+    capabilities: {
+      ffmpeg: { available: true, version: "8.1", demuxers: { hls: true, dash: false }, encoders: { libmp3lame: true } },
+      ytdlp: { available: true, networkDisabled: false },
+      dashPlanner: "static-v1",
+      dashPair: "direct-v1"
+    }
+  });
 
   const biliStart = await sendRuntimeMessage({
     type: "DOWNLOAD",
@@ -1325,6 +1371,8 @@ test("MV3 worker registers network and message listeners during module load", as
     type: "pong",
     requestId: "network-disabled-audit",
     version: "0.2.4",
+    protocolVersion: 1,
+    capabilityProfileVersion: 1,
     ffmpeg: true,
     capabilities: {
       ffmpeg: { available: true, networkInput: false, version: "8.1" },
@@ -1338,6 +1386,8 @@ test("MV3 worker registers network and message listeners during module load", as
     type: "pong",
     requestId: "network-enabled-fixture-reset",
     version: "0.2.4",
+    protocolVersion: 1,
+    capabilityProfileVersion: 1,
     ffmpeg: true,
     capabilities: { ytdlp: { available: true, networkDisabled: false, version: "2026.08" } }
   });

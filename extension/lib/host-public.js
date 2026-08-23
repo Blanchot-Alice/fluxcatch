@@ -60,6 +60,10 @@ function protocolVersion(value, allowed) {
   return allowed.has(clean) ? clean : null;
 }
 
+function positiveProtocol(value) {
+  return Number.isInteger(value) && value > 0 && value <= 1_000 ? value : null;
+}
+
 export function hostStatusForUi(status = {}) {
   const capabilities = status.capabilities && typeof status.capabilities === "object"
     ? {
@@ -69,9 +73,16 @@ export function hostStatusForUi(status = {}) {
         dashPair: protocolVersion(status.capabilities.dashPair, new Set(["direct-v1"]))
       }
     : null;
+  const compatibility = hostCompatibility(status);
   return {
     connected: Boolean(status.connected),
     version: cleanVersion(status.version),
+    protocolVersion: positiveProtocol(status.protocolVersion),
+    capabilityProfileVersion: positiveProtocol(status.capabilityProfileVersion),
+    versionCompatible: compatibility.versionCompatible,
+    protocolCompatible: compatibility.protocolCompatible,
+    capabilityProfileCompatible: compatibility.capabilityProfileCompatible,
+    compatible: compatibility.compatible,
     ffmpeg: Boolean(status.ffmpeg),
     capabilities,
     needsPermission: Boolean(status.needsPermission),
@@ -86,3 +97,4 @@ export function hostEventForUi(event = {}) {
   const type = cleanText(event.type, 32).toLowerCase();
   return { type: HOST_EVENT_TYPES.has(type) ? type : "host-event" };
 }
+import { hostCompatibility } from "./build-profile.js";

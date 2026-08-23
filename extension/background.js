@@ -16,6 +16,7 @@ import { parseDash } from "./lib/dash.js";
 import { candidateForPersistence, candidateForUi, previewForPersistence } from "./lib/candidate-public.js";
 import { CANDIDATE_PROVENANCES, evaluateNetworkRequest, requireNetworkRequest } from "./lib/network-policy.js";
 import { hostEventForUi, hostStatusForUi } from "./lib/host-public.js";
+import { BUILD_PROFILE, HOST_MISMATCH_MESSAGE, buildDiagnostics, hostCompatibility } from "./lib/build-profile.js";
 
 const HOST_NAME = "io.github.blanchot_alice.fluxcatch";
 const EXTENSION_ORIGIN = chrome.runtime.getURL("");
@@ -41,7 +42,6 @@ const MANIFEST_SELECTOR_ORIGIN = "https://fluxcatch.invalid";
 // 0.2.4 has no pinned broker for external tools. Keep the adapter source for
 // the future GitHub build, but compile every setting/candidate/download gate
 // closed regardless of what an older or replacement native host reports.
-const EXTERNAL_TOOL_NETWORK_ENABLED = false;
 const SENSITIVE_REQUEST_HEADERS = new Set(["authorization", "cookie", "origin", "referer"]);
 const UI_PORT_NAMES = new Set(["fluxcatch-popup", "fluxcatch-sidepanel"]);
 const JOB_STATUSES = new Set(["queued", "starting", "downloading", "remuxing", "completed", "failed", "cancelled"]);
@@ -164,7 +164,16 @@ let headerPruneTimer = null;
 let nativePort = null;
 let nativeConnectPromise = null;
 const pendingHostPings = new Map();
-let hostStatus = { connected: false, version: null, ffmpeg: false, capabilities: null, needsPermission: true, lastError: null };
+let hostStatus = {
+  connected: false,
+  version: null,
+  protocolVersion: null,
+  capabilityProfileVersion: null,
+  ffmpeg: false,
+  capabilities: null,
+  needsPermission: true,
+  lastError: null
+};
 
 // Register listeners synchronously, but make every state consumer wait for the
 // MV3 session restore so early webRequest/content events cannot be overwritten.
@@ -407,10 +416,10 @@ async function handleMessage(message, sender) {
     }
     case "PING_HOST": {
       if (!await hasNativePermission()) {
-        hostStatus = { connected: false, version: null, ffmpeg: false, capabilities: null, needsPermission: true, lastError: null };
+        hostStatus = disconnectedHostStatus({ needsPermission: true });
         return { hostStatus: hostStatusForUi(hostStatus) };
       }
-      const port = await ensureNativePort();
+      const port = await ensureNativePort({ requireCompatibility: false });
       // A live port answers with capabilities probed when its process started;
       // yt-dlp may have been installed or upgraded since. Force a fresh ping
       // round-trip so the UI's "重新检查" reports the machine's current state
@@ -445,6 +454,14 @@ async function handleMessage(message, sender) {
     }
     case "GET_SETTINGS":
       return { settings: await getSettings() };
+    case "GET_DIAGNOSTICS":
+      return {
+        diagnostics: buildDiagnostics({
+          extensionId: chrome.runtime.id,
+          manifestVersion: chrome.runtime.getManifest().version,
+          hostStatus
+        })
+      };
     case "SAVE_SETTINGS": {
       const requested = normalizeSettings(message.settings);
       const settings = {
@@ -2302,12 +2319,17 @@ async function startDownload(candidate, options, tabId) {
   return { method: "native", jobId };
 }
 
-async function ensureNativePort() {
-  if (nativePort && hostStatus.connected) return nativePort;
+async function ensureNativePort({ requireCompatibility = true } = {}) {
+  if (nativePort && hostStatus.connected) {
+    if (requireCompatibility) requireCompatibleNativeHost();
+    return nativePort;
+  }
   if (nativeConnectPromise) return nativeConnectPromise;
   nativeConnectPromise = openNativePort();
   try {
-    return await nativeConnectPromise;
+    const port = await nativeConnectPromise;
+    if (requireCompatibility) requireCompatibleNativeHost();
+    return port;
   } finally {
     nativeConnectPromise = null;
   }
@@ -2319,7 +2341,7 @@ async function openNativePort() {
   try {
     port = chrome.runtime.connectNative(HOST_NAME);
   } catch (error) {
-    hostStatus = { connected: false, version: null, ffmpeg: false, capabilities: null, needsPermission: false, lastError: error.message };
+    hostStatus = disconnectedHostStatus({ lastError: error.message });
     throw new Error(`本地引擎尚未安装或未注册：${error.message}`);
   }
   nativePort = port;
@@ -2328,6 +2350,8 @@ async function openNativePort() {
       hostStatus = {
         connected: true,
         version: message.version || null,
+        protocolVersion: message.protocolVersion ?? null,
+        capabilityProfileVersion: message.capabilityProfileVersion ?? null,
         ffmpeg: Boolean(message.ffmpeg),
         capabilities: message.capabilities && typeof message.capabilities === "object" ? message.capabilities : null,
         needsPermission: false,
@@ -2343,7 +2367,7 @@ async function openNativePort() {
     rejectHostPings(port, new Error(error));
     if (nativePort !== port) return;
     nativePort = null;
-    hostStatus = { connected: false, version: null, ffmpeg: false, capabilities: null, needsPermission: false, lastError: error };
+    hostStatus = disconnectedHostStatus({ lastError: error });
     void handleNativeDisconnect(error);
   });
   try {
@@ -2352,7 +2376,7 @@ async function openNativePort() {
   } catch (error) {
     if (nativePort === port) {
       nativePort = null;
-      hostStatus = { connected: false, version: null, ffmpeg: false, capabilities: null, needsPermission: false, lastError: error.message };
+      hostStatus = disconnectedHostStatus({ lastError: error.message });
     }
     try { port.disconnect?.(); } catch { /* The failed port may already be closed. */ }
     throw error;
@@ -2973,10 +2997,27 @@ function reusableOpaqueId(value) {
 
 function ytdlpNetworkAllowed() {
   const ytdlp = hostStatus?.capabilities?.ytdlp;
-  return EXTERNAL_TOOL_NETWORK_ENABLED
+  return BUILD_PROFILE.features.externalToolNetwork
     && hostStatus?.connected === true
     && ytdlp?.available === true
     && ytdlp?.networkDisabled === false;
+}
+
+function disconnectedHostStatus({ needsPermission = false, lastError = null } = {}) {
+  return {
+    connected: false,
+    version: null,
+    protocolVersion: null,
+    capabilityProfileVersion: null,
+    ffmpeg: false,
+    capabilities: null,
+    needsPermission: Boolean(needsPermission),
+    lastError: lastError || null
+  };
+}
+
+function requireCompatibleNativeHost() {
+  if (hostCompatibility(hostStatus).compatible !== true) throw new Error(HOST_MISMATCH_MESSAGE);
 }
 
 function ytdlpNetworkDisabled() {

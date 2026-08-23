@@ -93,6 +93,20 @@
           </ol>
         </details>
       </section>
+      <section class="opt-section" aria-labelledby="diagnosticsHeading">
+        <h2 id="diagnosticsHeading"><span class="bar"></span>版本与诊断</h2>
+        <dl class="diagnostic-grid">
+          <div><dt>扩展版本</dt><dd id="diagnosticExtensionVersion">正在读取…</dd></div>
+          <div><dt>扩展 ID</dt><dd id="diagnosticExtensionId">正在读取…</dd></div>
+          <div><dt>构建</dt><dd id="diagnosticBuild">正在读取…</dd></div>
+          <div><dt>配套程序版本</dt><dd id="diagnosticNativeVersion">正在读取…</dd></div>
+          <div><dt>兼容状态</dt><dd id="diagnosticProtocol">正在读取…</dd></div>
+        </dl>
+        <div class="diagnostic-actions">
+          <p>复制内容只包含版本、构建、协议和能力状态，不包含网页、媒体、请求凭据或本机路径。</p>
+          <button id="copyDiagnosticsButton" type="button" class="secondary-btn">复制诊断信息</button>
+        </div>
+      </section>
       <div class="opt-actions"><span id="saveStatus" class="save-status" role="status" aria-live="polite" aria-atomic="true"></span><button type="submit" class="save-btn">保存设置</button></div>
     </form>
   </main>
