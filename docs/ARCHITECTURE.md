@@ -4,7 +4,7 @@
 
 1. `webRequest` classifies response URLs, MIME types, size, Range support, and content-disposition metadata.
 2. A gated, top-frame content script reads `video`, `audio`, `source`, and allowlisted site payloads. Script nodes are scanned once and mutation work is batched.
-3. The service worker validates isolated-world messages, records candidate provenance, and stores only an explicit persisted-candidate allowlist per tab in `chrome.storage.session`. Stable, allowlisted page identity parameters may remain; media resources with other query parameters and separately modelled signed track URLs stay memory-only instead of persisting reversible access tokens.
+3. The service worker validates isolated-world messages, records candidate provenance, and stores only an explicit persisted-candidate allowlist per tab in `chrome.storage.session`. Stable, allowlisted page identity parameters may remain; media resources with other query parameters and separately modelled signed track URLs stay memory-only instead of persisting reversible access tokens. Extension pages receive a `PublicCandidate` containing a non-executable `displayUrl`, redaction/copyability state, and opaque `id`, `kind`, and `generation`. Probe/download actions send only that reference; the service worker re-resolves the current private candidate and never accepts `displayUrl` as the target.
 4. HLS and DASH parsers expose manifest metadata to the popup and Side Panel. Protected manifests remain metadata-only.
 5. A bounded, redacted job snapshot (maximum 200 entries) stays in session storage so popup closure and service-worker suspension do not erase current task status.
 
@@ -26,21 +26,22 @@ Ordinary single files use `chrome.downloads.download` only after FluxCatch obser
 - Media bytes never travel through the Native Messaging channel.
 - HTTP Range responses require a matching `206` and `Content-Range`.
 - Version-2 multipart checkpoints bind SHA-256 digests of the canonical URL and entity validators, plus length and completed ranges. Legacy checkpoints are discarded; full URLs, paths, query strings, fragments, raw validator values, and request headers are never persisted.
-- Clear static HLS VOD playlists use the pinned native HTTP client for manifests and segments; FFmpeg receives local files only for remuxing or MP3 extraction. Live, AES-128/SAMPLE-AES, DRM, discontinuity, and separate-audio HLS structures fail closed pending support through the same pinned client.
-- DASH network reads always use the local static-manifest planner and pinned HTTP client; FFmpeg is used only on the downloaded local tracks. Unsupported MPD structures fail with a specific capability error.
+- Clear static HLS VOD playlists use the pinned native HTTP client for manifests and segments; FFmpeg receives local files only for remuxing or MP3 extraction. Relative manifests and segments resolve from each final response URL. Live, AES-128/SAMPLE-AES, DRM, discontinuity, and separate-audio HLS structures fail closed pending support through the same pinned client.
+- DASH network reads always use the local static-manifest planner and pinned HTTP client; relative resources resolve from the final MPD response URL and FFmpeg is used only on downloaded local tracks. Unsupported MPD structures fail with a specific capability error.
 - Direct DASH pairs use `mediaKind: "dash_pair"`: the selected video URL is `url`, the selected audio URL is `options.audioUrl`, optional `options.audioHeaders` remains scoped only to that audio URL, and `options.expiresAt` carries the earliest signed-URL expiry as Unix seconds or JavaScript milliseconds. Expiry is checked after executor queueing and again immediately before each track starts. Both complete tracks transfer in parallel before FFmpeg publishes an MP4 with stream copy; MP3 output downloads only the audio track before local encoding.
 - Signed DASH-pair transfers deliberately disable multipart resume checkpoints, so `upsig`, `deadline`, `token`, and other query parameters never reach crash-persistent checkpoint JSON. Host startup removes legacy `.fluxcatch-dash-pair-*` work directories before accepting jobs.
 - Completed output is staged privately and published without overwriting an existing path.
 
 ## Trust boundaries
 
-- Only credential-free `http:` and `https:` resource URLs are accepted.
-- A shared NetworkPolicy classifies each active request by purpose, provenance, and scope. DOM hints and site payloads cannot trigger arbitrary fetches; automatic manifest probes require an observed response, and adapter metadata uses fixed code-defined endpoints.
-- Public-network scope is the default. The extension rejects unsafe literal targets and untrusted active-fetch provenance; the native client checks DNS answers, pins the connected peer, and rechecks redirects and manifest children against loopback, private, link-local, multicast, unspecified, reserved, and metadata ranges. Explicit local-network opt-in does not permit metadata or reserved ranges. External processes receive local files only and cannot bypass the connector by opening network inputs.
-- Thumbnail requests are same-page, same-observed-media-origin, or adapter-image-host only and reject redirects; query-bearing preview URLs are removed at the UI/session boundary, and rejection falls back to the existing media-type artwork.
+- Active targets must use `http:` or `https:` and must not contain URL username/password credentials. Signed query URLs may exist only in private worker/native task state and are represented to extension pages by redacted display metadata and opaque references.
+- Both layers follow the same purpose/provenance/scope model but expose different security primitives. DOM hints and site payloads cannot trigger arbitrary fetches; automatic manifest probes require an observed response, and adapter metadata uses fixed code-defined endpoints. The extension validates schemes, literal hosts/IPs, provenance, purpose, origin allowlists, and user gestures; browser APIs do not expose DNS answers or the connected socket peer.
+- Public-network scope is the default. The native client validates DNS answers, pins the authorized peer, and rechecks redirects and manifest children against loopback, private, link-local, multicast, unspecified, reserved, and metadata ranges. Explicit local-network opt-in does not permit metadata or reserved ranges. External processes receive local files only and cannot bypass the connector by opening network inputs.
+- The stable profile has `remoteThumbnails=false`. Popup and Side Panel render packaged media-type tiles and make no page-derived preview request. The retained bounded raster-fetch implementation belongs to a future experimental profile and does not carry native DNS/peer guarantees.
 - The native host accepts no shell commands and no caller-chosen output directory.
+- Native downloads fail closed when extension version, native version, protocol version, or capability-profile version is missing or mismatched; ping and bounded diagnostics remain available to explain the mismatch.
 - Only a small allowlist of request headers can cross to the native host.
-- Sensitive headers are removed on cross-origin redirects and manifest-introduced subresources.
+- During native transfers, sensitive headers are removed on cross-origin redirects and manifest-introduced subresources. The effective header set can only lose credentials, so an A→B→A chain cannot restore them.
 - Direct DASH video/audio header sets are isolated, Cookies are excluded, and video credentials are never inherited by a cross-origin audio URL.
 - Manifest and Native Messaging payload sizes are bounded.
 - DRM, AES-128, SAMPLE-AES, and CENC are rejected; 0.2.4 does not download HLS key material.

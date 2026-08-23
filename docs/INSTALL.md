@@ -15,6 +15,8 @@ From the repository root:
 
 The checked-in manifest public key keeps the development extension ID stable. Do not overwrite this identity merely to test a draft upload. A future Chrome Web Store build must be generated from the public key and Item ID issued for that listing and paired with its own native-host manifest.
 
+Unpacked source reports commit `development` and no build timestamp. `npm run package` injects the current commit and UTC timestamp only into a temporary staging copy and verifies that `extension/` remains unchanged.
+
 ## Install the macOS native host
 
 ```bash
@@ -26,7 +28,7 @@ The installer creates a private runtime copy under `~/Library/Application Suppor
 
 Advanced downloads require Python 3.9+ and FFmpeg. FluxCatch uses its built-in pinned HTTP client for network transfers and gives FFmpeg local files only for merge, remux, and MP3 work. Static DASH support depends on the built-in planner. HLS download support in 0.2.4 is limited to clear static VOD; live, encrypted, discontinuous, and separate-audio playlists fail closed instead of handing a network URL to FFmpeg.
 
-The installer records FFmpeg as `FLUXCATCH_FFMPEG`. Advanced users may override the output directory with `FLUXCATCH_DOWNLOAD_DIR`. In 0.2.4, yt-dlp network execution is intentionally disabled until a pinned external-tool broker is available.
+The installer records FFmpeg as `FLUXCATCH_FFMPEG`. Advanced users may override the output directory with `FLUXCATCH_DOWNLOAD_DIR`. The stable GitHub profile exposes no YouTube or yt-dlp controls and never launches an external tool with a network URL. Installing yt-dlp does not alter the capability profile.
 
 Uninstall the host with:
 

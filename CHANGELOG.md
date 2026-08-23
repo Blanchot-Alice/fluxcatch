@@ -2,13 +2,17 @@
 
 ## 0.2.4 — 2026-08-23
 
-- Added fail-closed extension and native NetworkPolicy gates for active targets, redirects, DNS results, manifest children, and thumbnails; native HTTP connections pin authorized peers, private-network media requires explicit opt-in, and metadata/reserved ranges remain blocked. FFmpeg remains available for local post-processing, while direct FFmpeg/yt-dlp network input is gated until a pinned broker exists.
+- Split network guarantees by execution layer: the extension validates literal URL/host information, purpose, provenance, and worker-derived origins; the native client validates DNS answers, pins connected peers, reauthorizes redirects and manifest children, and defends against rebinding.
 - Replaced crash-resume URLs with version-2 checkpoints containing only SHA-256 digests of the URL and entity validators, plus length and completed byte ranges; legacy checkpoints are discarded.
-- Replaced denylist-style candidate exposure with explicit UI/session field allowlists and opaque handling for paired DASH selections.
+- Replaced executable-looking public candidate URLs with `displayUrl`, redaction/copyability flags, and opaque `{id, kind, generation}` references; real targets and headers remain worker-private.
+- Added build channel, commit, timestamp, protocol, capability-profile diagnostics, and fail-closed extension/native compatibility checks.
 - Kept passive detection as the default: Bilibili quality enrichment now runs only after the popup or Side Panel opens, a manual rescan, or the off-by-default automatic-enrichment setting.
-- Removed the unsupported Bilibili bangumi matcher, routed Side Panel YouTube actions through the guarded settings flow, and bounded/batched content-script payload scanning.
+- Removed the unsupported Bilibili bangumi matcher and bounded/batched content-script payload scanning.
+- Removed stable YouTube, yt-dlp, and live-HLS controls; unavailable capabilities now appear only in the build capability matrix.
+- Disabled page-derived remote-thumbnail fetching in the stable profile; Popup and Side Panel retain packaged media-type fallback tiles.
 - Made the current HLS boundary explicit in code and UI: only clear static VOD is downloadable in 0.2.4; live, AES-128/SAMPLE-AES, discontinuity, and separate-audio playlists fail closed.
-- Expanded security and lifecycle regression tests and made native tests, Python compilation, validation, and pinned Chrome for Testing E2E mandatory CI jobs.
+- Resolved HLS and DASH relative resources from final redirected manifest URLs and made credential removal monotonic across redirect chains.
+- Hardened CI checkout and action pinning, added bounded test/package evidence summaries, and kept native tests, Python compilation, validation, and Chrome for Testing E2E mandatory.
 
 ## 0.2.3 — 2026-08-21
 

@@ -10,6 +10,8 @@ Use the repository's **Security → Report a vulnerability** form for confidenti
 
 ## Security model
 
-FluxCatch treats page messages, URLs, manifests, HTTP responses, filenames, native messages, and FFmpeg output as untrusted input. URL schemes, network scope, DNS answers, connected peers, header names, payload sizes, ranges, redirects, manifest children, filenames, output publication, and DRM state are validated before use. Public networks are the default; an explicit local-network-media setting never permits cloud metadata or reserved ranges. FFmpeg receives local files only, and yt-dlp network execution is fail-closed until external tools can use the pinned network broker.
+FluxCatch treats page messages, URLs, manifests, HTTP responses, filenames, native messages, and FFmpeg output as untrusted input. The extension layer validates URL schemes, URL userinfo, literal host/IP categories, request purpose, provenance, worker-derived origin allowlists, payload bounds, and required user gestures. Browser fetch APIs do not expose DNS answers or connected socket peers, so the extension does not claim DNS pinning, peer verification, or DNS-rebinding protection.
+
+The native client independently validates DNS answers, authorizes and pins the connected peer, rechecks every redirect and manifest child, and ensures sensitive headers removed at a cross-origin transition cannot later reappear. Public networks are the default; explicit local-network opt-in never permits cloud metadata or reserved ranges. The stable profile does not fetch page-derived remote thumbnails. FFmpeg receives local files only, and external-tool networking remains disabled.
 
 Do not commit extension signing keys, tokens, browser profiles, authentication headers, downloaded media, or native-host registration files containing private paths.
