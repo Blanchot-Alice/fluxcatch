@@ -182,6 +182,7 @@ jobs:
           path: |
             e2e/artifacts/latest.json
             e2e/artifacts/screenshots/
+            e2e/artifacts/phase-b-matrix/
           if-no-files-found: warn
           retention-days: 14
       - name: Record browser-gate evidence
