@@ -139,6 +139,12 @@ try {
     saveButton: document.querySelector(".save-btn")?.textContent,
     nativePermissionButton: document.querySelector("#nativePermissionButton")?.textContent,
     labelledFields: [...document.querySelectorAll(".opt-field input, .opt-field select, .opt-field textarea")].every((node) => Boolean(document.querySelector('label[for="' + node.id + '"]'))),
+    deadControls: ["liveDuration", "youtubeEnabled", "ytdlpStatus", "ytdlpRefreshButton", "ytdlpGuide"].filter((id) => document.getElementById(id)),
+    capabilities: [...document.querySelectorAll("#capabilityList li")].map((node) => ({
+      feature: node.dataset.feature,
+      enabled: node.dataset.enabled,
+      status: node.querySelector("strong")?.textContent
+    })),
     overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth
   }))()`);
   const fixtureNetworkSetting = await control(`async () => {
@@ -985,6 +991,15 @@ async function auditExtensionPage(name, client, width, height, expression, close
       assert.equal(result.saveButton, "保存设置");
       assert.equal(result.labelledFields, true, "options contains an unlabelled field");
       assert.ok(["开启高速下载功能", "重新检查"].includes(result.nativePermissionButton));
+      assert.deepEqual(result.deadControls, [], "stable options still exposes unavailable controls");
+      assert.equal(result.capabilities.length, 9, "options capability matrix is incomplete");
+      const capabilityMap = Object.fromEntries(result.capabilities.map((entry) => [entry.feature, entry]));
+      for (const feature of ["directMedia", "staticHls", "staticDash", "bilibiliDashPair"]) {
+        assert.deepEqual(capabilityMap[feature], { feature, enabled: "true", status: "可用" });
+      }
+      for (const feature of ["liveHls", "encryptedHls", "separateAudioHls", "externalToolNetwork", "remoteThumbnails"]) {
+        assert.deepEqual(capabilityMap[feature], { feature, enabled: "false", status: "未启用" });
+      }
     } else if (name === "popup") {
       assert.equal(result.heading, "FluxCatch");
       assert.equal(result.workspaceButton, "打开媒体工作台");

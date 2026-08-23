@@ -4,28 +4,26 @@ const form = document.querySelector("#settingsForm");
 const status = document.querySelector("#saveStatus");
 const nativePermissionButton = document.querySelector("#nativePermissionButton");
 const nativePermissionStatus = document.querySelector("#nativePermissionStatus");
-const ytdlpRefreshButton = document.querySelector("#ytdlpRefreshButton");
-const ytdlpStatus = document.querySelector("#ytdlpStatus");
-const ytdlpGuide = document.querySelector("#ytdlpGuide");
-// Unknown, ungranted and disconnected states all start closed.  Only an
-// explicit capability from a connected host may enable the switch.
-let ytdlpNetworkDisabled = true;
+
+const CAPABILITY_LABELS = Object.freeze({
+  directMedia: "普通视频与音频文件",
+  staticHls: "静态 HLS 视频",
+  staticDash: "静态 DASH 视频",
+  bilibiliDashPair: "哔哩哔哩分离音视频合并",
+  liveHls: "HLS 直播",
+  encryptedHls: "加密 HLS",
+  separateAudioHls: "HLS 独立音轨",
+  externalToolNetwork: "外部下载工具联网",
+  remoteThumbnails: "远程视频封面"
+});
 
 document.addEventListener("DOMContentLoaded", load);
 form.addEventListener("submit", save);
 nativePermissionButton.addEventListener("click", requestNativeAccess);
 document.querySelector("#copyDiagnosticsButton").addEventListener("click", copyDiagnostics);
-ytdlpRefreshButton.addEventListener("click", async () => {
-  ytdlpRefreshButton.disabled = true;
-  try {
-    await refreshYtdlp();
-  } finally {
-    ytdlpRefreshButton.disabled = false;
-  }
-});
-form.youtubeEnabled.addEventListener("change", () => syncYtdlpGuide());
 
 async function load() {
+  renderCapabilities();
   try {
     const response = await chrome.runtime.sendMessage({ type: "GET_SETTINGS" });
     if (!response?.ok) throw new Error(response?.error || "读取设置失败");
@@ -33,16 +31,14 @@ async function load() {
     form.concurrentFragments.value = s.concurrentFragments;
     form.concurrentRanges.value = s.concurrentRanges;
     form.outputContainer.value = s.outputContainer;
-    form.liveDuration.value = 0;
     form.minimumKiB.value = Math.round(s.minimumBytes / 1024);
     form.filenameTemplate.value = s.filenameTemplate;
     form.blockedDomains.value = (s.blockedDomains || []).join("\n");
-    for (const key of ["saveAs", "useNativeForDirect", "allowPrivateNetworkMedia", "autoEnrichSiteQuality", "youtubeEnabled"]) {
+    for (const key of ["saveAs", "useNativeForDirect", "allowPrivateNetworkMedia", "autoEnrichSiteQuality"]) {
       form[key].checked = Boolean(s[key]);
     }
     form.showNotifications.checked = Boolean(s.showNotifications) && await chrome.permissions.contains({ permissions: ["notifications"] });
     await refreshNativeAccess();
-    await refreshYtdlp();
     await refreshDiagnostics();
   } catch (error) {
     showStatus(error?.message || "读取设置失败");
@@ -85,40 +81,21 @@ async function refreshNativeAccess() {
   nativePermissionButton.textContent = granted ? "重新检查" : "开启高速下载功能";
 }
 
-async function refreshYtdlp() {
-  ytdlpNetworkDisabled = true;
-  try {
-    const response = await chrome.runtime.sendMessage({ type: "PING_HOST" });
-    if (!response?.ok) throw new Error(response?.error || "暂时未能检查 yt-dlp");
-    const host = response.hostStatus || {};
-    if (host.needsPermission) {
-      ytdlpStatus.textContent = "需要先开启高速下载功能，才能检查 yt-dlp";
-    } else if (!host.connected) {
-      ytdlpStatus.textContent = "本地引擎未连接，暂时无法检查 yt-dlp（安装方法见下方）";
-    } else {
-      const ytdlp = host.capabilities?.ytdlp || {};
-      const ytdlpNetworkAllowed = BUILD_PROFILE.features.externalToolNetwork
-        && host.connected === true
-        && ytdlp.available === true
-        && ytdlp.networkDisabled === false;
-      ytdlpNetworkDisabled = !ytdlpNetworkAllowed;
-      ytdlpStatus.textContent = !BUILD_PROFILE.features.externalToolNetwork || ytdlp.networkDisabled === true
-        ? "0.2.4 暂停外部引擎联网，等待受控网络代理"
-        : ytdlpNetworkAllowed
-          ? `已就绪${ytdlp.version ? ` · 版本 ${ytdlp.version}` : ""}`
-          : "外部下载能力尚未通过安全检查，当前保持关闭";
-    }
-  } catch (error) {
-    ytdlpStatus.textContent = error?.message || "检查失败，请确认本地引擎已安装后重试";
+function renderCapabilities() {
+  const list = document.querySelector("#capabilityList");
+  list.replaceChildren();
+  for (const [feature, label] of Object.entries(CAPABILITY_LABELS)) {
+    const enabled = BUILD_PROFILE.features[feature] === true;
+    const item = document.createElement("li");
+    item.dataset.feature = feature;
+    item.dataset.enabled = String(enabled);
+    const name = document.createElement("span");
+    name.textContent = label;
+    const value = document.createElement("strong");
+    value.textContent = enabled ? "可用" : "未启用";
+    item.append(name, value);
+    list.append(item);
   }
-  form.youtubeEnabled.disabled = ytdlpNetworkDisabled;
-  if (ytdlpNetworkDisabled) form.youtubeEnabled.checked = false;
-  ytdlpGuide.hidden = ytdlpNetworkDisabled;
-  syncYtdlpGuide();
-}
-
-function syncYtdlpGuide() {
-  ytdlpGuide.open = !ytdlpNetworkDisabled && form.youtubeEnabled.checked && /未检测到|未连接/.test(ytdlpStatus.textContent);
 }
 
 let diagnostics = null;
@@ -175,7 +152,7 @@ async function save(event) {
     useNativeForDirect: form.useNativeForDirect.checked,
     allowPrivateNetworkMedia: form.allowPrivateNetworkMedia.checked,
     autoEnrichSiteQuality: form.autoEnrichSiteQuality.checked,
-    youtubeEnabled: form.youtubeEnabled.checked && !ytdlpNetworkDisabled,
+    youtubeEnabled: false,
     showNotifications
   };
   try {

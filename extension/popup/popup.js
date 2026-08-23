@@ -2,7 +2,7 @@ import { MEDIA_EXTENSIONS, humanBytes, sanitizeFilename } from "../lib/media.js"
 import { loadPrivacySafeThumbnail } from "../lib/thumbnail.js";
 import { BUILD_PROFILE, HOST_MISMATCH_MESSAGE } from "../lib/build-profile.js";
 
-const SITE_LABELS = { instagram: "Instagram", twitter: "X", youtube: "YouTube" };
+const SITE_LABELS = { instagram: "Instagram", twitter: "X" };
 const state = { tabId: null, windowId: null, items: [], settings: {}, hostStatus: {}, jobs: new Map(), selected: null, probes: new Map(), filter: "all", toastTimer: null, refreshSequence: 0 };
 const $ = (selector) => document.querySelector(selector);
 const mediaList = $("#mediaList");
@@ -101,7 +101,7 @@ async function refresh() {
   const sequence = ++state.refreshSequence;
   const result = await call({ type: "GET_TAB_MEDIA", tabId: state.tabId });
   if (sequence !== state.refreshSequence) return;
-  state.items = result.items || [];
+  state.items = (result.items || []).filter((item) => item.kind !== "youtube" || BUILD_PROFILE.features.externalToolNetwork);
   state.settings = result.settings || {};
   $("#mediaCount").textContent = state.items.length;
   updateHost(result.hostStatus || {});
@@ -242,18 +242,9 @@ function openDownloadDialog(item, { probeWarning = false } = {}) {
   } else variantLabel.hidden = true;
   syncVariantVisibility();
   const manifestBlockReason = manifestDownloadBlockReason(probe);
-  const ytdlp = state.hostStatus?.capabilities?.ytdlp || {};
-  const ytdlpNetworkDisabled = item.kind === "youtube" && (!BUILD_PROFILE.features.externalToolNetwork || ytdlp.networkDisabled !== false);
-  const ytdlpReady = item.kind === "youtube" ? BUILD_PROFILE.features.externalToolNetwork && Boolean(ytdlp.available) && !ytdlpNetworkDisabled : true;
-  $("#confirmDownload").disabled = Boolean(manifestBlockReason) || (item.kind === "youtube" && !ytdlpReady);
-  $("#dialogNote").style.color = manifestBlockReason || (item.kind === "youtube" && !ytdlpReady) ? "var(--warning-strong)" : "";
-  $("#dialogNote").textContent = item.kind === "youtube"
-    ? ytdlpNetworkDisabled
-      ? "0.2.4 暂停外部引擎联网，等待受控网络代理。"
-      : ytdlpReady
-      ? "实验性功能：由本机安装的 yt-dlp 引擎下载，画质与格式以本机 yt-dlp 为准。"
-      : "实验性功能需要先安装 yt-dlp：请打开设置 → 站点适配器，按安装指引完成后再回来下载。"
-    : manifestBlockReason
+  $("#confirmDownload").disabled = Boolean(manifestBlockReason);
+  $("#dialogNote").style.color = manifestBlockReason ? "var(--warning-strong)" : "";
+  $("#dialogNote").textContent = manifestBlockReason
     ? manifestBlockReason
     : probeWarning
       ? "未读取到清晰度选项，将自动选择并生成一个可直接播放的文件。"
@@ -285,7 +276,7 @@ async function submitDownload(event) {
   const confirm = $("#confirmDownload");
   try {
     confirm.disabled = true;
-    const advanced = isStreamKind(item) || item.kind === "youtube" || item.provenance !== "observed_response"
+    const advanced = isStreamKind(item) || item.provenance !== "observed_response"
       || options.extractAudio || options.convert || options.useNativeForDirect;
     if (advanced) {
       const granted = await chrome.permissions.request({ permissions: ["nativeMessaging"] });
@@ -303,9 +294,7 @@ async function submitDownload(event) {
     $("#dialogNote").style.color = "var(--danger-strong)";
   } finally {
     const probe = state.probes.get(mediaKey(item));
-    const ytdlp = state.hostStatus?.capabilities?.ytdlp || {};
-    const ytdlpReady = item.kind !== "youtube" || (BUILD_PROFILE.features.externalToolNetwork && Boolean(ytdlp.available) && ytdlp.networkDisabled === false);
-    confirm.disabled = Boolean(manifestDownloadBlockReason(probe)) || !ytdlpReady;
+    confirm.disabled = Boolean(manifestDownloadBlockReason(probe));
   }
 }
 
@@ -444,10 +433,9 @@ async function call(message) {
 }
 
 function mediaChips(item) {
-  if (item.kind === "youtube") return [{ text: "YouTube", cls: "hls" }, { text: "实验性", cls: "fmt" }];
   const stream = isStreamKind(item);
   const values = [{ text: streamTypeLabel(item), cls: stream ? "hls" : "fmt" }];
-  if (item.site && SITE_LABELS[item.site] && item.site !== "youtube") values.push({ text: SITE_LABELS[item.site], cls: "fmt" });
+  if (item.site && SITE_LABELS[item.site]) values.push({ text: SITE_LABELS[item.site], cls: "fmt" });
   if (item.height) values.push({ text: `${item.height}p`, cls: "hd" });
   if (!stream && item.contentLength) values.push({ text: humanBytes(item.contentLength), cls: "" });
   if (item.duration) values.push({ text: formatDuration(item.duration), cls: "" });

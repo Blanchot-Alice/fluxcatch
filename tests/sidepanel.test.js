@@ -44,9 +44,9 @@ test("side panel ships complete workspace assets and accessible states", () => {
   assert.match(js, /type:\s*"DOWNLOAD"/);
   assert.match(js, /kind === "dash_pair"/);
   assert.match(js, /streamTypeLabel/);
-  assert.match(js, /youtube \? "打开下载设置" : "快速下载"/);
-  assert.match(js, /chrome\.action\?\.openPopup/);
-  assert.match(js, /请点击浏览器工具栏中的 FluxCatch 图标打开下载设置/);
+  assert.match(js, /item\.kind !== "youtube" \|\| BUILD_PROFILE\.features\.externalToolNetwork/);
+  assert.match(js, /download\.textContent = "快速下载"/);
+  assert.doesNotMatch(js, /chrome\.action\?\.openPopup|打开下载设置|yt-dlp/);
   assert.match(js, /permissions\.request\(\{ permissions: \["nativeMessaging"\] \}\)/);
   assert.match(js, /item\.provenance !== "observed_response"/);
   assert.match(js, /openOptionsPage/);

@@ -18,7 +18,6 @@ test("options fields retain programmatic labels and keyboard-focusable switches"
     "concurrentFragments",
     "concurrentRanges",
     "outputContainer",
-    "liveDuration",
     "minimumKiB",
     "filenameTemplate",
     "blockedDomains"
@@ -40,8 +39,7 @@ test("download settings explain their effect in user-facing language", () => {
   const fields = [
     ["concurrentFragments", "concurrentFragmentsHelp", "同时下载几个视频片段", /一个视频通常由许多小片段组成。这里设置一次同时下载几个片段；推荐 8。数值越大不一定越快，下载出错时可改为 4。/],
     ["concurrentRanges", "concurrentRangesHelp", "大文件同时下载几部分", /开启“自动加速大文件”后，较大的 MP4、MP3 等文件会拆开下载。这里设置一次同时下载几部分；推荐 8。数值越大不一定越快，下载出错时可改为 4。/],
-    ["outputContainer", "outputContainerHelp", "下载文件保存格式", /推荐 MP4，兼容性最好；合并流媒体或转换格式时生效/],
-    ["liveDuration", "liveDurationHelp", "直播录制（0.2.4 暂停）", /当前版本仅下载未加密的静态 HLS 视频；直播、AES-128 加密流、独立音轨与时间线切换暂不开放/]
+    ["outputContainer", "outputContainerHelp", "下载文件保存格式", /推荐 MP4，兼容性最好；合并流媒体或转换格式时生效/]
   ];
   for (const [id, helperId, label, helper] of fields) {
     assert.match(optionsHtml, new RegExp(`<label\\s+for="${id}">${label}</label>`));
@@ -62,17 +60,22 @@ test("download settings explain their effect in user-facing language", () => {
   assert.match(optionsHtml, /使用你当前的登录会话，请求该站点自己的播放信息接口/);
   assert.match(optionsJs, /allowPrivateNetworkMedia: form\.allowPrivateNetworkMedia\.checked/);
   assert.match(optionsJs, /autoEnrichSiteQuality: form\.autoEnrichSiteQuality\.checked/);
-  assert.match(optionsHtml, /id="liveDuration"[^>]+disabled[^>]+aria-disabled="true"/);
   assert.match(optionsJs, /liveDuration: 0/);
-  assert.match(optionsJs, /let ytdlpNetworkDisabled = true/);
   assert.match(optionsJs, /import \{ BUILD_PROFILE, HOST_MISMATCH_MESSAGE \} from "\.\.\/lib\/build-profile\.js"/);
-  assert.match(optionsJs, /BUILD_PROFILE\.features\.externalToolNetwork[\s\S]*host\.connected === true[\s\S]*ytdlp\.available === true[\s\S]*ytdlp\.networkDisabled === false/);
-  assert.match(optionsJs, /form\.youtubeEnabled\.disabled = ytdlpNetworkDisabled/);
-  assert.match(optionsJs, /youtubeEnabled: form\.youtubeEnabled\.checked && !ytdlpNetworkDisabled/);
-  assert.match(optionsHtml, /0\.2\.4 暂停外部引擎联网，等待受控网络代理/);
+  assert.match(optionsJs, /youtubeEnabled: false/);
+  for (const deadControl of ["liveDuration", "youtubeEnabled", "ytdlpStatus", "ytdlpRefreshButton", "ytdlpGuide"]) {
+    assert.doesNotMatch(optionsHtml, new RegExp(`id="${deadControl}"`));
+  }
+  assert.doesNotMatch(`${optionsHtml}\n${optionsJs}`, /yt-dlp|安装 yt-dlp|refreshYtdlp|ytdlpNetworkDisabled/);
   assert.match(optionsCss, /\.field-help\{[^}]*color:var\(--muted\)[^}]*line-height:1\.45/);
   assert.match(optionsHtml, /id="diagnosticsHeading"/);
   assert.match(optionsHtml, /id="copyDiagnosticsButton"/);
+  assert.match(optionsHtml, /id="capabilityList"/);
+  for (const feature of ["directMedia", "staticHls", "staticDash", "bilibiliDashPair", "liveHls", "encryptedHls", "separateAudioHls", "externalToolNetwork", "remoteThumbnails"]) {
+    assert.match(optionsJs, new RegExp(`${feature}:`));
+  }
+  assert.match(optionsJs, /BUILD_PROFILE\.features\[feature\] === true/);
+  assert.match(optionsJs, /value\.textContent = enabled \? "可用" : "未启用"/);
   assert.match(optionsJs, /type: "GET_DIAGNOSTICS"/);
   assert.match(optionsJs, /navigator\.clipboard\.writeText\(JSON\.stringify\(diagnostics, null, 2\)\)/);
 });
@@ -103,11 +106,12 @@ test("extension pages display public URLs but return only opaque candidate refer
   assert.match(popupJs, /navigator\.clipboard\.writeText\(item\.displayUrl\)/);
 });
 
-test("popup reports the 0.2.4 external-engine network pause instead of installation advice", () => {
+test("stable popup and side panel hide external-tool candidates and dead setup paths", () => {
   assert.match(popupJs, /import \{ BUILD_PROFILE, HOST_MISMATCH_MESSAGE \} from "\.\.\/lib\/build-profile\.js"/);
-  assert.match(popupJs, /!BUILD_PROFILE\.features\.externalToolNetwork \|\| ytdlp\.networkDisabled !== false/);
-  assert.match(popupJs, /BUILD_PROFILE\.features\.externalToolNetwork && Boolean\(ytdlp\.available\) && !ytdlpNetworkDisabled/);
-  assert.match(popupJs, /0\.2\.4 暂停外部引擎联网，等待受控网络代理/);
+  for (const source of [popupJs, sidepanelJs]) {
+    assert.match(source, /item\.kind !== "youtube" \|\| BUILD_PROFILE\.features\.externalToolNetwork/);
+    assert.doesNotMatch(source, /yt-dlp|ytdlpReady|ytdlpNetworkDisabled|打开下载设置/);
+  }
 });
 
 test("popup and side panel report native build mismatches without hiding ordinary downloads", () => {

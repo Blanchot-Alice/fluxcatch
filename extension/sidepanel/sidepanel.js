@@ -1,6 +1,6 @@
 import { humanBytes } from "../lib/media.js";
 import { loadPrivacySafeThumbnail } from "../lib/thumbnail.js";
-import { HOST_MISMATCH_MESSAGE } from "../lib/build-profile.js";
+import { BUILD_PROFILE, HOST_MISMATCH_MESSAGE } from "../lib/build-profile.js";
 
 const state = {
   tabId: null,
@@ -110,7 +110,7 @@ async function refreshAll() {
       call({ type: "GET_JOBS" })
     ]);
     if (token !== state.refreshToken) return;
-    state.items = mediaResult.items || [];
+    state.items = (mediaResult.items || []).filter((item) => item.kind !== "youtube" || BUILD_PROFILE.features.externalToolNetwork);
     state.settings = mediaResult.settings || {};
     state.jobs = jobsResult.jobs || [];
     state.hostStatus = jobsResult.hostStatus || mediaResult.hostStatus || {};
@@ -128,7 +128,7 @@ async function refreshAll() {
 async function refreshMedia() {
   if (!Number.isInteger(state.tabId)) return;
   const result = await call({ type: "GET_TAB_MEDIA", tabId: state.tabId });
-  state.items = result.items || [];
+  state.items = (result.items || []).filter((item) => item.kind !== "youtube" || BUILD_PROFILE.features.externalToolNetwork);
   state.settings = result.settings || state.settings;
   renderMedia();
   if (result.hostStatus) updateHost(result.hostStatus);
@@ -194,24 +194,11 @@ function createMediaRow(item) {
   download.className = "media-download";
   download.dataset.mediaId = item.id || item.displayUrl;
   download.type = "button";
-  const youtube = item.kind === "youtube";
-  download.textContent = youtube ? "打开下载设置" : "快速下载";
-  download.setAttribute("aria-label", youtube ? `打开 ${title.textContent} 的下载设置` : `下载 ${title.textContent}`);
+  download.textContent = "快速下载";
+  download.setAttribute("aria-label", `下载 ${title.textContent}`);
   download.addEventListener("click", () => void runAction(async () => {
     download.disabled = true;
     try {
-      // YouTube is an opt-in GitHub-build capability. Its full popup flow
-      // checks yt-dlp readiness and requests nativeMessaging in the originating
-      // user gesture. Never bypass those gates with Side Panel quick download.
-      if (youtube) {
-        try {
-          if (typeof chrome.action?.openPopup !== "function") throw new Error("openPopup unavailable");
-          await chrome.action.openPopup();
-        } catch {
-          showToast("请点击浏览器工具栏中的 FluxCatch 图标打开下载设置");
-        }
-        return;
-      }
       const advanced = stream || item.provenance !== "observed_response" || Boolean(state.settings.useNativeForDirect);
       if (advanced) {
         // Keep request() inside the originating click gesture. Re-requesting an
