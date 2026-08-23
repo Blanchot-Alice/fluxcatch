@@ -24,6 +24,8 @@ textarea {
 
 button {
   cursor:pointer;
+  min-width:var(--target-min);
+  min-height:var(--target-min);
 }
 
 [hidden] {
@@ -75,6 +77,11 @@ button {
 
 /* Forms */
 input:not([type="checkbox"]):not([type="radio"]),
+select {
+  min-height:var(--control-height);
+}
+
+input:not([type="checkbox"]):not([type="radio"]),
 select,
 textarea {
   border:1px solid var(--control-border);
@@ -105,6 +112,7 @@ summary:focus-visible {
 button:disabled,
 [aria-disabled="true"] {
   cursor:not-allowed;
+  opacity:.56;
 }
 
 /* Button variants use existing page class names without changing the DOM. */
@@ -119,7 +127,8 @@ button:disabled,
     background-color var(--motion-base) ease,
     border-color var(--motion-base) ease,
     box-shadow var(--motion-base) ease,
-    color var(--motion-base) ease;
+    color var(--motion-base) ease,
+    transform var(--motion-fast) var(--ease-standard);
 }
 
 :where(.secondary-btn,.secondary,.media-download) {
@@ -133,7 +142,8 @@ button:disabled,
     background-color var(--motion-base) ease,
     border-color var(--motion-base) ease,
     box-shadow var(--motion-base) ease,
-    color var(--motion-base) ease;
+    color var(--motion-base) ease,
+    transform var(--motion-fast) var(--ease-standard);
 }
 
 :where(.quiet-button,.text-button,.foot-btn,.host-card .link,.cancel-job,.cancel-button) {
@@ -144,7 +154,47 @@ button:disabled,
   transition:
     background-color var(--motion-base) ease,
     color var(--motion-base) ease,
-    opacity var(--motion-base) ease;
+    opacity var(--motion-base) ease,
+    transform var(--motion-fast) var(--ease-standard);
+}
+
+button:active:not(:disabled):not([aria-disabled="true"]) {
+  transform:translateY(1px) scale(.99);
+}
+
+button[data-ui-state="pending"] {
+  position:relative;
+  cursor:progress;
+}
+
+button[data-ui-state="pending"]::before {
+  content:"";
+  display:inline-block;
+  width:14px;
+  height:14px;
+  margin-right:7px;
+  vertical-align:-2px;
+  border:2px solid currentColor;
+  border-right-color:transparent;
+  border-radius:50%;
+  animation:fc-spin 700ms linear infinite;
+}
+
+button[data-ui-state="success"] {
+  border-color:var(--success-strong);
+  color:var(--success-strong);
+  background:color-mix(in srgb,var(--surface) 76%,var(--success) 24%);
+}
+
+:where(.save-btn,.download-button,.primary,.dl-btn)[data-ui-state="success"] {
+  color:#fff;
+  background:var(--success-strong);
+}
+
+button[data-ui-state="failure"] {
+  border-color:var(--danger-strong);
+  color:var(--danger-strong);
+  background:var(--danger-tint);
 }
 
 /* Switch */
@@ -236,6 +286,37 @@ button:disabled,
   line-height:1.4;
 }
 
+:where(#toast,.toast)[data-toast-type="success"] {
+  border-color:color-mix(in srgb,var(--success) 52%,var(--border));
+}
+
+:where(#toast,.toast)[data-toast-type="warning"] {
+  border-color:color-mix(in srgb,var(--warning) 62%,var(--border));
+  background:color-mix(in srgb,var(--surface) 86%,var(--warning-tint));
+}
+
+:where(#toast,.toast)[data-toast-type="error"] {
+  border-color:color-mix(in srgb,var(--danger) 60%,var(--border));
+  background:color-mix(in srgb,var(--surface) 84%,var(--danger-tint));
+}
+
+.toast-message {
+  min-width:0;
+  overflow-wrap:anywhere;
+}
+
+.toast-close {
+  display:grid;
+  place-items:center;
+  flex:none;
+  padding:0;
+  border:0;
+  border-radius:var(--r-control);
+  color:var(--danger-strong);
+  background:transparent;
+  font-size:20px;
+}
+
 /* Disclosure */
 .install-guide {
   border:1px solid var(--border);
@@ -263,6 +344,11 @@ button:disabled,
 }
 
 @media (hover:hover) {
+  button:hover:not(:disabled):not([aria-disabled="true"]) {
+    transform:translateY(-1px);
+    box-shadow:var(--shadow-sm);
+  }
+
   :where(.save-btn,.download-button,.primary,.dl-btn):hover:not(:disabled) {
     background:var(--primaryHover);
   }
@@ -287,5 +373,11 @@ button:disabled,
     animation:none;
     border-color:var(--border);
     border-top-color:var(--primary);
+  }
+
+  button,
+  button:hover,
+  button:active {
+    transform:none !important;
   }
 }

@@ -21,10 +21,10 @@
       <div><h1>FluxCatch</h1><p class="tagline">Keep What You See.</p></div>
     </div>
     <div class="toolbar">
-      <button id="scanButton" class="icon-btn" title="重新扫描" aria-label="重新扫描">
+      <button id="scanButton" type="button" class="icon-btn" title="重新扫描" aria-label="重新扫描">
         <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
       </button>
-      <button id="settingsButton" class="icon-btn" title="设置" aria-label="设置">
+      <button id="settingsButton" type="button" class="icon-btn" title="设置" aria-label="设置">
         <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
       </button>
     </div>
@@ -58,7 +58,7 @@
         <span id="hostDot" class="dot" aria-hidden="true"></span>
         <div role="status" aria-live="polite" aria-atomic="true"><strong id="hostTitle">高速下载功能</strong><small id="hostDetail">正在检查是否可用…</small></div>
         <button id="installHelpButton" type="button" class="link" hidden>安装方法</button>
-        <button id="pingButton" type="button" class="link">重试</button>
+        <button id="pingButton" type="button" class="link" aria-label="重新检查高速下载功能">重试</button>
       </div>
       <div id="jobsList" class="jobs-list" aria-label="下载任务"></div>
       <div id="jobAnnouncer" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
@@ -72,19 +72,20 @@
     <button id="clearButton" type="button" class="foot-btn" title="清空媒体检测与已结束任务">清空记录</button>
   </footer>
 
-  <dialog id="downloadDialog" aria-labelledby="downloadDialogTitle" aria-describedby="dialogNote">
+  <dialog id="downloadDialog" aria-labelledby="downloadDialogTitle" aria-describedby="dialogNote dialogError">
     <form method="dialog" id="downloadForm">
       <div class="dialog-head"><h2 id="downloadDialogTitle">下载设置</h2><button type="submit" value="cancel" class="close-button" aria-label="关闭">×</button></div>
       <label>文件名<input id="filenameInput" autocomplete="off" maxlength="200" required></label>
       <label>保存格式<select id="containerSelect"><option value="mp4">MP4</option><option value="mkv">MKV</option><option value="webm">WebM</option><option value="mp3">MP3（仅音频）</option></select></label>
       <label id="variantLabel" hidden>清晰度<select id="variantSelect"></select></label>
       <label class="check"><input id="nativeDirectInput" type="checkbox"><span>使用多连接高速下载</span></label>
-      <p id="dialogNote" class="dialog-note"></p>
+      <p id="dialogNote" class="dialog-note" role="status" aria-live="polite"></p>
+      <p id="dialogError" class="dialog-error" role="alert" aria-live="assertive" aria-atomic="true" hidden></p>
       <div class="dialog-actions"><button type="submit" value="cancel" class="secondary">取消</button><button type="submit" id="confirmDownload" value="default" class="primary">开始下载</button></div>
     </form>
   </dialog>
 
-  <div id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
+  <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true" hidden></div>
   <script type="module" src="popup.js"></script>
 </body>
 </html>

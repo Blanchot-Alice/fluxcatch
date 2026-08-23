@@ -150,7 +150,7 @@ test("HLS UI exposes the clear static VOD boundary and blocks unsupported modes"
   }
   assert.match(popupJs, /manifestDownloadBlockReason\(probe\)/);
   assert.match(popupJs, /state\.probes\.get\(mediaKey\(item\)\)/);
-  assert.match(popupJs, /FluxCatch 0\.2\.4 暂不支持 AES-128 加密的 HLS 下载/);
+  assert.match(popupJs, /当前版本暂不支持 AES-128 加密的 HLS 下载/);
   assert.doesNotMatch(popupJs, /检测到可处理的加密流媒体/);
 });
 

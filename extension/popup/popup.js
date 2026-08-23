@@ -1,15 +1,17 @@
 import { MEDIA_EXTENSIONS, humanBytes, sanitizeFilename } from "../lib/media.js";
 import { loadPrivacySafeThumbnail } from "../lib/thumbnail.js";
 import { BUILD_PROFILE, HOST_MISMATCH_MESSAGE } from "../lib/build-profile.js";
+import { createToastController, isActionPending, restoreFocus, withPendingAction } from "../ui/interactions.js";
 
 const SITE_LABELS = { instagram: "Instagram", twitter: "X" };
-const state = { tabId: null, windowId: null, items: [], settings: {}, hostStatus: {}, jobs: new Map(), selected: null, probes: new Map(), filter: "all", toastTimer: null, refreshSequence: 0 };
+const state = { tabId: null, windowId: null, items: [], settings: {}, hostStatus: {}, jobs: new Map(), selected: null, probes: new Map(), filter: "all", refreshSequence: 0, dialogTrigger: null };
 const $ = (selector) => document.querySelector(selector);
 const mediaList = $("#mediaList");
 const emptyState = $("#emptyState");
 const jobsList = $("#jobsList");
 const jobsEmpty = $("#jobsEmpty");
 const dialog = $("#downloadDialog");
+const toastController = createToastController($("#toast"));
 const port = chrome.runtime.connect({ name: "fluxcatch-popup" });
 
 function isStreamKind(value) {
@@ -53,25 +55,43 @@ async function init() {
 
 function bindEvents() {
   $("#filterSelect").addEventListener("change", (event) => { state.filter = event.target.value; renderMedia(); });
-  $("#scanButton").addEventListener("click", () => runUiAction(async () => { await call({ type: "SCAN_TAB", tabId: state.tabId }); setTimeout(() => void refresh().catch((error) => showToast(error.message)), 450); }));
-  $("#forceButton").addEventListener("click", () => runUiAction(async () => { await call({ type: "RELOAD_TAB", tabId: state.tabId, bypassCache: true }); window.close(); }));
-  $("#clearButton").addEventListener("click", () => runUiAction(async () => {
+  $("#scanButton").addEventListener("click", (event) => void runUiAction(event.currentTarget, `popup:scan:${state.tabId}`, async () => {
+    await call({ type: "SCAN_TAB", tabId: state.tabId });
+    await new Promise((resolve) => setTimeout(resolve, 450));
+    await refresh();
+  }));
+  $("#forceButton").addEventListener("click", (event) => void runUiAction(event.currentTarget, `popup:force:${state.tabId}`, async () => {
+    await call({ type: "RELOAD_TAB", tabId: state.tabId, bypassCache: true });
+    window.close();
+  }, { pendingText: "刷新中…", successDurationMs: 0 }));
+  $("#clearButton").addEventListener("click", (event) => void runUiAction(event.currentTarget, `popup:clear:${state.tabId}`, async () => {
     const result = await call({ type: "CLEAR_TAB", tabId: state.tabId });
     replaceJobs(result.jobs || []);
     await refresh();
     const active = (result.jobs || []).length;
     showToast(result.removedJobs
       ? `已清空检测结果和 ${result.removedJobs} 个已结束任务${active ? `；${active} 个进行中任务保留` : ""}`
-      : `已清空检测结果${active ? `；${active} 个进行中任务保留` : ""}`);
+      : `已清空检测结果${active ? `；${active} 个进行中任务保留` : ""}`,
+    active ? "warning" : "success");
+  }, { pendingText: "清理中…", successText: "已清空 ✓" }));
+  $("#folderButton").addEventListener("click", (event) => void runUiAction(event.currentTarget, "popup:open-folder", () => call({ type: "SHOW_DOWNLOAD_FOLDER" }), {
+    pendingText: "打开中…", successText: "已打开 ✓"
   }));
-  $("#folderButton").addEventListener("click", () => runUiAction(() => call({ type: "SHOW_DOWNLOAD_FOLDER" })));
-  $("#workspaceButton").addEventListener("click", () => runUiAction(async () => {
+  $("#workspaceButton").addEventListener("click", (event) => void runUiAction(event.currentTarget, `popup:workspace:${state.windowId}`, async () => {
     if (!Number.isInteger(state.windowId)) throw new Error("当前窗口不可用");
     await chrome.sidePanel.open({ windowId: state.windowId });
     window.close();
-  }));
+  }, { pendingText: "打开中…", successDurationMs: 0 }));
   $("#settingsButton").addEventListener("click", () => void chrome.runtime.openOptionsPage().catch((error) => showToast(error.message)));
-  $("#pingButton").addEventListener("click", () => call({ type: "PING_HOST" }).then((result) => updateHost(result.hostStatus)).catch((error) => updateHost({ connected: false, lastError: error.message })));
+  $("#pingButton").addEventListener("click", (event) => void runUiAction(event.currentTarget, "popup:ping-host", async () => {
+    try {
+      const result = await call({ type: "PING_HOST" });
+      updateHost(result.hostStatus);
+    } catch (error) {
+      updateHost({ connected: false, lastError: error.message });
+      throw error;
+    }
+  }, { pendingText: "", successText: "✓" }));
   $("#installHelpButton").addEventListener("click", () => void chrome.runtime.openOptionsPage().catch((error) => showToast(error?.message || "无法打开设置页")));
   const tabs = [...document.querySelectorAll('[role="tab"]')];
   for (const [index, button] of tabs.entries()) {
@@ -94,6 +114,12 @@ function bindEvents() {
     $("#filenameInput").value = replaceFilenameExtension($("#filenameInput").value, $("#containerSelect").value);
     syncVariantVisibility();
   });
+  dialog.addEventListener("close", () => {
+    const trigger = state.dialogTrigger;
+    state.dialogTrigger = null;
+    if ($("#jobsView").hidden) restoreFocus(trigger);
+    else restoreFocus($("#jobsTab"));
+  });
 }
 
 async function refresh() {
@@ -109,6 +135,8 @@ async function refresh() {
 }
 
 function renderMedia() {
+  const activeAction = document.activeElement?.dataset?.mediaAction || "";
+  const activeMediaId = document.activeElement?.dataset?.mediaId || "";
   mediaList.replaceChildren();
   const items = state.items.filter((item) => {
     if (state.filter === "all") return true;
@@ -121,6 +149,9 @@ function renderMedia() {
   $("#emptyState h2").textContent = anyMedia ? "当前筛选下没有媒体" : "少女祈祷中……";
   $("#emptyState p").textContent = anyMedia ? "尝试切换媒体类型，或强制刷新重新扫描页面。" : "播放视频后自动检测可下载的视频、音频与流媒体";
   for (const item of items) mediaList.append(createMediaCard(item));
+  if (activeMediaId && activeAction && !restoreFocus(findMediaAction(activeMediaId, activeAction))) {
+    restoreFocus($("#scanButton"));
+  }
 }
 
 function createMediaCard(item) {
@@ -139,24 +170,40 @@ function createMediaCard(item) {
   info.append(title, url, chips);
   const actions = el("div", "card-actions");
   const download = el("button", "download-button");
+  download.type = "button";
+  download.dataset.mediaId = mediaKey(item);
+  download.dataset.mediaAction = "download";
   download.textContent = "下载";
+  download.setAttribute("aria-label", `下载 ${title.textContent}`);
   download.addEventListener("click", () => void prepareDownload(item, download));
   actions.append(download);
   if (item.copyable === true) {
     const copy = el("button", "more-button");
+    copy.type = "button";
+    copy.setAttribute("aria-label", `复制 ${title.textContent} 的链接`);
+    copy.dataset.mediaId = mediaKey(item);
+    copy.dataset.mediaAction = "copy";
     copy.textContent = "复制链接";
-    copy.addEventListener("click", async () => {
-      try {
-        await navigator.clipboard.writeText(item.displayUrl);
-        copy.textContent = "已复制";
-        setTimeout(() => { if (copy.isConnected) copy.textContent = "复制链接"; }, 1000);
-      } catch (error) {
-        showToast(error?.message || "复制失败");
-      }
-    });
+    copy.addEventListener("click", () => void runUiAction(
+      copy,
+      `popup:copy:${mediaKey(item)}`,
+      () => navigator.clipboard.writeText(item.displayUrl),
+      { pendingText: "", successText: "✓", failureText: "复制失败" }
+    ));
     actions.append(copy);
   }
+  const manifestStatus = el("div", "manifest-status");
+  manifestStatus.setAttribute("role", "status");
+  manifestStatus.setAttribute("aria-live", "polite");
+  manifestStatus.hidden = true;
+  const spinner = el("span", "spinner");
+  spinner.setAttribute("aria-hidden", "true");
+  const statusText = document.createElement("span");
+  statusText.textContent = "正在读取清晰度与流媒体信息…";
+  manifestStatus.append(spinner, statusText);
+  info.append(manifestStatus);
   card.append(visual, info, actions);
+  if (isActionPending(manifestActionKey(item))) setManifestCardLoading(card, download, manifestStatus, true);
   return card;
 }
 
@@ -172,40 +219,75 @@ function createMediaVisual(item) {
 }
 
 async function prepareDownload(item, button) {
+  state.dialogTrigger = button;
   const stream = isStreamKind(item);
   if (!stream) {
     openDownloadDialog(item);
     return;
   }
-  const originalText = button.textContent;
+  const actionKey = manifestActionKey(item);
+  if (isActionPending(actionKey)) return;
+  const card = button.closest(".media-card");
+  const manifestStatus = card?.querySelector(".manifest-status");
   let probeWarning = false;
-  button.disabled = true;
-  button.textContent = "正在读取…";
-  button.setAttribute("aria-busy", "true");
   try {
-    const key = mediaKey(item);
-    if (!state.probes.has(key)) {
-      const result = await call({ type: "PROBE_MANIFEST", tabId: state.tabId, candidate: candidateReference(item) });
-      state.probes.set(key, result.probe);
-    }
+    const task = withPendingAction(button, actionKey, async () => {
+      const key = mediaKey(item);
+      if (!state.probes.has(key)) {
+        const result = await call({ type: "PROBE_MANIFEST", tabId: state.tabId, candidate: candidateReference(item) });
+        state.probes.set(key, result.probe);
+      }
+    }, { pendingText: "", successDurationMs: 0, failureDurationMs: 0 });
+    setManifestCardLoading(card, null, manifestStatus, true);
+    await task;
   } catch (error) {
     probeWarning = true;
   } finally {
-    button.disabled = false;
-    button.textContent = originalText;
-    button.removeAttribute("aria-busy");
+    setManifestLoadingForItem(item, false);
   }
+  state.dialogTrigger = findMediaAction(mediaKey(item), "download") || button;
   openDownloadDialog(item, { probeWarning });
+}
+
+function manifestActionKey(item) {
+  return `popup:manifest:${mediaKey(item)}`;
+}
+
+function setManifestCardLoading(card, button, status, loading) {
+  card?.classList.toggle("manifest-loading", loading);
+  if (card) {
+    if (loading) card.setAttribute("aria-busy", "true");
+    else card.removeAttribute("aria-busy");
+  }
+  if (status) status.hidden = !loading;
+  if (button && loading && !button.hasAttribute("aria-busy")) {
+    button.disabled = true;
+    button.setAttribute("aria-busy", "true");
+    button.setAttribute("data-ui-state", "pending");
+    button.textContent = "正在读取…";
+  }
+  if (button && !loading) {
+    button.disabled = false;
+    button.removeAttribute("aria-busy");
+    button.removeAttribute("data-ui-state");
+    button.textContent = "下载";
+  }
+}
+
+function setManifestLoadingForItem(item, loading) {
+  const button = findMediaAction(mediaKey(item), "download");
+  const card = button?.closest(".media-card");
+  setManifestCardLoading(card, button, card?.querySelector(".manifest-status"), loading);
 }
 
 function manifestDownloadBlockReason(probe) {
   if (probe?.kind === "hls") {
     if (probe.protection === "drm" || probe.protected) return "检测到 DRM/SAMPLE-AES 内容保护，仅显示媒体信息。";
-    if (probe.protection === "aes128" || probe.encrypted) return "FluxCatch 0.2.4 暂不支持 AES-128 加密的 HLS 下载。";
-    if (probe.type === "media" && probe.live) return "FluxCatch 0.2.4 暂不支持 HLS 直播录制。";
-    if (probe.discontinuity) return "FluxCatch 0.2.4 暂不支持包含时间线切换的 HLS 下载。";
+    if (probe.protection === "aes128" || probe.encrypted) return "当前版本暂不支持 AES-128 加密的 HLS 下载。";
+    if (probe.type === "media" && probe.live) return "当前版本暂不支持 HLS 直播录制。";
+    if (probe.discontinuity) return "当前版本暂不支持包含时间线切换的 HLS 下载。";
     if (Number(probe.audioTrackCount || 0) > 0 || probe.variants?.some((variant) => variant.audioGroup)) {
-      return "FluxCatch 0.2.4 暂不支持独立音轨 HLS 下载。";
+      return "当前版本暂不支持独立音轨 HLS 下载。";
     }
   }
   if (probe?.protection === "drm" || probe?.protected) return "检测到 DRM/内容保护，受保护内容暂不支持下载。";
@@ -214,6 +296,7 @@ function manifestDownloadBlockReason(probe) {
 
 function openDownloadDialog(item, { probeWarning = false } = {}) {
   state.selected = item;
+  clearDialogError();
   const containerSelect = $("#containerSelect");
   const pairedDash = item.kind === "dash_pair";
   for (const option of containerSelect.options) option.disabled = pairedDash && ["mkv", "webm"].includes(option.value);
@@ -254,6 +337,9 @@ function openDownloadDialog(item, { probeWarning = false } = {}) {
         ? "这类在线视频由许多小片段组成。FluxCatch 会逐段下载并自动组合，最后保存为一个可直接播放的文件。"
         : "普通文件会直接使用浏览器下载；开启多连接可加速大文件。";
   dialog.showModal();
+  requestAnimationFrame(() => {
+    if (dialog.open) $("#filenameInput").focus({ preventScroll: true });
+  });
 }
 
 async function submitDownload(event) {
@@ -274,24 +360,28 @@ async function submitDownload(event) {
     variantUrl: $("#variantLabel").hidden ? null : $("#variantSelect").value || null
   };
   const confirm = $("#confirmDownload");
+  const actionKey = `popup:start-download:${mediaKey(item)}`;
+  if (isActionPending(actionKey)) return;
+  clearDialogError();
   try {
-    confirm.disabled = true;
-    const advanced = isStreamKind(item) || item.provenance !== "observed_response"
-      || options.extractAudio || options.convert || options.useNativeForDirect;
-    if (advanced) {
-      const granted = await chrome.permissions.request({ permissions: ["nativeMessaging"] });
-      if (!granted) throw new Error("请先允许使用高速下载功能，再继续下载");
-    }
-    const result = await call({ type: "DOWNLOAD", tabId: state.tabId, candidate: candidateReference(item), options });
-    dialog.close();
-    if (result.method === "native") {
-      state.jobs.set(result.jobId, { jobId: result.jobId, filename: options.filename, status: "queued", progress: 0, speed: 0 });
-      renderJobs();
-      switchView("jobs");
-    } else showToast("浏览器下载已开始");
+    await withPendingAction(confirm, actionKey, async () => {
+      const advanced = isStreamKind(item) || item.provenance !== "observed_response"
+        || options.extractAudio || options.convert || options.useNativeForDirect;
+      if (advanced) {
+        const granted = await chrome.permissions.request({ permissions: ["nativeMessaging"] });
+        if (!granted) throw new Error("请先允许使用高速下载功能，再继续下载");
+      }
+      const result = await call({ type: "DOWNLOAD", tabId: state.tabId, candidate: candidateReference(item), options });
+      dialog.close();
+      if (result.method === "native") {
+        state.jobs.set(result.jobId, { jobId: result.jobId, filename: options.filename, status: "queued", progress: 0, speed: 0 });
+        renderJobs();
+        switchView("jobs");
+        restoreFocus($("#jobsTab"));
+      } else showToast("浏览器下载已开始", "success");
+    }, { pendingText: "准备中…", successText: "已开始 ✓", failureText: "下载失败", successDurationMs: 0, failureDurationMs: 0 });
   } catch (error) {
-    $("#dialogNote").textContent = friendlyErrorMessage(error?.message);
-    $("#dialogNote").style.color = "var(--danger-strong)";
+    showDialogError(friendlyErrorMessage(error?.message));
   } finally {
     const probe = state.probes.get(mediaKey(item));
     confirm.disabled = Boolean(manifestDownloadBlockReason(probe));
@@ -362,18 +452,18 @@ function renderJobs() {
     const cancel = document.createElement("button");
     cancel.className = "cancel-job";
     cancel.dataset.jobId = job.jobId;
+    cancel.type = "button";
     cancel.textContent = "取消";
-    cancel.addEventListener("click", () => runUiAction(async () => {
-      cancel.disabled = true;
-      try { await call({ type: "CANCEL_JOB", jobId: job.jobId }); }
-      catch (error) { cancel.disabled = false; throw error; }
+    cancel.setAttribute("aria-label", `取消 ${job.filename || "媒体"}`);
+    cancel.addEventListener("click", () => void runUiAction(cancel, `popup:cancel-job:${job.jobId}`, () => call({ type: "CANCEL_JOB", jobId: job.jobId }), {
+      pendingText: "", successText: "✓", successDurationMs: 0
     }));
     meta.append(cancel);
     card.append(progress, meta); jobsList.append(card);
   }
   if (focusedJobId) {
     const target = [...jobsList.querySelectorAll("button[data-job-id]")].find((button) => button.dataset.jobId === focusedJobId);
-    target?.focus({ preventScroll: true });
+    if (!restoreFocus(target)) restoreFocus($("#jobsTab"));
   }
 }
 
@@ -400,7 +490,7 @@ function updateHost(status = {}) {
     $("#hostDetail").textContent = status.needsPermission
       ? "需要加速、合并或转换格式时会请你授权"
       : status.lastError
-        ? "本地引擎尚未就绪；点「安装方法」查看一分钟安装指引"
+        ? "配套程序尚未就绪；点「安装方法」查看一分钟安装指引"
         : "普通文件仍可直接下载";
     return;
   }
@@ -450,6 +540,12 @@ function syncVariantVisibility() {
 
 function mediaKey(item) { return item.id || item.displayUrl; }
 
+function findMediaAction(mediaId, action) {
+  const normalizedId = String(mediaId ?? "");
+  return [...mediaList.querySelectorAll("button[data-media-id][data-media-action]")]
+    .find((button) => button.dataset.mediaId === normalizedId && button.dataset.mediaAction === action) || null;
+}
+
 function candidateReference(item) {
   return { id: item?.id, kind: item?.kind, generation: item?.generation };
 }
@@ -495,12 +591,25 @@ function friendlyErrorMessage(message) {
   return raw.replace(/本地(?:高速)?引擎/g, "高速下载功能");
 }
 function el(tag, className) { const node = document.createElement(tag); if (className) node.className = className; return node; }
-async function runUiAction(action) { try { await action(); } catch (error) { showToast(friendlyErrorMessage(error?.message || "操作失败")); } }
-function showToast(message) {
-  clearTimeout(state.toastTimer);
-  const toast = $("#toast");
-  if (!toast) return;
-  toast.textContent = String(message || "操作失败");
-  toast.classList.add("show");
-  state.toastTimer = setTimeout(() => toast.classList.remove("show"), 1800);
+function clearDialogError() {
+  const error = $("#dialogError");
+  error.textContent = "";
+  error.hidden = true;
+}
+function showDialogError(message) {
+  const error = $("#dialogError");
+  error.textContent = String(message || "下载失败");
+  error.hidden = false;
+}
+async function runUiAction(element, key, action, options = {}) {
+  try {
+    return await withPendingAction(element, key, action, { successDurationMs: 500, failureDurationMs: 0, ...options });
+  } catch (error) {
+    showToast(friendlyErrorMessage(error?.message || "操作失败"), "error");
+    return undefined;
+  }
+}
+function showToast(message, type = "error") {
+  const method = ["success", "warning", "error"].includes(type) ? type : "error";
+  return toastController[method](String(message || "操作失败"));
 }
