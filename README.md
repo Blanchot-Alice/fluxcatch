@@ -63,11 +63,32 @@ sites get first-class support because their players need it:
 
 ## Interface
 
-The toolbar badge updates in real time as media is detected. The popup handles
-selection and download settings, the Side Panel is the persistent workbench for
-long downloads, and Settings shows the exact capability profile of the build.
-The stable GitHub profile does not actively fetch page-derived remote
-thumbnails; media cards use packaged type tiles instead.
+The toolbar badge updates in real time as media is detected. The compact popup
+handles selection and download settings, the Side Panel is the persistent
+workbench for long downloads, and Settings groups the build identity,
+day-to-day download controls, privacy boundaries, and local capabilities in a
+single reading flow. Installed tools, connected services, protocol
+compatibility, and capabilities enabled by the current build are reported as
+separate states; installing a tool does not silently enable a gated feature.
+
+![FluxCatch Settings](docs/assets/options.png)
+
+| Popup | Side Panel | Download dialog |
+| --- | --- | --- |
+| ![FluxCatch popup](docs/assets/popup.png) | ![FluxCatch Side Panel](docs/assets/sidepanel.png) | ![FluxCatch HLS download dialog](docs/assets/hls-download-dialog.png) |
+
+Settings uses a normalized saved baseline: the save bar remains inactive until
+a value actually changes, validates fields before writing, and keeps unsaved
+state after a failed save. Private-network access requires an additional
+confirmation, while optional notification and Native Messaging permissions are
+requested from the control the user activated. Popup and Side Panel actions
+show local pending, success, or failure feedback and suppress duplicate clicks.
+
+All three surfaces share packaged design tokens and control primitives while
+keeping page-specific layouts in plain HTML, CSS, and JavaScript. They support
+keyboard operation, visible focus, system dark mode, narrow widths, and
+`prefers-reduced-motion`. The stable GitHub profile does not actively fetch
+page-derived remote thumbnails; media cards use packaged type tiles instead.
 
 Opening the popup or Side Panel, clicking rescan, or enabling **自动补全站点画质**
 may ask a supported site's own playback-metadata API for the qualities available
@@ -147,6 +168,13 @@ python3 scripts/validate.py               # manifest + syntax validation
 npm run test:e2e                          # Chrome detection, UI and interaction suite
 npm run package                           # dist/ zips + SHA256SUMS
 ```
+
+The browser suite uses deterministic local fixtures. The 0.2.5 release gate
+requires UI evidence for Settings, popup, Side Panel, the download dialog,
+light/dark and narrow layouts, form states, and reduced motion in addition to
+the existing detection and download flows. Runtime screenshots and the
+machine-readable report are written under `e2e/artifacts/`; they are evidence
+for the tested checkout, not claims about a live public website.
 
 ## Documentation
 

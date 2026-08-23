@@ -12,6 +12,45 @@ Bilibili uses a `blob:` MediaSource and separate complete video/audio `.m4s` tra
 
 Request headers are first associated by `requestId`. Only requests classified as media are promoted to the short-lived per-tab download cache. The cache is memory-only, bounded, expires after five minutes, and is removed early after its native task reaches a terminal state.
 
+## Interface layer
+
+FluxCatch keeps the extension interface buildless and packaged with the
+extension. `extension/ui/tokens.css` defines the shared color, type, spacing,
+radius, control, focus, shadow, and motion values. `extension/ui/components.css`
+implements reusable controls and status primitives, while each page stylesheet
+owns only its layout and surface-specific composition. Shared asynchronous
+interaction helpers live in `extension/ui/interactions.js`; they serialize the
+same named action, keep control width stable while pending, expose `aria-busy`,
+and restore focus without changing any background/native protocol.
+
+Settings is a normalized form rather than a direct view of storage. On load it
+creates an allowlisted baseline, compares normalized values after input, and
+writes only validated setting fields. Concurrency is bounded to 1–24, minimum
+media size to 0–102400 KiB, filename placeholders to the documented token set,
+and ignored domains are normalized and validated line by line. URLs, request
+headers, opaque candidate references, signed tokens, and other security-sensitive
+transfer state are not part of the form model or persistent UI state.
+
+Optional notification and Native Messaging permissions are requested from the
+originating switch or button gesture. Local-network media access remains a
+separate explicit setting with an additional confirmation; enabling it does not
+relax metadata, link-local, multicast, unspecified, or reserved-address blocks.
+If Chrome revokes a previously granted notification permission outside
+FluxCatch, Settings repairs the now-ineffective saved notification preference
+to off before establishing its clean form baseline; granting it again therefore
+cannot bypass the explicit Save step.
+The capability matrix distinguishes installation, connection, protocol
+compatibility, local processing, external-tool networking gates, and actual
+build availability. Stable-profile Lab entries are explanatory roadmap states,
+not disabled controls that imply hidden functionality.
+
+Popup and Side Panel retain the same `PublicCandidate` and job DTO boundaries.
+Their pending states, typed toasts, local manifest-card loading, and focus
+restoration are presentation behavior only; they do not create a new fetch path
+or persist private targets. Responsive, dark-mode, reduced-motion, keyboard, and
+long-text behavior is verified against deterministic Chrome for Testing
+fixtures before a product-interface release is marked ready.
+
 ## Download backends
 
 ### Chrome backend

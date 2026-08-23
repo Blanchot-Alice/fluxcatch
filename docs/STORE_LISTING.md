@@ -45,6 +45,8 @@ Use:
 - DRM-protected media remains unavailable;
 - performance depends on server/network support.
 - Bilibili support currently covers standard `/video/` pages, not bangumi pages.
+- Settings reports tool installation, native connection, protocol compatibility, networking gates, and build availability separately; a detected yt-dlp installation is not presented as enabled YouTube support.
+- YouTube, live HLS, encrypted HLS, and separate-audio HLS remain non-interactive roadmap states rather than disabled controls that imply hidden functionality.
 
 Do not claim universal compatibility, support for every site, guaranteed acceleration, access to protected content, or support for named copyright platforms.
 
@@ -55,4 +57,5 @@ Do not claim universal compatibility, support for every site, guaranteed acceler
 - Host `PRIVACY.md` at a stable public HTTPS URL.
 - Supply the 128×128 icon, at least one 1280×800 or 640×400 screenshot, and a 440×280 promotional image.
 - Explain how reviewers can test direct, HLS, DASH capability errors, native host connection, and DRM blocking with local fixtures.
+- In reviewer instructions, point to Settings → **本地能力** for the truthful runtime matrix and **实验室** for the stable profile's non-interactive gated states.
 - Mark the advanced native engine as macOS-only until other installers exist.

@@ -17,6 +17,26 @@ The checked-in manifest public key keeps the development extension ID stable. Do
 
 Unpacked source reports commit `development` and no build timestamp. `npm run package` injects the current commit and UTC timestamp only into a temporary staging copy and verifies that `extension/` remains unchanged.
 
+## Verify the interface and permissions
+
+After reloading the unpacked extension, open its gear menu. Settings starts
+with **运行状态** and places the everyday controls under **基础下载**,
+**性能**, **检测与命名**, **隐私与网络**, **本地能力**, and **通知**.
+The **本地能力** matrix reports host connection, protocol compatibility,
+FFmpeg/local processing, yt-dlp installation, and external-tool networking as
+separate states. `已安装` does not mean a stable-profile feature is available.
+
+The form's save action remains disabled until a normalized value changes.
+Notification permission is requested when the notification control is enabled;
+Native Messaging permission is requested from its authorization/download
+control. If notification permission was revoked in Chrome, opening Settings
+normalizes the ineffective saved preference to off before any later grant can
+take effect. Enabling local-network media requires a confirmation and still does
+not permit metadata, link-local, multicast, unspecified, or reserved targets.
+The **实验室** section is informational in the stable profile and contains no
+switch that can activate YouTube, live HLS, encrypted HLS, or separate-audio
+HLS support.
+
 ## Install the macOS native host
 
 ```bash

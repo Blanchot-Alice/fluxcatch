@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.5 — Unreleased
+
+- Added shared, packaged UI tokens and control primitives for Settings, popup, and Side Panel while retaining vanilla Manifest V3 HTML, CSS, and JavaScript.
+- Reorganized Settings around runtime identity, basic downloads, performance, detection and naming, privacy and network boundaries, local capabilities, notifications, and non-interactive Lab roadmap states.
+- Added normalized dirty-state tracking, field-level validation and an error summary for concurrency, minimum size, filename templates, and ignored domains; failed saves retain the unsaved state.
+- Moved optional notification and Native Messaging permission requests to their originating user gestures and added an explicit confirmation step before enabling private-network media access.
+- Separated native-host connection, protocol compatibility, FFmpeg installation/local processing, yt-dlp installation, external-tool networking, and build availability so installed tools are not presented as enabled features.
+- Unified restrained pending, success, failure, toast, focus-restoration, and duplicate-action protection across the popup and Side Panel, including card-local manifest loading feedback.
+- Strengthened keyboard, focus-visible, dark-mode, reduced-motion, narrow-width, long-filename, helper/error semantics, and minimum-target behavior without changing media detection or native download protocols.
+
 ## 0.2.4 — 2026-08-23
 
 - Split network guarantees by execution layer: the extension validates literal URL/host information, purpose, provenance, and worker-derived origins; the native client validates DNS answers, pins connected peers, reauthorizes redirects and manifest children, and defends against rebinding.
