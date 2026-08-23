@@ -49,7 +49,7 @@ test("side panel ships complete workspace assets and accessible states", () => {
   assert.match(js, /kind === "dash_pair"/);
   assert.match(js, /streamTypeLabel/);
   assert.match(js, /item\.kind !== "youtube" \|\| BUILD_PROFILE\.features\.externalToolNetwork/);
-  assert.match(js, /download\.textContent = "快速下载"/);
+  assert.match(js, /download\.textContent = "按默认设置下载"/);
   assert.doesNotMatch(js, /chrome\.action\?\.openPopup|打开下载设置|yt-dlp/);
   assert.match(js, /permissions\.request\(\{ permissions: \["nativeMessaging"\] \}\)/);
   assert.match(js, /item\.provenance !== "observed_response"/);

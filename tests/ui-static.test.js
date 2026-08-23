@@ -219,6 +219,11 @@ test("download acceleration status uses plain, consistent user-facing language",
 
 test("popup offers one parsed download flow with format-driven filenames", () => {
   assert.match(popupHtml, /<option value="mp3">MP3（仅音频）<\/option>/);
+  assert.equal((popupHtml.match(/data-dialog-close/g) || []).length, 2);
+  assert.doesNotMatch(popupHtml, /type="submit"[^>]+value="cancel"/);
+  assert.match(popupJs, /querySelectorAll\("\[data-dialog-close\]"\)/);
+  assert.match(popupJs, /ffmpeg\?\.encoders\?\.libmp3lame === false/);
+  assert.match(popupJs, /MP3（当前 FFmpeg 不支持）/);
   assert.doesNotMatch(popupHtml, /id="extractAudioInput"|id="concurrencyInput"|同时下载数量/);
   assert.match(popupJs, /download\.addEventListener\("click", \(\) => void prepareDownload\(item, download\)\)/);
   assert.doesNotMatch(popupJs, /more\.textContent = stream \? "解析"|function probeAndOpen/);

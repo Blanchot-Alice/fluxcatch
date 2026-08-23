@@ -110,15 +110,21 @@ function bindEvents() {
     });
   }
   $("#downloadForm").addEventListener("submit", submitDownload);
+  for (const closeButton of dialog.querySelectorAll("[data-dialog-close]")) {
+    closeButton.addEventListener("click", () => dialog.close());
+  }
   $("#containerSelect").addEventListener("change", () => {
     $("#filenameInput").value = replaceFilenameExtension($("#filenameInput").value, $("#containerSelect").value);
     syncVariantVisibility();
   });
   dialog.addEventListener("close", () => {
     const trigger = state.dialogTrigger;
+    const currentTrigger = findMediaAction(trigger?.dataset?.mediaId, trigger?.dataset?.mediaAction);
+    const target = $("#jobsView").hidden ? currentTrigger || trigger || $("#scanButton") : $("#jobsTab");
     state.dialogTrigger = null;
-    if ($("#jobsView").hidden) restoreFocus(trigger);
-    else restoreFocus($("#jobsTab"));
+    // Let the native <dialog> finish its own focus restoration first; doing
+    // this synchronously can leave focus trapped on a now-hidden action.
+    globalThis.setTimeout(() => restoreFocus(target), 0);
   });
 }
 
@@ -300,8 +306,10 @@ function openDownloadDialog(item, { probeWarning = false } = {}) {
   const containerSelect = $("#containerSelect");
   const pairedDash = item.kind === "dash_pair";
   for (const option of containerSelect.options) option.disabled = pairedDash && ["mkv", "webm"].includes(option.value);
+  configureMp3Option(containerSelect);
   const preferredFormat = ["mp4", "mkv", "webm"].includes(state.settings.outputContainer) ? state.settings.outputContainer : "mp4";
-  const outputFormat = pairedDash && ["mkv", "webm"].includes(preferredFormat) ? "mp4" : preferredFormat;
+  const preferredOption = [...containerSelect.options].find((option) => option.value === preferredFormat);
+  const outputFormat = (pairedDash && ["mkv", "webm"].includes(preferredFormat)) || preferredOption?.disabled ? "mp4" : preferredFormat;
   containerSelect.value = outputFormat;
   $("#filenameInput").value = defaultFilename(item, outputFormat);
   $("#nativeDirectInput").checked = Boolean(state.settings.useNativeForDirect);
@@ -340,6 +348,24 @@ function openDownloadDialog(item, { probeWarning = false } = {}) {
   requestAnimationFrame(() => {
     if (dialog.open) $("#filenameInput").focus({ preventScroll: true });
   });
+}
+
+function configureMp3Option(containerSelect = $("#containerSelect")) {
+  const option = [...(containerSelect?.options || [])].find((candidate) => candidate.value === "mp3");
+  if (!option) return;
+  const host = state.hostStatus || {};
+  const ffmpeg = host.capabilities?.ffmpeg;
+  const mismatch = host.connected === true && host.compatible !== true;
+  const explicitlyUnavailable = host.connected === true && host.compatible === true
+    && (ffmpeg?.available === false || ffmpeg?.encoders?.libmp3lame === false);
+  option.disabled = mismatch || explicitlyUnavailable;
+  option.textContent = mismatch
+    ? "MP3（需更新高速下载功能）"
+    : explicitlyUnavailable
+      ? "MP3（当前 FFmpeg 不支持）"
+      : host.connected === true && ffmpeg?.encoders?.libmp3lame === true
+        ? "MP3（仅音频）"
+        : "MP3（需高速下载功能）";
 }
 
 async function submitDownload(event) {
@@ -474,6 +500,15 @@ function announceJobChange(previous, current) {
 
 function updateHost(status = {}) {
   state.hostStatus = status;
+  if (dialog.open) {
+    const containerSelect = $("#containerSelect");
+    const previous = containerSelect.value;
+    configureMp3Option(containerSelect);
+    if ([...containerSelect.options].find((option) => option.value === containerSelect.value)?.disabled) {
+      containerSelect.value = "mp4";
+      if (previous !== containerSelect.value) containerSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+  }
   const dot = $("#hostDot");
   const mismatch = status.connected && status.compatible !== true;
   dot.className = `dot ${status.connected && !mismatch ? "ok" : status.lastError || mismatch ? "bad" : ""}`;

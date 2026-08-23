@@ -1,6 +1,7 @@
 import { humanBytes } from "../lib/media.js";
 import { loadPrivacySafeThumbnail } from "../lib/thumbnail.js";
 import { BUILD_PROFILE, HOST_MISMATCH_MESSAGE } from "../lib/build-profile.js";
+import { createToastController, restoreFocus, withPendingAction } from "../ui/interactions.js";
 
 const state = {
   tabId: null,
@@ -10,12 +11,12 @@ const state = {
   settings: {},
   jobs: [],
   hostStatus: {},
-  refreshToken: 0,
-  toastTimer: null
+  refreshToken: 0
 };
 
 const $ = (selector) => document.querySelector(selector);
 const port = chrome.runtime.connect({ name: "fluxcatch-sidepanel" });
+const toastController = createToastController($("#toast"));
 
 function isStreamKind(value) {
   const kind = typeof value === "string" ? value : value?.kind;
@@ -59,27 +60,38 @@ async function init() {
 }
 
 function bindEvents() {
-  $("#settingsButton").addEventListener("click", () => {
-    void chrome.runtime.openOptionsPage().catch(showError);
-  });
-  $("#retryButton").addEventListener("click", () => void refreshAll());
-  $("#scanButton").addEventListener("click", () => void runAction(async () => {
-    if (!Number.isInteger(state.tabId)) throw new Error("当前没有可扫描的页面");
-    await call({ type: "SCAN_TAB", tabId: state.tabId });
-    showToast("已请求页面重新扫描");
-    setTimeout(() => void refreshMedia().catch(showError), 450);
+  $("#settingsButton").addEventListener("click", (event) => void runUiAction(event.currentTarget, "sidepanel:open-settings", () => chrome.runtime.openOptionsPage(), {
+    labelElement: event.currentTarget.querySelector("[data-action-label]")
   }));
-  $("#pingButton").addEventListener("click", () => void runAction(async () => {
+  $("#retryButton").addEventListener("click", (event) => void runUiAction(event.currentTarget, "sidepanel:retry", () => refreshAll({ propagateError: true }), {
+    pendingText: "", successText: "完成"
+  }));
+  $("#scanButton").addEventListener("click", (event) => {
+    const trigger = event.currentTarget;
+    void runUiAction(trigger, `sidepanel:scan:${state.tabId}`, async () => {
+      if (!Number.isInteger(state.tabId)) throw new Error("当前没有可扫描的页面");
+      await call({ type: "SCAN_TAB", tabId: state.tabId });
+      await new Promise((resolve) => setTimeout(resolve, 450));
+      await refreshMedia();
+      showToast("页面扫描结果已更新", "success");
+    }, { pendingText: "", successText: "已扫描" });
+  });
+  $("#pingButton").addEventListener("click", (event) => void runUiAction(event.currentTarget, "sidepanel:ping-host", async () => {
     const result = await call({ type: "PING_HOST" });
     updateHost(result.hostStatus || {});
-  }));
-  $("#clearCompletedButton").addEventListener("click", () => void runAction(async () => {
-    const result = await call({ type: "CLEAR_COMPLETED_JOBS" });
+    showToast("高速下载功能状态已更新", "success");
+  }, { pendingText: "", successText: "完成" }));
+  $("#clearCompletedButton").addEventListener("click", async (event) => {
+    const result = await runUiAction(event.currentTarget, "sidepanel:clear-completed", () => call({ type: "CLEAR_COMPLETED_JOBS" }), {
+      pendingText: "", successText: "已清理"
+    });
+    if (!result) return;
     state.jobs = result.jobs || [];
     sortJobs();
     renderJobs();
-    showToast(result.removed ? `已清理 ${result.removed} 个已结束任务` : "没有可清理的已结束任务");
-  }));
+    showToast(result.removed ? `已清理 ${result.removed} 个已结束任务` : "没有可清理的已结束任务", result.removed ? "success" : "warning");
+    if ($("#clearCompletedButton").disabled) restoreFocus($("#scanButton"));
+  });
 
   chrome.tabs.onActivated?.addListener(() => void refreshAll());
   chrome.tabs.onUpdated?.addListener((tabId, changeInfo) => {
@@ -92,7 +104,7 @@ function bindEvents() {
   });
 }
 
-async function refreshAll() {
+async function refreshAll({ propagateError = false } = {}) {
   const token = ++state.refreshToken;
   setLoading(true);
   hideError();
@@ -119,7 +131,9 @@ async function refreshAll() {
     renderJobs();
     updateHost(state.hostStatus);
   } catch (error) {
-    if (token === state.refreshToken) showError(error);
+    if (token !== state.refreshToken) return;
+    showError(error);
+    if (propagateError) throw error;
   } finally {
     if (token === state.refreshToken) setLoading(false);
   }
@@ -153,7 +167,7 @@ function renderMedia() {
   for (const item of items) list.append(createMediaRow(item));
   if (focusedMediaId) {
     const target = [...list.querySelectorAll("button[data-media-id]")].find((button) => button.dataset.mediaId === focusedMediaId);
-    target?.focus({ preventScroll: true });
+    restoreFocus(target || $("#scanButton"));
   }
 }
 
@@ -168,7 +182,7 @@ function createMediaRow(item) {
   main.className = "media-main";
   const title = document.createElement("h3");
   title.className = "media-title";
-  title.textContent = item.title || item.suggestedFilename || item.pageTitle || fileLabel(item.displayUrl);
+  title.textContent = readableMediaTitle(item);
   title.title = title.textContent;
   const url = document.createElement("p");
   url.className = "media-url";
@@ -194,28 +208,23 @@ function createMediaRow(item) {
   download.className = "media-download";
   download.dataset.mediaId = item.id || item.displayUrl;
   download.type = "button";
-  download.textContent = "快速下载";
+  download.textContent = "按默认设置下载";
   download.setAttribute("aria-label", `下载 ${title.textContent}`);
-  download.addEventListener("click", () => void runAction(async () => {
-    download.disabled = true;
-    try {
-      const advanced = stream || item.provenance !== "observed_response" || Boolean(state.settings.useNativeForDirect);
-      if (advanced) {
-        // Keep request() inside the originating click gesture. Re-requesting an
-        // already granted optional permission resolves without another prompt.
-        const granted = await chrome.permissions.request({ permissions: ["nativeMessaging"] });
-        if (!granted) throw new Error("请先允许使用高速下载功能，再继续下载");
-      }
-      const result = await call({ type: "DOWNLOAD", tabId: state.tabId, candidate: candidateReference(item), options: {} });
-      showToast(result.method === "native" ? "高速下载任务已开始" : "浏览器下载已开始");
-      const jobsResult = await call({ type: "GET_JOBS" });
-      state.jobs = jobsResult.jobs || state.jobs;
-      sortJobs();
-      renderJobs();
-    } finally {
-      download.disabled = false;
+  download.addEventListener("click", () => void runUiAction(download, `sidepanel:quick-download:${item.id || item.displayUrl}`, async () => {
+    const advanced = stream || item.provenance !== "observed_response" || Boolean(state.settings.useNativeForDirect);
+    if (advanced) {
+      // Keep request() inside the originating click gesture. Re-requesting an
+      // already granted optional permission resolves without another prompt.
+      const granted = await chrome.permissions.request({ permissions: ["nativeMessaging"] });
+      if (!granted) throw new Error("请先允许使用高速下载功能，再继续下载");
     }
-  }));
+    const result = await call({ type: "DOWNLOAD", tabId: state.tabId, candidate: candidateReference(item), options: {} });
+    showToast(result.method === "native" ? "高速下载任务已开始" : "浏览器下载已开始", "success");
+    const jobsResult = await call({ type: "GET_JOBS" });
+    state.jobs = jobsResult.jobs || state.jobs;
+    sortJobs();
+    renderJobs();
+  }, { pendingText: "", successText: "已开始" }));
   side.append(age, download);
   row.append(visual, main, side);
   return row;
@@ -246,7 +255,7 @@ function renderJobs() {
   for (const job of state.jobs) list.append(createJobRow(job));
   if (focusedJobId) {
     const target = [...list.querySelectorAll("button[data-job-id]")].find((button) => button.dataset.jobId === focusedJobId);
-    target?.focus({ preventScroll: true });
+    if (!restoreFocus(target || $("#clearCompletedButton"))) restoreFocus($("#settingsButton"));
   }
 }
 
@@ -296,16 +305,10 @@ function createJobRow(job) {
     cancel.type = "button";
     cancel.textContent = "取消";
     cancel.setAttribute("aria-label", `取消 ${title.textContent}`);
-    cancel.addEventListener("click", () => void runAction(async () => {
-      cancel.disabled = true;
-      try {
-        await call({ type: "CANCEL_JOB", jobId: job.jobId });
-        showToast("已发送取消请求");
-      } catch (error) {
-        cancel.disabled = false;
-        throw error;
-      }
-    }));
+    cancel.addEventListener("click", () => void runUiAction(cancel, `sidepanel:cancel-job:${job.jobId}`, async () => {
+      await call({ type: "CANCEL_JOB", jobId: job.jobId });
+      showToast("已发送取消请求", "success");
+    }, { pendingText: "", successText: "✓" }));
     foot.append(cancel);
   }
   row.append(head, progress, foot);
@@ -326,7 +329,7 @@ function updateHost(status = {}) {
     $("#hostDetail").textContent = status.needsPermission
       ? "需要加速、合并或转换格式时会请你授权"
       : status.lastError
-        ? "暂时不可用；普通文件仍可直接下载"
+        ? "高速下载功能尚未就绪；普通文件仍可直接下载"
         : "普通文件仍可直接下载";
     return;
   }
@@ -367,21 +370,21 @@ async function call(message) {
   return response;
 }
 
-async function runAction(action) {
+async function runUiAction(element, key, action, options = {}) {
   try {
     hideError();
-    await action();
+    return await withPendingAction(element, key, action, { successDurationMs: 500, failureDurationMs: 0, ...options });
   } catch (error) {
     showError(error);
+    showToast(friendlyErrorMessage(error?.message || "操作失败"), "error");
+    restoreFocus(element);
+    return undefined;
   }
 }
 
-function showToast(message) {
-  const toast = $("#toast");
-  clearTimeout(state.toastTimer);
-  toast.textContent = String(message || "操作完成");
-  toast.hidden = false;
-  state.toastTimer = setTimeout(() => { toast.hidden = true; }, 1800);
+function showToast(message, type = "success") {
+  const method = ["success", "warning", "error"].includes(type) ? type : "error";
+  return toastController[method](String(message || "操作完成"));
 }
 
 function sortJobs() {
@@ -428,6 +431,14 @@ function compactMediaUrl(value) {
 
 function candidateReference(item) {
   return { id: item?.id, kind: item?.kind, generation: item?.generation };
+}
+
+function readableMediaTitle(item) {
+  for (const value of [item.displayTitle, item.title, item.suggestedFilename, item.pageTitle]) {
+    const title = String(value || "").trim();
+    if (title) return title;
+  }
+  return fileLabel(item.displayUrl);
 }
 
 function fileLabel(value) {

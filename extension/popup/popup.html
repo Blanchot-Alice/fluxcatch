@@ -74,14 +74,14 @@
 
   <dialog id="downloadDialog" aria-labelledby="downloadDialogTitle" aria-describedby="dialogNote dialogError">
     <form method="dialog" id="downloadForm">
-      <div class="dialog-head"><h2 id="downloadDialogTitle">下载设置</h2><button type="submit" value="cancel" class="close-button" aria-label="关闭">×</button></div>
+      <div class="dialog-head"><h2 id="downloadDialogTitle">下载设置</h2><button type="button" class="close-button" data-dialog-close aria-label="关闭">×</button></div>
       <label>文件名<input id="filenameInput" autocomplete="off" maxlength="200" required></label>
       <label>保存格式<select id="containerSelect"><option value="mp4">MP4</option><option value="mkv">MKV</option><option value="webm">WebM</option><option value="mp3">MP3（仅音频）</option></select></label>
       <label id="variantLabel" hidden>清晰度<select id="variantSelect"></select></label>
       <label class="check"><input id="nativeDirectInput" type="checkbox"><span>使用多连接高速下载</span></label>
       <p id="dialogNote" class="dialog-note" role="status" aria-live="polite"></p>
       <p id="dialogError" class="dialog-error" role="alert" aria-live="assertive" aria-atomic="true" hidden></p>
-      <div class="dialog-actions"><button type="submit" value="cancel" class="secondary">取消</button><button type="submit" id="confirmDownload" value="default" class="primary">开始下载</button></div>
+      <div class="dialog-actions"><button type="button" class="secondary" data-dialog-close>取消</button><button type="submit" id="confirmDownload" value="default" class="primary">开始下载</button></div>
     </form>
   </dialog>
 
