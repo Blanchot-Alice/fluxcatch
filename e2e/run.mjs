@@ -17,6 +17,7 @@ const EXTENSION_DIR = path.join(ROOT, "extension");
 const MANIFEST_PATH = path.join(EXTENSION_DIR, "manifest.json");
 const ARTIFACT_PATH = path.join(HERE, "artifacts", "latest.json");
 const SCREENSHOT_DIR = path.join(HERE, "artifacts", "screenshots");
+const PHASE_B_ARTIFACT_DIR = path.join(HERE, "artifacts", "phase-b-matrix");
 const FIXTURE_RESULT_KEY = "__FLUXCATCH_E2E_RESULT__";
 const POLL_INTERVAL_MS = 100;
 const START_TIMEOUT_MS = 20_000;
@@ -43,7 +44,7 @@ const manifest = JSON.parse(fs.readFileSync(MANIFEST_PATH, "utf8"));
 const EXPECTED_EXTENSION_ID = extensionIdFromManifestKey(manifest.key);
 const runId = `${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
 const report = {
-  schemaVersion: 2,
+  schemaVersion: 3,
   runId,
   startedAt: new Date().toISOString(),
   status: "running",
@@ -55,6 +56,8 @@ const report = {
   cases: [],
   ui: [],
   flows: [],
+  visualMatrix: [],
+  accessibility: {},
   cleanup: { chrome: false, server: false, profile: false }
 };
 
@@ -67,9 +70,12 @@ let controlPage;
 let controlTargetId;
 let fatalError;
 const caseTabIds = new Set();
+const fixtureRequestCounts = new Map();
 
 async function main() {
 try {
+  fs.rmSync(PHASE_B_ARTIFACT_DIR, { recursive: true, force: true });
+  fs.mkdirSync(PHASE_B_ARTIFACT_DIR, { recursive: true });
   assert.equal(extensionIdFromManifestKey(manifest.key), EXPECTED_EXTENSION_ID,
     "manifest.key no longer produces the pinned extension ID");
 
@@ -133,6 +139,8 @@ try {
   report.extension.buildIdentity = buildInfo.diagnostics.extension;
   report.extension.capabilityProfile = buildInfo.diagnostics.capabilities;
 
+  await auditPhaseBOptionsMatrix(launched.httpOrigin);
+
   await auditExistingExtensionPage("options", controlPage, 720, 900, `(() => ({
     title: document.title,
     heading: document.querySelector("h1")?.textContent,
@@ -176,6 +184,15 @@ try {
       while (!(mediaCard = document.querySelector(".media-card")) && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 50));
       }
+      const scan = document.querySelector("#scanButton");
+      scan?.click();
+      scan?.click();
+      const scanPending = {
+        busy: scan?.getAttribute("aria-busy"),
+        disabled: Boolean(scan?.disabled),
+        state: scan?.dataset.uiState || ""
+      };
+      await new Promise((resolve) => setTimeout(resolve, 550));
       document.querySelector("#jobsTab")?.click();
       const jobsVisible = !document.querySelector("#jobsView")?.hidden;
       document.querySelector("#mediaTab")?.click();
@@ -190,6 +207,8 @@ try {
         mediaVisible: !document.querySelector("#mediaView")?.hidden,
         thumbnailCount: document.querySelectorAll(".media-thumbnail").length,
         fallbackCount: document.querySelectorAll(".media-card .kind-icon").length,
+        scanPending,
+        sharedStyles: [...document.styleSheets].map((sheet) => new URL(sheet.href).pathname),
         overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth
       };
     })()`, launched.httpOrigin);
@@ -200,6 +219,16 @@ try {
       while (!(button = document.querySelector(".media-download")) && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 50));
       }
+      const scan = document.querySelector("#scanButton");
+      scan?.click();
+      scan?.click();
+      const scanPending = {
+        busy: scan?.getAttribute("aria-busy"),
+        disabled: Boolean(scan?.disabled),
+        state: scan?.dataset.uiState || ""
+      };
+      await new Promise((resolve) => setTimeout(resolve, 550));
+      button = document.querySelector(".media-download");
       button?.click();
       let quickDownloadFinished = false;
       while (Date.now() < deadline) {
@@ -227,10 +256,13 @@ try {
         fallbackCount: document.querySelectorAll(".media-row .kind-icon").length,
         globalErrorHidden: document.querySelector("#globalError")?.hidden,
         hasLiveRegions: document.querySelectorAll('[aria-live="polite"]').length >= 3,
+        scanPending,
+        sharedStyles: [...document.styleSheets].map((sheet) => new URL(sheet.href).pathname),
         overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth
       };
     })()`, launched.httpOrigin);
     await verifyUiDirectDownload(uiDownloadDir);
+    await auditPopupManifestLoading(launched.httpOrigin);
   } finally {
     try { await control(`async () => { await chrome.tabs.remove(${JSON.stringify(uiFixture.tabId)}); return true; }`); } catch { /* Best-effort fixture cleanup. */ }
   }
@@ -273,8 +305,10 @@ try {
   assert.ok(report.ui.every((item) => item.status === "passed"), "one or more UI page checks failed");
   assert.equal(report.cases.length, cases.length, "not every E2E case ran");
   assert.ok(report.cases.every((item) => item.status === "passed"), "one or more E2E cases failed");
-  assert.equal(report.flows.length, 2, "not every popup interaction flow ran");
+  assert.equal(report.flows.length, 3, "not every popup interaction flow ran");
   assert.ok(report.flows.every((item) => item.status === "passed"), "one or more E2E interaction flows failed");
+  assert.equal(report.visualMatrix.length, 13, "Phase B visual matrix is incomplete");
+  assert.ok(report.visualMatrix.every((item) => item.status === "passed"), "one or more Phase B visual states failed");
   report.status = "passed";
 } catch (error) {
   fatalError = error;
@@ -311,7 +345,7 @@ try {
 if (report.status !== "passed") {
   console.error(`E2E failed: ${fatalError?.stack || fatalError?.message || report.cleanup.profileError || "cleanup failed"}`);
 } else {
-  console.log(`E2E passed: ${report.cases.length} detection cases + ${report.ui.length} UI pages + ${report.flows.length} interaction flows; artifact ${ARTIFACT_PATH}`);
+  console.log(`E2E passed: ${report.cases.length} detection cases + ${report.ui.length} UI pages + ${report.flows.length} interaction flows + ${report.visualMatrix.length} Phase B visual states; artifact ${ARTIFACT_PATH}`);
 }
 }
 
@@ -486,6 +520,582 @@ async function runCase(definition, devtoolsOrigin) {
   }
 }
 
+async function auditPhaseBOptionsMatrix(devtoolsOrigin) {
+  const originalSettingsResponse = await control(`async () => chrome.runtime.sendMessage({ type: "GET_SETTINGS" })`);
+  assert.equal(originalSettingsResponse?.ok, true, originalSettingsResponse?.error || "GET_SETTINGS failed before Phase B Options audit");
+  const originalSettings = originalSettingsResponse.settings;
+  const prepared = await control(`async () => chrome.runtime.sendMessage({
+    type: "SAVE_SETTINGS",
+    settings: {
+      ...${JSON.stringify(originalSettings)},
+      allowPrivateNetworkMedia: false,
+      concurrentFragments: 8,
+      concurrentRanges: 8,
+      minimumBytes: 1024,
+      filenameTemplate: "{title} - {height}",
+      blockedDomains: []
+    }
+  })`);
+  assert.equal(prepared?.ok, true, prepared?.error || "could not prepare deterministic Options settings");
+
+  const page = await openExtensionTarget("options/options.html", devtoolsOrigin, "Phase B Options matrix");
+  const { client } = page;
+  try {
+    await setViewport(client, 980, 900);
+    await setEmulatedPreferences(client, { colorScheme: "light", reducedMotion: "no-preference" });
+    await waitForOptionsReady(client);
+    await client.send("Page.bringToFront");
+
+    const baseline = await evaluate(client, `(() => {
+      const visible = (node) => {
+        const style = getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+      };
+      const textNodes = [...document.querySelectorAll("p, small, label, button, input, select, textarea, summary, dt, dd")]
+        .filter(visible)
+        .map((node) => ({ selector: node.id || node.className || node.localName, px: parseFloat(getComputedStyle(node).fontSize) }))
+        .filter((entry) => Number.isFinite(entry.px));
+      const described = [...document.querySelectorAll("[aria-describedby]")].map((node) => ({
+        id: node.id,
+        missing: node.getAttribute("aria-describedby").split(/\\s+/).filter(Boolean).filter((id) => !document.getElementById(id))
+      }));
+      const targetNodes = [...document.querySelectorAll("button, input:not([type=checkbox]):not([type=radio]), select, textarea, summary")]
+        .filter(visible)
+        .map((node) => {
+          const rect = node.getBoundingClientRect();
+          return { id: node.id || node.textContent.trim().slice(0, 24), width: rect.width, height: rect.height };
+        });
+      const sheets = [...document.styleSheets].map((sheet) => new URL(sheet.href).pathname);
+      const save = document.querySelector(".save-btn");
+      const labActions = [...document.querySelectorAll("#lab button, #lab input, #lab select, #lab textarea")]
+        .filter((node) => !node.disabled && visible(node));
+      const focusControl = document.querySelector("#filenameTemplate");
+      focusControl.focus({ preventScroll: true });
+      const focusStyle = getComputedStyle(focusControl);
+      return {
+        title: document.title,
+        fieldsets: document.querySelectorAll("fieldset").length,
+        legends: document.querySelectorAll("fieldset > legend").length,
+        described,
+        minVisibleTextPx: Math.min(...textNodes.map((entry) => entry.px)),
+        undersizedTargets: targetNodes.filter((entry) => entry.height < 39.5 || entry.width < 39.5),
+        sheets,
+        saveDisabled: Boolean(save.disabled),
+        dirty: document.querySelector("#settingsForm")?.dataset.dirty,
+        dirtyText: document.querySelector("#dirtyStatus")?.textContent.trim(),
+        labActionCount: labActions.length,
+        focusOutline: { style: focusStyle.outlineStyle, width: parseFloat(focusStyle.outlineWidth) || 0 },
+        bodyBackground: getComputedStyle(document.body).backgroundColor,
+        overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth
+      };
+    })()`);
+    assert.equal(baseline.title, "FluxCatch 设置");
+    assert.equal(baseline.fieldsets, 6, "Options grouped settings must use six fieldsets");
+    assert.equal(baseline.legends, baseline.fieldsets, "every Options fieldset must have a legend");
+    assert.deepEqual(baseline.described.filter((entry) => entry.missing.length), [], "Options aria-describedby references a missing helper");
+    assert.ok(baseline.minVisibleTextPx >= 12, `Options contains ${baseline.minVisibleTextPx}px visible text`);
+    assert.deepEqual(baseline.undersizedTargets, [], `Options contains sub-40px controls: ${JSON.stringify(baseline.undersizedTargets)}`);
+    assert.ok(baseline.sheets.some((value) => value.endsWith("/ui/tokens.css")), "Options does not load shared tokens");
+    assert.ok(baseline.sheets.some((value) => value.endsWith("/ui/components.css")), "Options does not load shared components");
+    assert.equal(baseline.saveDisabled, true, "Options Save must initially be disabled");
+    assert.equal(baseline.dirty, "false", "Options form must initially be clean");
+    assert.equal(baseline.dirtyText, "所有更改均已保存");
+    assert.equal(baseline.labActionCount, 0, "gated Lab features expose an active primary control");
+    assert.notEqual(baseline.focusOutline.style, "none", "focused Options input has no visible focus ring");
+    assert.ok(baseline.focusOutline.width >= 2, "focused Options input focus ring is too thin");
+    assert.ok(baseline.overflow <= 1, `Options light view overflows by ${baseline.overflow}px`);
+    await resetVisualOrigin(client);
+    await captureMatrixState(client, "options-light-980x900", 980, 900, { theme: "light", state: "clean", origin: "top" });
+    const stickyWide = await measureFinalFieldAgainstSaveBar(client, "wide Options");
+    await resetVisualOrigin(client);
+
+    await setEmulatedPreferences(client, { colorScheme: "dark", reducedMotion: "no-preference" });
+    await delay(100);
+    const dark = await evaluate(client, `(() => ({
+      matches: matchMedia("(prefers-color-scheme: dark)").matches,
+      bodyBackground: getComputedStyle(document.body).backgroundColor,
+      focusColor: getComputedStyle(document.querySelector("#filenameTemplate")).outlineColor,
+      overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth
+    }))()`);
+    assert.equal(dark.matches, true, "dark-mode media emulation did not apply");
+    assert.notEqual(dark.bodyBackground, baseline.bodyBackground, "dark mode did not change the page background");
+    assert.ok(dark.overflow <= 1, `Options dark view overflows by ${dark.overflow}px`);
+    await resetVisualOrigin(client);
+    await captureMatrixState(client, "options-dark-980x900", 980, 900, { theme: "dark", origin: "top" });
+
+    await setEmulatedPreferences(client, { colorScheme: "light", reducedMotion: "no-preference" });
+    await setViewport(client, 390, 844);
+    const narrow = await evaluate(client, `(() => ({
+      overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      navPosition: getComputedStyle(document.querySelector(".section-nav")).position,
+      layoutColumns: getComputedStyle(document.querySelector(".options-layout")).gridTemplateColumns
+    }))()`);
+    assert.ok(narrow.overflow <= 1, `Options narrow view overflows by ${narrow.overflow}px`);
+    assert.notEqual(narrow.navPosition, "sticky", "Options navigation remains sticky at narrow width");
+    await resetVisualOrigin(client);
+    await captureMatrixState(client, "options-narrow-390x844", 390, 844, { layout: "single-column", origin: "top" });
+    const stickyNarrow = await measureFinalFieldAgainstSaveBar(client, "narrow Options");
+    await resetVisualOrigin(client);
+
+    const zoomChecks = [];
+    for (const zoom of [{ percent: 125, width: 784 }, { percent: 150, width: 653 }]) {
+      await setViewport(client, zoom.width, 720);
+      const value = await evaluate(client, `(() => ({
+        overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        viewportWidth: document.documentElement.clientWidth
+      }))()`);
+      assert.ok(value.overflow <= 1, `Options ${zoom.percent}% effective zoom overflows by ${value.overflow}px`);
+      zoomChecks.push({ ...zoom, ...value, method: "980px physical viewport represented by effective CSS viewport" });
+    }
+
+    await setViewport(client, 980, 900);
+    await evaluate(client, `(() => {
+      const input = document.querySelector("#filenameTemplate");
+      input.value += " 视觉校对";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      return true;
+    })()`);
+    const dirty = await poll(async () => {
+      const value = await evaluate(client, `(() => ({
+        disabled: document.querySelector(".save-btn").disabled,
+        dirty: document.querySelector("#settingsForm").dataset.dirty,
+        text: document.querySelector("#dirtyStatus").textContent.trim()
+      }))()`);
+      return value.dirty === "true" && value.disabled === false ? value : null;
+    }, CASE_TIMEOUT_MS, "Options dirty state");
+    assert.equal(dirty.text, "有未保存的更改");
+    await resetVisualOrigin(client);
+    await captureMatrixState(client, "options-dirty", 980, 900, { saveEnabled: true, origin: "top" });
+
+    await evaluate(client, `(() => {
+      const input = document.querySelector("#filenameTemplate");
+      input.focus();
+      input.setSelectionRange(0, 0);
+      input.dispatchEvent(new Event("select", { bubbles: true }));
+      document.querySelector('[data-token="{title}"]').focus();
+      return true;
+    })()`);
+    await pressEnterKey(client);
+    const keyboardInsertion = await poll(async () => {
+      const value = await evaluate(client, `(() => ({ value: document.querySelector("#filenameTemplate").value, active: document.activeElement?.id }))()`);
+      return value.value.startsWith("{title}") ? value : null;
+    }, CASE_TIMEOUT_MS, "keyboard template-token insertion");
+    assert.ok(keyboardInsertion.value.startsWith("{title}"), "keyboard activation did not insert the selected filename token");
+
+    await evaluate(client, `document.querySelector(".save-btn").click()`);
+    const saved = await poll(async () => {
+      const value = await evaluate(client, `(() => ({
+        disabled: document.querySelector(".save-btn").disabled,
+        dirty: document.querySelector("#settingsForm").dataset.dirty,
+        status: document.querySelector("#saveStatus").textContent.trim(),
+        busy: document.querySelector(".save-btn").getAttribute("aria-busy"),
+        actionState: document.querySelector(".save-btn").dataset.uiState || ""
+      }))()`);
+      return value.dirty === "false" && /已保存/.test(value.status) ? value : null;
+    }, CASE_TIMEOUT_MS, "Options successful save");
+    assert.match(saved.status, /已保存/);
+    await poll(async () => {
+      const value = await evaluate(client, `(() => ({
+        disabled: document.querySelector(".save-btn").disabled,
+        busy: document.querySelector(".save-btn").getAttribute("aria-busy"),
+        actionState: document.querySelector(".save-btn").dataset.uiState || ""
+      }))()`);
+      return value.disabled && value.busy === null && value.actionState === "" ? value : null;
+    }, CASE_TIMEOUT_MS, "Options Save action to restore after success");
+
+    const failureHook = await evaluate(client, `(async () => {
+      const original = chrome.runtime.sendMessage.bind(chrome.runtime);
+      globalThis.__fluxcatchOriginalSendMessage = original;
+      try {
+        const wrapped = (...args) => args[0]?.type === "SAVE_SETTINGS"
+          ? Promise.resolve({ ok: false, error: "确定性保存失败" })
+          : original(...args);
+        Object.defineProperty(chrome.runtime, "sendMessage", { configurable: true, writable: true, value: wrapped });
+        const probe = await chrome.runtime.sendMessage({ type: "SAVE_SETTINGS", settings: {} });
+        return { installed: chrome.runtime.sendMessage === wrapped, probe };
+      } catch (error) {
+        return { installed: false, error: String(error && error.message || error) };
+      }
+    })()`);
+    assert.equal(failureHook.installed, true, `could not install deterministic Save failure hook: ${JSON.stringify(failureHook)}`);
+    assert.deepEqual(failureHook.probe, { ok: false, error: "确定性保存失败" }, "Save failure hook did not intercept runtime messaging");
+    await evaluate(client, `(() => {
+      const input = document.querySelector("#minimumKiB");
+      input.value = String(Number(input.value || 0) + 1);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      document.querySelector(".save-btn").click();
+      return true;
+    })()`);
+    const failedSave = await poll(async () => {
+      const value = await evaluate(client, `(() => ({
+        dirty: document.querySelector("#settingsForm").dataset.dirty,
+        saveDisabled: document.querySelector(".save-btn").disabled,
+        status: document.querySelector("#saveStatus").textContent.trim(),
+        formBusy: document.querySelector("#settingsForm").getAttribute("aria-busy")
+      }))()`);
+      return value.status.includes("失败") ? value : null;
+    }, CASE_TIMEOUT_MS, "Options failed save state");
+    assert.equal(failedSave.dirty, "true", "failed save discarded dirty state");
+    assert.equal(failedSave.saveDisabled, false, "failed save did not restore the Save action");
+    assert.equal(failedSave.formBusy, null, "failed save left the form aria-busy");
+    await evaluate(client, `document.querySelector("#discardChangesButton").click()`);
+    await poll(async () => await evaluate(client, `document.querySelector("#settingsForm").dataset.dirty === "false"`), CASE_TIMEOUT_MS, "discard failed-save changes before reload");
+
+    const restoredSettings = await control(`async () => chrome.runtime.sendMessage({ type: "SAVE_SETTINGS", settings: ${JSON.stringify(originalSettings)} })`);
+    assert.equal(restoredSettings?.ok, true, restoredSettings?.error || "could not restore settings before validation audit");
+    await reloadExtensionPage(client);
+    await waitForOptionsReady(client);
+    await setViewport(client, 980, 900);
+    await evaluate(client, `(() => {
+      const values = {
+        concurrentFragments: "25",
+        minimumKiB: "102401",
+        filenameTemplate: "{title}-{unknown}",
+        blockedDomains: "https://valid.example/path\\n*.invalid.example\\nhttps://user:pass@example.com"
+      };
+      for (const [id, value] of Object.entries(values)) {
+        const input = document.querySelector("#" + id);
+        input.value = value;
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+      document.querySelector(".save-btn").click();
+      return true;
+    })()`);
+    const validation = await poll(async () => {
+      const value = await evaluate(client, `(() => ({
+        summaryHidden: document.querySelector("#errorSummary").hidden,
+        invalidIds: [...document.querySelectorAll('[aria-invalid="true"]')].map((node) => node.id),
+        firstFocus: document.activeElement?.id,
+        domainError: document.querySelector("#blockedDomainsError").textContent.trim(),
+        tokenError: document.querySelector("#filenameTemplateError").textContent.trim(),
+        summary: document.querySelector("#errorSummary").textContent.trim()
+      }))()`);
+      return !value.summaryHidden ? value : null;
+    }, CASE_TIMEOUT_MS, "Options validation state");
+    assert.ok(validation.invalidIds.includes("concurrentFragments"), "concurrency validation did not mark its field invalid");
+    assert.ok(validation.invalidIds.includes("minimumKiB"), "minimum size validation did not mark its field invalid");
+    assert.ok(validation.invalidIds.includes("filenameTemplate"), "unknown filename token was accepted");
+    assert.ok(validation.invalidIds.includes("blockedDomains"), "invalid domain lines were accepted");
+    assert.equal(validation.firstFocus, "concurrentFragments", "failed submission did not focus the first invalid field");
+    assert.match(validation.domainError, /第\s*2\s*行|2/);
+    assert.match(validation.tokenError, /不支持|unknown|未知/i);
+    await captureMatrixState(client, "options-validation", 980, 900, { invalidFields: validation.invalidIds });
+
+    await evaluate(client, `document.querySelector("#discardChangesButton").click()`);
+    await poll(async () => await evaluate(client, `document.querySelector("#settingsForm").dataset.dirty === "false"`), CASE_TIMEOUT_MS, "discard invalid Options changes before reload");
+    await reloadExtensionPage(client);
+    await waitForOptionsReady(client);
+    await evaluate(client, `document.querySelector("#allowPrivateNetworkMedia").click()`);
+    const warning = await poll(async () => {
+      const value = await evaluate(client, `(() => ({
+        open: document.querySelector("#privateNetworkDialog").open,
+        checked: document.querySelector("#allowPrivateNetworkMedia").checked,
+        active: document.activeElement?.id,
+        text: document.querySelector("#privateNetworkDialogDescription").textContent.trim()
+      }))()`);
+      return value.open ? value : null;
+    }, CASE_TIMEOUT_MS, "private-network confirmation dialog");
+    assert.equal(warning.checked, false, "private-network setting changed before confirmation");
+    assert.equal(warning.active, "privateNetworkCancelButton", "private-network dialog did not place focus on a safe action");
+    assert.match(warning.text, /metadata.*link-local.*multicast.*reserved/i);
+    await evaluate(client, `(() => {
+      globalThis.__phaseBPrivateDialogClicks = 0;
+      globalThis.__phaseBPrivateDialogFocus = [];
+      document.querySelector("#privateNetworkCancelButton").addEventListener("click", () => { globalThis.__phaseBPrivateDialogClicks += 1; }, { once: true });
+      document.addEventListener("focusin", (event) => { globalThis.__phaseBPrivateDialogFocus.push(event.target?.id || event.target?.localName || "unknown"); }, { capture: true });
+      return true;
+    })()`);
+    await captureMatrixState(client, "options-private-network-warning", 980, 900, { confirmationRequired: true });
+    await pressEnterKey(client);
+    await poll(async () => {
+      const value = await evaluate(client, `(() => ({ open: document.querySelector("#privateNetworkDialog").open, active: document.activeElement?.id }))()`);
+      return !value.open ? value : null;
+    }, CASE_TIMEOUT_MS, "private-network dialog focus restoration");
+    await delay(250);
+    const warningClosed = await evaluate(client, `(() => ({
+      open: document.querySelector("#privateNetworkDialog").open,
+      active: document.activeElement?.id,
+      cancelClicks: globalThis.__phaseBPrivateDialogClicks,
+      focusEvents: globalThis.__phaseBPrivateDialogFocus
+    }))()`);
+    assert.equal(warningClosed.cancelClicks, 1, `keyboard activation did not invoke exactly one Cancel action: ${JSON.stringify(warningClosed)}`);
+    assert.equal(warningClosed.active, "allowPrivateNetworkMedia", `private-network dialog did not restore focus to its trigger: ${JSON.stringify(warningClosed)}`);
+
+    const missingMatrix = await evaluate(client, `(async () => {
+      const root = document.documentElement;
+      const priorScrollBehavior = root.style.scrollBehavior;
+      root.style.scrollBehavior = "auto";
+      document.querySelector("#localCapabilities").scrollIntoView({ block: "center", behavior: "auto" });
+      root.style.scrollBehavior = priorScrollBehavior;
+      const { renderHostStatus } = await import(chrome.runtime.getURL("options/options.js"));
+      renderHostStatus({ connected: false }, { permissionGranted: true, failed: true });
+      const matrixRect = document.querySelector("#localCapabilities .local-capability-matrix").getBoundingClientRect();
+      const saveRect = document.querySelector("#saveBar").getBoundingClientRect();
+      return {
+        states: [...document.querySelectorAll("#localCapabilities dd[data-state]")].map((node) => node.dataset.state),
+        native: document.querySelector("#capabilityNativeConnection").textContent,
+        permission: document.querySelector("#nativePermissionStatus").textContent,
+        action: document.querySelector("#nativePermissionButton").textContent,
+        matrixVisible: matrixRect.top >= 0 && matrixRect.bottom <= saveRect.top
+      };
+    })()`);
+    assert.match(missingMatrix.native, /未连接.*检查安装/);
+    assert.match(missingMatrix.permission, /已授权.*未连接/);
+    assert.equal(missingMatrix.action, "重新检查");
+    assert.equal(missingMatrix.matrixVisible, true, "missing-host capability matrix is outside its evidence screenshot");
+    assert.ok(missingMatrix.states.every((state) => ["ready", "gated", "missing", "mismatch", "unknown"].includes(state)),
+      `missing-host fixture produced an unknown production state: ${JSON.stringify(missingMatrix.states)}`);
+    await delay(80);
+    await captureMatrixState(client, "options-native-host-missing", 980, 900, {
+      fixture: "deterministic host DTO rendered by production renderHostStatus",
+      model: missingMatrix
+    });
+
+    const readyMatrix = await evaluate(client, `(async () => {
+      const { renderHostStatus } = await import(chrome.runtime.getURL("options/options.js"));
+      renderHostStatus({
+        connected: true,
+        compatible: true,
+        version: "0.2.4",
+        protocolVersion: 1,
+        ffmpeg: true,
+        capabilities: {
+          ffmpeg: { available: true, encoders: { libmp3lame: true } },
+          ytdlp: { installed: true, available: false, networkDisabled: true }
+        }
+      }, { permissionGranted: true });
+      const matrixRect = document.querySelector("#localCapabilities .local-capability-matrix").getBoundingClientRect();
+      const saveRect = document.querySelector("#saveBar").getBoundingClientRect();
+      return {
+        states: [...document.querySelectorAll("#localCapabilities dd[data-state]")].map((node) => node.dataset.state),
+        ytdlp: document.querySelector("#capabilityYtDlp").textContent,
+        external: document.querySelector("#capabilityExternalNetwork").textContent,
+        permission: document.querySelector("#nativePermissionStatus").textContent,
+        action: document.querySelector("#nativePermissionButton").textContent,
+        matrixVisible: matrixRect.top >= 0 && matrixRect.bottom <= saveRect.top
+      };
+    })()`);
+    assert.match(readyMatrix.ytdlp, /已安装.*未开放/);
+    assert.doesNotMatch(readyMatrix.ytdlp, /^可用$/);
+    assert.match(readyMatrix.external, /未启用/);
+    assert.match(readyMatrix.permission, /已就绪/);
+    assert.equal(readyMatrix.action, "重新检查");
+    assert.equal(readyMatrix.matrixVisible, true, "ready-host capability matrix is outside its evidence screenshot");
+    assert.ok(readyMatrix.states.every((state) => ["ready", "gated", "missing", "mismatch", "unknown"].includes(state)),
+      `ready-host fixture produced an unknown production state: ${JSON.stringify(readyMatrix.states)}`);
+    await delay(80);
+    await captureMatrixState(client, "options-native-host-ready", 980, 900, {
+      fixture: "deterministic host DTO rendered by production renderHostStatus",
+      model: readyMatrix
+    });
+
+    await setEmulatedPreferences(client, { colorScheme: "light", reducedMotion: "reduce" });
+    await resetVisualOrigin(client);
+    await delay(100);
+    const reduced = await evaluate(client, `(() => {
+      const button = document.querySelector("#copyDiagnosticsButton");
+      const style = getComputedStyle(button);
+      const animations = document.getAnimations().filter((animation) => animation.playState === "running");
+      return {
+        matches: matchMedia("(prefers-reduced-motion: reduce)").matches,
+        transitionDuration: style.transitionDuration,
+        transform: style.transform,
+        runningAnimations: animations.length,
+        overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth
+      };
+    })()`);
+    assert.equal(reduced.matches, true, "reduced-motion media emulation did not apply");
+    assert.ok(reduced.runningAnimations === 0, `reduced-motion view still has ${reduced.runningAnimations} running animations`);
+    assert.ok(reduced.overflow <= 1, `reduced-motion Options view overflows by ${reduced.overflow}px`);
+    await captureMatrixState(client, "reduced-motion", 980, 900, { media: "prefers-reduced-motion: reduce", computed: reduced, origin: "top" });
+
+    report.accessibility.options = {
+      fieldsets: baseline.fieldsets,
+      legends: baseline.legends,
+      missingDescribedByTargets: baseline.described.filter((entry) => entry.missing.length),
+      minimumVisibleTextPx: baseline.minVisibleTextPx,
+      undersizedControls: baseline.undersizedTargets,
+      focusRing: baseline.focusOutline,
+      zoomChecks,
+      stickySaveBar: { wide: stickyWide, narrow: stickyNarrow },
+      keyboardTemplateInsertion: { valueInserted: true, resultingFocus: keyboardInsertion.active || "browser-managed" },
+      save: { initiallyDisabled: true, successResetsDirty: true, failurePreservesDirty: true },
+      validation: { invalidFields: validation.invalidIds, firstFocus: validation.firstFocus },
+      privateNetworkFocusRestored: warningClosed.active === "allowPrivateNetworkMedia",
+      reducedMotion: reduced
+    };
+  } finally {
+    try {
+      await control(`async () => chrome.runtime.sendMessage({ type: "SAVE_SETTINGS", settings: ${JSON.stringify(originalSettings)} })`);
+    } catch { /* The main E2E cleanup still removes the isolated profile. */ }
+    await closeExtensionTarget(page);
+  }
+}
+
+async function resetVisualOrigin(client) {
+  await evaluate(client, `(() => {
+    if (document.activeElement && typeof document.activeElement.blur === "function") document.activeElement.blur();
+    globalThis.__phaseBScrollRestore ||= {
+      behavior: document.documentElement.style.scrollBehavior,
+      anchor: document.documentElement.style.overflowAnchor
+    };
+    document.documentElement.style.scrollBehavior = "auto";
+    document.documentElement.style.overflowAnchor = "none";
+    document.documentElement.scrollTop = 0;
+    document.body.scrollTop = 0;
+    scrollTo({ left: 0, top: 0, behavior: "instant" });
+    return { x: scrollX, y: scrollY };
+  })()`);
+  await poll(async () => {
+    const position = await evaluate(client, `(() => {
+      document.documentElement.scrollTop = 0;
+      document.body.scrollTop = 0;
+      scrollTo({ left: 0, top: 0, behavior: "instant" });
+      return { x: scrollX, y: scrollY };
+    })()`);
+    return Math.abs(position.x) <= 1 && Math.abs(position.y) <= 1 ? position : null;
+  }, CASE_TIMEOUT_MS, "visual capture to reset to the page origin");
+}
+
+async function restoreVisualOriginStyles(client) {
+  await evaluate(client, `(() => {
+    const prior = globalThis.__phaseBScrollRestore;
+    if (!prior) return { x: scrollX, y: scrollY };
+    document.documentElement.style.scrollBehavior = prior.behavior;
+    document.documentElement.style.overflowAnchor = prior.anchor;
+    delete globalThis.__phaseBScrollRestore;
+    return { x: scrollX, y: scrollY };
+  })()`);
+}
+
+async function measureFinalFieldAgainstSaveBar(client, label) {
+  const geometry = await evaluate(client, `(async () => {
+    const control = document.querySelector("#showNotifications");
+    const field = document.querySelector("#notifications .section-content");
+    const saveBar = document.querySelector("#saveBar");
+    const priorScrollBehavior = document.documentElement.style.scrollBehavior;
+    document.documentElement.style.scrollBehavior = "auto";
+    field.scrollIntoView({ block: "end" });
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    document.documentElement.style.scrollBehavior = priorScrollBehavior;
+    control.focus({ preventScroll: true });
+    const fieldRect = field.getBoundingClientRect();
+    const saveRect = saveBar.getBoundingClientRect();
+    return {
+      fieldTop: fieldRect.top,
+      fieldBottom: fieldRect.bottom,
+      saveTop: saveRect.top,
+      saveBottom: saveRect.bottom,
+      gap: saveRect.top - fieldRect.bottom,
+      viewportHeight: document.documentElement.clientHeight
+    };
+  })()`);
+  assert.ok(geometry.fieldTop >= 0 && geometry.fieldBottom <= geometry.saveTop + 1,
+    `${label} sticky Save bar obscures the final setting: ${JSON.stringify(geometry)}`);
+  return geometry;
+}
+
+async function waitForOptionsReady(client) {
+  return poll(async () => {
+    const value = await evaluate(client, `(() => ({
+      ready: document.readyState === "complete",
+      dirty: document.querySelector("#settingsForm")?.dataset.dirty,
+      saveText: document.querySelector(".save-btn")?.textContent.trim()
+    }))()`);
+    return value.ready && value.dirty === "false" && value.saveText === "保存设置" ? value : null;
+  }, CASE_TIMEOUT_MS, "Options normalized form baseline");
+}
+
+async function reloadExtensionPage(client) {
+  await client.send("Page.reload", { ignoreCache: true });
+  await poll(async () => await evaluate(client, `document.readyState === "complete"`), CASE_TIMEOUT_MS, "extension page reload");
+}
+
+async function setViewport(client, width, height) {
+  await client.send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false });
+}
+
+async function setEmulatedPreferences(client, { colorScheme = "light", reducedMotion = "no-preference" } = {}) {
+  await client.send("Emulation.setEmulatedMedia", {
+    media: "screen",
+    features: [
+      { name: "prefers-color-scheme", value: colorScheme },
+      { name: "prefers-reduced-motion", value: reducedMotion }
+    ]
+  });
+}
+
+async function pressEnterKey(client) {
+  const base = { key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 };
+  await client.send("Input.dispatchKeyEvent", { type: "rawKeyDown", ...base, text: "\r", unmodifiedText: "\r" });
+  await client.send("Input.dispatchKeyEvent", { type: "char", ...base, text: "\r", unmodifiedText: "\r" });
+  await client.send("Input.dispatchKeyEvent", { type: "keyUp", ...base });
+}
+
+async function openExtensionTarget(relativePath, devtoolsOrigin, label) {
+  const { targetId } = await browser.send("Target.createTarget", {
+    url: `chrome-extension://${EXPECTED_EXTENSION_ID}/${relativePath}`,
+    background: true
+  });
+  const target = await waitForTarget(
+    devtoolsOrigin,
+    (candidate) => candidate.id === targetId && candidate.type === "page",
+    START_TIMEOUT_MS,
+    label
+  );
+  const client = await CdpClient.connect(target.webSocketDebuggerUrl);
+  await client.send("Runtime.enable");
+  await client.send("Page.enable");
+  await poll(async () => await evaluate(client, `document.readyState === "complete"`), CASE_TIMEOUT_MS, `${label} DOM ready`);
+  return { targetId, client };
+}
+
+async function closeExtensionTarget({ targetId, client }) {
+  client?.close();
+  if (targetId) {
+    try { await browser.send("Target.closeTarget", { targetId }); } catch { /* Best-effort target cleanup. */ }
+  }
+}
+
+async function captureMatrixState(client, name, width, height, evidence = {}) {
+  const item = { name, status: "running", viewport: { width, height }, evidence };
+  report.visualMatrix.push(item);
+  try {
+    const dimensions = await evaluate(client, `(() => {
+      ${evidence.origin === "top" ? `document.documentElement.scrollTop = 0;
+      document.body.scrollTop = 0;
+      scrollTo({ left: 0, top: 0, behavior: "instant" });` : ""}
+      return {
+        width: document.documentElement.clientWidth,
+        height: document.documentElement.clientHeight,
+        scrollY,
+        overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth
+      };
+    })()`);
+    assert.equal(dimensions.width, width, `${name} CSS viewport width mismatch`);
+    assert.equal(dimensions.height, height, `${name} CSS viewport height mismatch`);
+    assert.ok(dimensions.overflow <= 1, `${name} has ${dimensions.overflow}px horizontal overflow`);
+    if (evidence.origin === "top") assert.ok(Math.abs(dimensions.scrollY) <= 1, `${name} did not capture from the page origin: scrollY=${dimensions.scrollY}`);
+    const screenshot = await client.send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false }, CASE_TIMEOUT_MS * 2);
+    const screenshotPath = path.join(PHASE_B_ARTIFACT_DIR, `${name}.png`);
+    fs.writeFileSync(screenshotPath, Buffer.from(screenshot.data, "base64"));
+    const file = path.relative(HERE, screenshotPath);
+    item.dimensions = dimensions;
+    item.screenshot = file;
+    item.status = "passed";
+    return item;
+  } catch (error) {
+    item.status = "failed";
+    item.error = serializeError(error);
+    throw error;
+  } finally {
+    if (evidence.origin === "top") {
+      try { await restoreVisualOriginStyles(client); } catch { /* The target cleanup owns terminal failures. */ }
+    }
+  }
+}
+
 async function auditHlsDownloadDialog(tabId, expectedUrl, expectedTitle) {
   const item = { name: "hls-download-dialog", status: "running" };
   report.flows.push(item);
@@ -513,6 +1123,7 @@ async function auditHlsDownloadDialog(tabId, expectedUrl, expectedTitle) {
       mobile: false
     });
     await poll(async () => await evaluate(client, `document.readyState === "complete"`), CASE_TIMEOUT_MS, "HLS popup DOM ready");
+    await client.send("Page.bringToFront");
     const result = await evaluate(client, `(async () => {
       const deadline = Date.now() + ${CASE_TIMEOUT_MS};
       let cards;
@@ -524,6 +1135,9 @@ async function auditHlsDownloadDialog(tabId, expectedUrl, expectedTitle) {
       button?.click();
       const dialog = document.querySelector("#downloadDialog");
       while (!dialog?.open && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50));
+      while (document.activeElement?.id !== "filenameInput" && Date.now() < deadline) {
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+      }
       const cardTitle = card?.querySelector(".media-title")?.textContent?.trim() || "";
       const filenameBefore = document.querySelector("#filenameInput")?.value || "";
       const qualityHiddenBefore = Boolean(document.querySelector("#variantLabel")?.hidden);
@@ -538,6 +1152,7 @@ async function auditHlsDownloadDialog(tabId, expectedUrl, expectedTitle) {
         candidateUrl: card?.querySelector(".media-url")?.title || "",
         secondaryActions: [...(card?.querySelectorAll(".more-button") || [])].map((node) => node.textContent.trim()),
         dialogOpen: Boolean(dialog?.open),
+        initialFocus: document.activeElement?.id || "",
         filenameBefore,
         filenameAfter: document.querySelector("#filenameInput")?.value || "",
         formatOptions: [...(format?.options || [])].map((option) => ({ value: option.value, text: option.textContent.trim() })),
@@ -579,6 +1194,7 @@ async function auditHlsDownloadDialog(tabId, expectedUrl, expectedTitle) {
     assert.equal(result.candidateUrl, expectedUrl, "popup rendered the wrong HLS representative");
     assert.deepEqual(result.secondaryActions, [], "stream cards still expose a duplicate parse action");
     assert.equal(result.dialogOpen, true, "Download did not open the HLS settings dialog");
+    assert.equal(result.initialFocus, "filenameInput", "download dialog did not focus its first field");
     assert.equal(result.cardTitle, expectedTitle, "HLS card did not use the readable page title");
     assert.doesNotMatch(result.cardTitle, /an_PHRM|comp_v\d+|wm_cr|cc\d+/i,
       "HLS card exposes an internal asset-management token");
@@ -588,7 +1204,7 @@ async function auditHlsDownloadDialog(tabId, expectedUrl, expectedTitle) {
     assert.doesNotMatch(result.filenameBefore, /^[a-f0-9]{20,}\./i, "dialog filename fell back to an opaque asset hash");
     assert.doesNotMatch(result.filenameBefore, /an_PHRM|comp_v\d+|wm_cr|cc\d+/i,
       "dialog filename exposes an internal asset-management token");
-    assert.ok(result.formatOptions.some((option) => option.value === "mp3" && /仅音频/.test(option.text)),
+    assert.ok(result.formatOptions.some((option) => option.value === "mp3" && /(仅音频|需高速下载功能)/.test(option.text)),
       "MP3 is not a first-class output format");
     assert.equal(result.filenameAfter, `${filesystemSafeTitle}.mp3`, "choosing MP3 did not update the filename extension");
     assert.equal(result.hasExtractCheckbox, false, "the obsolete extract-audio checkbox is still present");
@@ -613,11 +1229,44 @@ async function auditHlsDownloadDialog(tabId, expectedUrl, expectedTitle) {
       `download dialog is not vertically centered: ${JSON.stringify(result.dialogGeometry)}`);
     assert.ok(Number(result.overflow) <= 1, `HLS download dialog has horizontal overflow: ${result.overflow}px`);
 
+    await evaluate(client, `(() => {
+      globalThis.__phaseBDownloadDialogFocus = [];
+      document.addEventListener("focusin", (event) => { globalThis.__phaseBDownloadDialogFocus.push(event.target?.id || event.target?.dataset?.mediaAction || event.target?.localName || "unknown"); }, { capture: true });
+      return true;
+    })()`);
+    await client.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 });
+    await client.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 });
+    await poll(async () => {
+      const value = await evaluate(client, `(() => ({
+        dialogOpen: document.querySelector("#downloadDialog").open,
+        activeAction: document.activeElement?.dataset?.mediaAction || "",
+        activeMediaId: document.activeElement?.dataset?.mediaId || ""
+      }))()`);
+      return !value.dialogOpen ? value : null;
+    }, CASE_TIMEOUT_MS, "download dialog focus restoration");
+    await delay(250);
+    const restoredFocus = await evaluate(client, `(() => ({
+      dialogOpen: document.querySelector("#downloadDialog").open,
+      activeId: document.activeElement?.id || "",
+      activeAction: document.activeElement?.dataset?.mediaAction || "",
+      activeMediaId: document.activeElement?.dataset?.mediaId || "",
+      focusEvents: globalThis.__phaseBDownloadDialogFocus,
+      downloadActions: [...document.querySelectorAll('[data-media-action="download"]')].map((node) => ({ connected: node.isConnected, disabled: node.disabled, id: node.dataset.mediaId }))
+    }))()`);
+    assert.equal(restoredFocus.activeAction, "download", `closing download dialog did not restore focus to the media action: ${JSON.stringify(restoredFocus)}`);
+    await evaluate(client, `document.querySelector(".media-card .download-button").click()`);
+    await poll(async () => await evaluate(client, `document.querySelector("#downloadDialog").open`), CASE_TIMEOUT_MS, "reopened download dialog for visual evidence");
+
     const screenshot = await client.send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false });
     fs.mkdirSync(SCREENSHOT_DIR, { recursive: true });
     const screenshotPath = path.join(SCREENSHOT_DIR, "hls-download-dialog.png");
     fs.writeFileSync(screenshotPath, Buffer.from(screenshot.data, "base64"));
     item.screenshot = path.relative(HERE, screenshotPath);
+    await captureMatrixState(client, "download-dialog", 372, 560, {
+      dialog: "HLS multi-rendition settings",
+      centered: true,
+      keyboardFocusRestored: restoredFocus.activeAction === "download"
+    });
     item.status = "passed";
   } catch (error) {
     item.status = "failed";
@@ -882,6 +1531,104 @@ async function captureFlowScreenshot(client, filename) {
   return path.relative(HERE, screenshotPath);
 }
 
+async function auditPopupManifestLoading(devtoolsOrigin) {
+  const item = { name: "popup-manifest-loading", status: "running", viewport: { width: 372, height: 560 } };
+  report.flows.push(item);
+  const fixtureId = `${runId}-manifest-loading`;
+  const fixture = hlsFixtureUrls(fixtureId, { delayMs: 1200 });
+  const pageUrl = `${serverOrigin}${hlsFixturePagePath(fixtureId, { delayMs: 1200 })}`;
+  const requestKey = fixtureRequestKey(new URL(fixture.master));
+  let tabId;
+  let popup;
+  try {
+    const tab = await control(`async () => chrome.tabs.create({ url: ${JSON.stringify(pageUrl)}, active: true })`);
+    tabId = tab?.id;
+    assert.ok(Number.isInteger(tabId), "manifest-loading fixture did not create a real tab");
+    await waitForTabComplete(tabId, pageUrl, CASE_TIMEOUT_MS);
+    await poll(async () => {
+      const response = await control(`async () => chrome.runtime.sendMessage({ type: "GET_TAB_MEDIA", tabId: ${JSON.stringify(tabId)} })`);
+      if (!response?.ok) throw new Error(response?.error || "GET_TAB_MEDIA failed for manifest-loading fixture");
+      return response.items?.some((candidate) => candidate.kind === "hls"
+        && candidate.displayUrl === publicDisplayUrl(fixture.master)) ? true : null;
+    }, CASE_TIMEOUT_MS, "manifest-loading HLS candidate");
+    const initialRequestCount = fixtureRequestCounts.get(requestKey) || 0;
+    assert.ok(initialRequestCount >= 1, "fixture page did not make an initial HLS master request");
+
+    popup = await openExtensionTarget("popup/popup.html", devtoolsOrigin, "manifest-loading popup");
+    await setViewport(popup.client, 372, 560);
+    const loading = await poll(async () => {
+      const value = await evaluate(popup.client, `(() => {
+        const cards = document.querySelectorAll(".media-card");
+        const card = cards[0];
+        const button = card?.querySelector(".download-button");
+        if (cards.length !== 1 || !button) return null;
+        if (!globalThis.__phaseBManifestStarted) {
+          globalThis.__phaseBManifestStarted = true;
+          globalThis.__phaseBManifestClickEvents = 0;
+          button.addEventListener("click", () => { globalThis.__phaseBManifestClickEvents += 1; });
+          button.click();
+          button.click();
+        }
+        const status = card.querySelector(".manifest-status");
+        return {
+          cardCount: cards.length,
+          cardBusy: card.getAttribute("aria-busy"),
+          buttonBusy: button.getAttribute("aria-busy"),
+          buttonDisabled: button.disabled,
+          statusHidden: status?.hidden,
+          statusText: status?.textContent.trim() || "",
+          clickEvents: globalThis.__phaseBManifestClickEvents,
+          dialogOpen: document.querySelector("#downloadDialog").open,
+          overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth
+        };
+      })()`);
+      return value?.cardBusy === "true" ? value : null;
+    }, CASE_TIMEOUT_MS, "card-local manifest loading state");
+    assert.equal(loading.cardCount, 1, "manifest-loading popup rendered duplicate cards");
+    assert.equal(loading.buttonBusy, "true", "manifest-loading action did not expose aria-busy");
+    assert.equal(loading.buttonDisabled, true, "manifest-loading action did not suppress repeated clicks");
+    assert.equal(loading.clickEvents, 1, "the disabled pending action accepted a duplicate click event");
+    assert.equal(loading.statusHidden, false, "manifest loading feedback is not local to the media card");
+    assert.match(loading.statusText, /正在读取清晰度与流媒体信息/);
+    assert.equal(loading.dialogOpen, false, "download dialog opened before manifest reading completed");
+    assert.ok(loading.overflow <= 1, `manifest-loading popup overflows by ${loading.overflow}px`);
+    const loadingRequestCount = await poll(async () => {
+      const count = fixtureRequestCounts.get(requestKey) || 0;
+      return count === initialRequestCount + 1 ? count : null;
+    }, CASE_TIMEOUT_MS, "one user-initiated manifest probe request");
+    assert.equal(loadingRequestCount - initialRequestCount, 1, "manifest double-click did not collapse to one probe request");
+    await captureMatrixState(popup.client, "popup-manifest-loading", 372, 560, {
+      localCardBusy: true,
+      duplicateClicksSuppressed: true,
+      hlsMasterRequestsBeforePopup: initialRequestCount,
+      hlsMasterRequestsDuringProbe: loadingRequestCount - initialRequestCount
+    });
+    const settled = await poll(async () => {
+      const value = await evaluate(popup.client, `(() => ({
+        open: document.querySelector("#downloadDialog").open,
+        cardBusy: document.querySelector(".media-card")?.getAttribute("aria-busy")
+      }))()`);
+      return value.open ? value : null;
+    }, CASE_TIMEOUT_MS, "manifest-loading popup to settle");
+    assert.equal(settled.cardBusy, null, "media card remained aria-busy after manifest reading");
+    const finalRequestCount = fixtureRequestCounts.get(requestKey) || 0;
+    assert.equal(finalRequestCount - initialRequestCount, 1,
+      `manifest-loading flow made duplicate master requests: ${initialRequestCount} -> ${finalRequestCount}`);
+    item.result = { loading, settled, initialRequestCount, probeRequestCount: finalRequestCount - initialRequestCount };
+    item.screenshot = report.visualMatrix.find((entry) => entry.name === "popup-manifest-loading")?.screenshot;
+    item.status = "passed";
+  } catch (error) {
+    item.status = "failed";
+    item.error = serializeError(error);
+    throw error;
+  } finally {
+    if (popup) await closeExtensionTarget(popup);
+    if (Number.isInteger(tabId)) {
+      try { await control(`async () => { await chrome.tabs.remove(${JSON.stringify(tabId)}); return true; }`); } catch { /* Best-effort fixture cleanup. */ }
+    }
+  }
+}
+
 async function prepareUiFixtureTab() {
   const pageUrl = `${serverOrigin}/cases/direct.html?run=${encodeURIComponent(`${runId}-ui`)}`;
   const expectedUrl = publicDisplayUrl(`${serverOrigin}/media/direct.mp4?run=${encodeURIComponent(`${runId}-ui`)}`);
@@ -1011,6 +1758,9 @@ async function auditExtensionPage(name, client, width, height, expression, close
         "popup exposes internal acceleration implementation details");
       assert.equal(result.thumbnailCount, 0, "stable popup must not render a remotely fetched thumbnail");
       assert.ok(result.fallbackCount >= 1, "popup did not retain the media-type fallback tile");
+      assert.deepEqual(result.scanPending, { busy: "true", disabled: true, state: "pending" }, "popup rescan did not expose a stable pending state");
+      assert.ok(result.sharedStyles.some((value) => value.endsWith("/ui/tokens.css")), "popup does not load shared tokens");
+      assert.ok(result.sharedStyles.some((value) => value.endsWith("/ui/components.css")), "popup does not load shared components");
     } else if (name === "sidepanel") {
       assert.equal(result.brand, "FluxCatch");
       assert.equal(result.mediaHeading, "当前页面媒体");
@@ -1024,11 +1774,25 @@ async function auditExtensionPage(name, client, width, height, expression, close
       assert.ok(result.fallbackCount >= 1, "Side Panel did not retain the media-type fallback tile");
       assert.equal(result.globalErrorHidden, true, "Side Panel reported an error during quick download");
       assert.equal(result.hasLiveRegions, true);
+      assert.deepEqual(result.scanPending, { busy: "true", disabled: true, state: "pending" }, "Side Panel rescan did not expose a stable pending state");
+      assert.ok(result.sharedStyles.some((value) => value.endsWith("/ui/tokens.css")), "Side Panel does not load shared tokens");
+      assert.ok(result.sharedStyles.some((value) => value.endsWith("/ui/components.css")), "Side Panel does not load shared components");
     }
     fs.mkdirSync(SCREENSHOT_DIR, { recursive: true });
     const screenshotPath = path.join(SCREENSHOT_DIR, `${name}.png`);
     fs.writeFileSync(screenshotPath, Buffer.from(screenshot.data, "base64"));
     item.screenshot = path.relative(HERE, screenshotPath);
+    if (name === "popup") {
+      await captureMatrixState(client, "popup-372x560", 372, 560, {
+        deterministicFixture: "direct media",
+        sharedStyles: true
+      });
+    } else if (name === "sidepanel") {
+      await captureMatrixState(client, "sidepanel-420x820", 420, 820, {
+        deterministicFixture: "direct media and completed browser download",
+        sharedStyles: true
+      });
+    }
     item.status = "passed";
     return item;
   } catch (error) {
@@ -1091,6 +1855,8 @@ function startFixtureServer() {
   const instance = http.createServer((request, response) => {
     try {
       const url = new URL(request.url || "/", "http://127.0.0.1");
+      const requestKey = fixtureRequestKey(url);
+      fixtureRequestCounts.set(requestKey, (fixtureRequestCounts.get(requestKey) || 0) + 1);
       const common = {
         "access-control-allow-origin": "*",
         "cache-control": "no-store, max-age=0",
@@ -1137,6 +1903,11 @@ function startFixtureServer() {
           hlsMaster.push(fixture.references[index]);
         }
         hlsMaster.push("");
+        const delayMs = Math.max(0, Math.min(5_000, Number(url.searchParams.get("e2eDelayMs")) || 0));
+        if (delayMs > 0) {
+          setTimeout(() => send(response, 200, "application/vnd.apple.mpegurl", hlsMaster.join("\n"), common), delayMs);
+          return;
+        }
         return send(response, 200, "application/vnd.apple.mpegurl", hlsMaster.join("\n"), common);
       }
       if (/^\/deliveries\/q\d+-[a-f0-9]+\.m3u8$/i.test(url.pathname)) {
@@ -1205,7 +1976,7 @@ function hlsFixturePage(masterPath, posterPath, observedVariantUrls, captionUrl)
 </script>`;
 }
 
-function hlsFixtureUrls(id) {
+function hlsFixtureUrls(id, { delayMs = 0 } = {}) {
   assert.ok(serverOrigin, "fixture server origin is required before building HLS URLs");
   const url = new URL(serverOrigin);
   const fastOrigin = `${url.protocol}//localhost:${url.port}`;
@@ -1213,7 +1984,7 @@ function hlsFixtureUrls(id) {
   const mediaId = "77994wpv0p";
   const renditionPaths = HLS_RENDITIONS.map((rendition) => `/deliveries/${rendition.slug}.m3u8`);
   return {
-    master: `${fastOrigin}/embed/medias/${mediaId}.m3u8?run=${run}&token=fast-master`,
+    master: `${fastOrigin}/embed/medias/${mediaId}.m3u8?run=${run}&token=fast-master${delayMs ? `&e2eDelayMs=${encodeURIComponent(delayMs)}` : ""}`,
     // The manifest and the browser observe the same rendition paths with
     // different signed-query values, matching rotating CDN token behavior.
     references: renditionPaths.map((pathname, index) =>
@@ -1224,8 +1995,8 @@ function hlsFixtureUrls(id) {
   };
 }
 
-function hlsFixturePagePath(id) {
-  const fixture = hlsFixtureUrls(id);
+function hlsFixturePagePath(id, options) {
+  const fixture = hlsFixtureUrls(id, options);
   const query = new URLSearchParams({
     run: id,
     master: fixture.master,
@@ -1233,6 +2004,10 @@ function hlsFixturePagePath(id) {
   });
   fixture.observedVariants.forEach((value, index) => query.set(`variant${index}`, value));
   return `/cases/hls.html?${query}`;
+}
+
+function fixtureRequestKey(url) {
+  return `${url.pathname}?run=${url.searchParams.get("run") || ""}`;
 }
 
 function fixturePage(resourcePath, reader, posterPath) {
