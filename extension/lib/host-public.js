@@ -45,11 +45,17 @@ function toolCapabilityForUi(value, { ffmpeg = false } = {}) {
       dash: Boolean(value.demuxers?.dash)
     };
     result.encoders = { libmp3lame: Boolean(value.encoders?.libmp3lame) };
-  } else if (typeof value.networkDisabled === "boolean") {
-    // Preserve the distinction between an explicit `false` capability and an
-    // older/unknown host that did not report the security gate at all.  The
-    // YouTube adapter is allowed only in the former case.
-    result.networkDisabled = value.networkDisabled;
+  } else {
+    // Installation is presentation-only and cannot open the adapter gate.
+    // Preserve it separately from availability so a locally present yt-dlp
+    // is never described as usable while external networking is disabled.
+    if (typeof value.installed === "boolean") result.installed = value.installed;
+    if (typeof value.networkDisabled === "boolean") {
+      // Preserve the distinction between an explicit `false` capability and
+      // an older/unknown host that did not report the security gate at all.
+      // The YouTube adapter is allowed only in the former case.
+      result.networkDisabled = value.networkDisabled;
+    }
   }
   return result;
 }

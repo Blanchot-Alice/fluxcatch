@@ -75,8 +75,10 @@ test("download settings explain their effect in user-facing language", () => {
   assert.match(optionsHtml, /id="autoEnrichSiteQuality"/);
   assert.match(optionsHtml, /自动补全支持站点的画质/);
   assert.match(optionsHtml, /使用当前站点登录会话，请求代码中固定的播放信息接口/);
-  assert.match(optionsJs, /allowPrivateNetworkMedia: form\.allowPrivateNetworkMedia\.checked/);
-  assert.match(optionsJs, /autoEnrichSiteQuality: form\.autoEnrichSiteQuality\.checked/);
+  assert.match(optionsJs, /allowPrivateNetworkMedia: privateNetworkInput\.checked/);
+  assert.match(optionsJs, /autoEnrichSiteQuality: form\.elements\.namedItem\("autoEnrichSiteQuality"\)\.checked/);
+  assert.match(optionsJs, /allowPrivateNetworkMedia: normalized\.allowPrivateNetworkMedia/);
+  assert.match(optionsJs, /autoEnrichSiteQuality: normalized\.autoEnrichSiteQuality/);
   assert.match(optionsJs, /liveDuration: 0/);
   assert.match(optionsJs, /import \{ BUILD_PROFILE, HOST_MISMATCH_MESSAGE \} from "\.\.\/lib\/build-profile\.js"/);
   assert.match(optionsJs, /youtubeEnabled: false/);

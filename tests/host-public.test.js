@@ -20,7 +20,7 @@ test("host status exposes capabilities without executable paths, probe errors or
         encoders: { libmp3lame: true },
         future: "FFMPEG_FUTURE"
       },
-      ytdlp: { available: false, networkDisabled: true, path: "/Users/private/YTDLP_PATH", version: "2026.08", probeError: "YTDLP_PROBE" },
+      ytdlp: { available: false, installed: true, networkDisabled: true, path: "/Users/private/YTDLP_PATH", version: "2026.08", probeError: "YTDLP_PROBE" },
       dashPlanner: "static-v1",
       dashPair: "direct-v1",
       future: "CAPABILITY_FUTURE"
@@ -35,6 +35,9 @@ test("host status exposes capabilities without executable paths, probe errors or
   assert.deepEqual(Object.keys(status.capabilities).sort(), ["dashPair", "dashPlanner", "ffmpeg", "ytdlp"].sort());
   assert.deepEqual(Object.keys(status.capabilities.ffmpeg).sort(), ["available", "demuxers", "encoders", "networkInput", "version"].sort());
   assert.equal(status.capabilities.ffmpeg.networkInput, false);
+  assert.deepEqual(Object.keys(status.capabilities.ytdlp).sort(), ["available", "installed", "networkDisabled", "version"].sort());
+  assert.equal(status.capabilities.ytdlp.installed, true);
+  assert.equal(status.capabilities.ytdlp.available, false);
   assert.equal(status.capabilities.ytdlp.networkDisabled, true);
   assert.equal(status.compatible, true);
   assert.doesNotMatch(JSON.stringify(status), /FFMPEG_PATH|PROBE_SECRET|DEMUX_SECRET|FFMPEG_FUTURE|YTDLP_PATH|YTDLP_PROBE|CAPABILITY_FUTURE|STATUS_PATH|STATUS_SECRET|STATUS_FUTURE/);
@@ -46,6 +49,7 @@ test("host status does not turn an unknown network gate into explicit permission
     capabilities: { ytdlp: { available: true, version: "legacy" } }
   });
   assert.equal(status.capabilities.ytdlp.available, true);
+  assert.equal(Object.hasOwn(status.capabilities.ytdlp, "installed"), false);
   assert.equal(Object.hasOwn(status.capabilities.ytdlp, "networkDisabled"), false);
   assert.equal(status.compatible, false, "a legacy host without protocol metadata fails closed");
 });

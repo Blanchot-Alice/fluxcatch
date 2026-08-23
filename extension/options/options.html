@@ -272,13 +272,13 @@
           <fieldset id="notifications" class="settings-section">
             <legend>
               <span class="section-index" aria-hidden="true">07</span>
-              <span><strong>通知</strong><small>权限会在你操作开关时立即处理，不等待保存。</small></span>
+              <span><strong>通知</strong><small>开启时立即申请权限；通知偏好仍由保存栏确认。</small></span>
             </legend>
             <div class="section-content setting-rows">
               <label class="opt-check">
                 <input id="showNotifications" name="showNotifications" type="checkbox" aria-describedby="notificationsHelp notificationPermissionStatus">
                 <span class="switch" aria-hidden="true"></span>
-                <span class="txt">下载完成或失败时提醒我<small id="notificationsHelp">Chrome 会显示一次权限请求；拒绝后开关会恢复关闭。</small></span>
+                <span class="txt">下载完成或失败时提醒我<small id="notificationsHelp">Chrome 会在开启时请求权限；关闭并保存后停止提醒，已有浏览器授权会保留。</small></span>
               </label>
               <p id="notificationPermissionStatus" class="inline-status" role="status" aria-live="polite"></p>
             </div>
