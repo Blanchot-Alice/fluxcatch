@@ -74,6 +74,9 @@ test("popup and side panel render privacy-safe thumbnails with kind fallbacks", 
     assert.match(source, /allowedThumbnailOrigins:\s*item\.thumbnailAllowedOrigins/);
     assert.match(source, /allowPrivateNetworkMedia\s*\?\s*"private_network_opt_in"/);
   }
+  assert.match(thumbnailJs, /import \{ BUILD_PROFILE \} from "\.\/build-profile\.js"/);
+  assert.match(thumbnailJs, /enabled = BUILD_PROFILE\.features\.remoteThumbnails/);
+  assert.match(thumbnailJs, /if \(!enabled\) return fallback/);
   assert.match(thumbnailJs, /credentials:\s*"omit"/);
   assert.match(thumbnailJs, /referrerPolicy:\s*"no-referrer"/);
   assert.match(thumbnailJs, /cache:\s*"force-cache"/);

@@ -1,3 +1,7 @@
+// This extension-side policy validates literal URL hosts, provenance, purpose,
+// network scope and explicit allowlists. DNS resolution, connected peer-IP
+// verification, redirect re-authorization and rebinding defenses are enforced
+// by the native host; browser fetch APIs do not expose those primitives here.
 const PURPOSES = new Set([
   "thumbnail",
   "manifest_probe",

@@ -1,6 +1,29 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { fetchThumbnailBlob } from "../extension/lib/thumbnail.js";
+import { BUILD_PROFILE } from "../extension/lib/build-profile.js";
+import { fetchThumbnailBlob, loadPrivacySafeThumbnail } from "../extension/lib/thumbnail.js";
+
+test("stable profile keeps the fallback tile without fetching a remote thumbnail", async () => {
+  let fetchCalls = 0;
+  const fallback = { marker: "kind-tile" };
+
+  const rendered = loadPrivacySafeThumbnail(
+    "https://images.example.test/poster.png",
+    fallback,
+    {
+      pageUrl: "https://images.example.test/watch",
+      fetchImpl: async () => {
+        fetchCalls += 1;
+        throw new Error("stable_profile_must_not_fetch");
+      }
+    }
+  );
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(BUILD_PROFILE.features.remoteThumbnails, false);
+  assert.equal(rendered, fallback);
+  assert.equal(fetchCalls, 0);
+});
 
 test("thumbnail fetch uses an allowlisted origin, omits credentials and rejects redirects", async () => {
   let request;

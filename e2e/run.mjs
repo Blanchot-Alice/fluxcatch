@@ -166,18 +166,8 @@ try {
   try {
     await auditNewExtensionPage("popup", "popup/popup.html", 372, 560, `(async () => {
       const deadline = Date.now() + ${CASE_TIMEOUT_MS};
-      let thumbnail;
-      while (!(thumbnail = document.querySelector(".media-thumbnail")) && Date.now() < deadline) {
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      }
-      if (thumbnail) {
-        thumbnail.loading = "eager";
-        thumbnail.scrollIntoView({ block: "nearest" });
-        try {
-          await Promise.race([thumbnail.decode(), new Promise((resolve) => setTimeout(resolve, 1000))]);
-        } catch { /* The state assertion below reports decode failures. */ }
-      }
-      while (thumbnail && (!thumbnail.complete || thumbnail.naturalWidth === 0) && Date.now() < deadline) {
+      let mediaCard;
+      while (!(mediaCard = document.querySelector(".media-card")) && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 50));
       }
       document.querySelector("#jobsTab")?.click();
@@ -193,10 +183,7 @@ try {
         jobsVisible,
         mediaVisible: !document.querySelector("#mediaView")?.hidden,
         thumbnailCount: document.querySelectorAll(".media-thumbnail").length,
-        thumbnailSrc: thumbnail?.src || "",
-        thumbnailCurrentSrc: thumbnail?.currentSrc || "",
-        thumbnailLoaded: Boolean(thumbnail?.complete && thumbnail?.naturalWidth > 0),
-        thumbnailConnected: Boolean(thumbnail?.isConnected),
+        fallbackCount: document.querySelectorAll(".media-card .kind-icon").length,
         overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth
       };
     })()`, launched.httpOrigin);
@@ -221,14 +208,6 @@ try {
         await new Promise((resolve) => setTimeout(resolve, 50));
       }
       await new Promise((resolve) => setTimeout(resolve, 100));
-      const thumbnail = document.querySelector(".media-thumbnail");
-      if (thumbnail) {
-        thumbnail.loading = "eager";
-        thumbnail.scrollIntoView({ block: "nearest" });
-        try {
-          await Promise.race([thumbnail.decode(), new Promise((resolve) => setTimeout(resolve, 1000))]);
-        } catch { /* The state assertion below reports decode failures. */ }
-      }
       return {
         title: document.title,
         brand: document.querySelector(".brand-copy strong")?.textContent,
@@ -239,8 +218,7 @@ try {
         quickDownloadButtons: document.querySelectorAll(".media-download").length,
         quickDownloadFinished,
         thumbnailCount: document.querySelectorAll(".media-thumbnail").length,
-        thumbnailSrc: thumbnail?.src || "",
-        thumbnailLoaded: Boolean(thumbnail?.complete && thumbnail?.naturalWidth > 0),
+        fallbackCount: document.querySelectorAll(".media-row .kind-icon").length,
         globalErrorHidden: document.querySelector("#globalError")?.hidden,
         hasLiveRegions: document.querySelectorAll('[aria-live="polite"]').length >= 3,
         overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth
@@ -994,18 +972,12 @@ async function auditExtensionPage(name, client, width, height, expression, close
     await delay(250);
     // Bringing the synthetic Side Panel tab to the foreground would make it
     // the active content tab and cause its own tabs.onActivated listener to
-    // replace the fixture state. Popup needs the foreground transition so its
-    // lazy thumbnail is actually decoded in headless Chrome.
+    // replace the fixture state.
     if (name !== "sidepanel") await client.send("Page.bringToFront");
     const result = await evaluate(client, expression);
     item.result = result;
     await delay(250);
     const screenshot = await client.send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false }, CASE_TIMEOUT_MS * 2);
-    if (name === "sidepanel" && result.thumbnailCount > 0 && !result.thumbnailLoaded) {
-      await delay(100);
-      result.thumbnailLoaded = await evaluate(client,
-        `Boolean(document.querySelector(".media-thumbnail")?.complete && document.querySelector(".media-thumbnail")?.naturalWidth > 0)`);
-    }
     assert.equal(result?.title?.includes("FluxCatch"), true, `${name} title does not contain FluxCatch`);
     assert.ok(Number(result?.overflow) <= 1, `${name} has horizontal overflow: ${result?.overflow}px`);
     if (name === "options") {
@@ -1022,9 +994,8 @@ async function auditExtensionPage(name, client, width, height, expression, close
       assert.ok(["高速下载功能已就绪", "高速下载功能暂未就绪"].includes(result.hostTitle));
       assert.doesNotMatch(`${result.hostTitle} ${result.hostDetail}`, /FFmpeg|DASH\s*(?:静态规划|原生)|本地高速引擎|v\d+\.\d+/i,
         "popup exposes internal acceleration implementation details");
-      assert.ok(result.thumbnailCount >= 1, "popup did not render the detected video thumbnail");
-      assert.equal(result.thumbnailLoaded, true, "popup thumbnail did not load");
-      assert.match(result.thumbnailSrc, /^blob:/, "popup thumbnail should use a short-lived local Blob URL");
+      assert.equal(result.thumbnailCount, 0, "stable popup must not render a remotely fetched thumbnail");
+      assert.ok(result.fallbackCount >= 1, "popup did not retain the media-type fallback tile");
     } else if (name === "sidepanel") {
       assert.equal(result.brand, "FluxCatch");
       assert.equal(result.mediaHeading, "当前页面媒体");
@@ -1034,9 +1005,8 @@ async function auditExtensionPage(name, client, width, height, expression, close
         "Side Panel exposes internal acceleration implementation details");
       assert.ok(result.quickDownloadButtons >= 1, "Side Panel did not render a quick-download action for the detected media");
       assert.equal(result.quickDownloadFinished, true, "Side Panel quick-download action did not settle");
-      assert.ok(result.thumbnailCount >= 1, "Side Panel did not render the detected video thumbnail");
-      assert.equal(result.thumbnailLoaded, true, "Side Panel thumbnail did not load during the rendered screenshot pass");
-      assert.match(result.thumbnailSrc, /^blob:/, "Side Panel thumbnail should use a short-lived local Blob URL");
+      assert.equal(result.thumbnailCount, 0, "stable Side Panel must not render a remotely fetched thumbnail");
+      assert.ok(result.fallbackCount >= 1, "Side Panel did not retain the media-type fallback tile");
       assert.equal(result.globalErrorHidden, true, "Side Panel reported an error during quick download");
       assert.equal(result.hasLiveRegions, true);
     }

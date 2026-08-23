@@ -1,4 +1,5 @@
 import { requireNetworkRequest } from "./network-policy.js";
+import { BUILD_PROFILE } from "./build-profile.js";
 
 const DEFAULT_MAX_THUMBNAIL_BYTES = 8 * 1024 * 1024;
 const OBJECT_URL_REVOKE_TIMEOUT_MS = 15_000;
@@ -107,8 +108,13 @@ export function loadPrivacySafeThumbnail(value, fallback, {
   className = "media-thumbnail",
   fetchImpl = globalThis.fetch,
   maxBytes = DEFAULT_MAX_THUMBNAIL_BYTES,
+  enabled = BUILD_PROFILE.features.remoteThumbnails,
   ...policy
 } = {}) {
+  // The stable profile renders the existing media-type tile without making a
+  // page-derived network request. The bounded raster implementation below is
+  // retained for a future profile that explicitly enables this capability.
+  if (!enabled) return fallback;
   const url = normalizeThumbnailUrl(value);
   if (!url) return fallback;
 
