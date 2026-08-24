@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { captureMediaRefresh, isMediaRefreshCurrent } from "../extension/sidepanel/refresh-guard.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const extension = path.join(root, "extension");
@@ -63,6 +64,29 @@ test("side panel task rows keep long hashes inside the card", () => {
   assert.match(css, /\.job-head\s*\{[^}]*grid-template-columns:minmax\(0,1fr\) max-content[^}]*width:100%[^}]*max-width:100%/);
   assert.match(css, /\.job-title\s*\{[^}]*width:100%[^}]*max-width:100%[^}]*min-width:0[^}]*text-overflow:ellipsis/);
   assert.match(css, /\.job-state\s*\{[^}]*min-width:max-content[^}]*white-space:nowrap/);
+});
+
+test("side panel drops a tab A media response after tab B becomes active", () => {
+  const js = fs.readFileSync(path.join(extension, "sidepanel/sidepanel.js"), "utf8");
+  const refreshMediaStart = js.indexOf("async function refreshMedia()");
+  const refreshMediaEnd = js.indexOf("\nfunction renderPageContext", refreshMediaStart);
+  const refreshMedia = js.slice(refreshMediaStart, refreshMediaEnd);
+
+  assert.ok(refreshMediaStart >= 0 && refreshMediaEnd > refreshMediaStart);
+  assert.match(refreshMedia, /const request = captureMediaRefresh\(state\)/);
+  assert.match(refreshMedia, /GET_TAB_MEDIA", tabId: request\.tabId/);
+  assert.match(refreshMedia, /if \(!isMediaRefreshCurrent\(request, state\)\) return/);
+  assert.ok(
+    refreshMedia.indexOf("!isMediaRefreshCurrent(request, state)") < refreshMedia.indexOf("state.items ="),
+    "the tab/token guard must run before a late response mutates Side Panel state"
+  );
+
+  const tabARequest = captureMediaRefresh({ tabId: 101, refreshToken: 7 });
+  const stateAfterActivatingTabB = { tabId: 202, refreshToken: 8 };
+  assert.equal(isMediaRefreshCurrent(tabARequest, stateAfterActivatingTabB), false,
+    "a late tab A response must be rejected after tab B activation");
+  assert.equal(isMediaRefreshCurrent(tabARequest, { tabId: 101, refreshToken: 7 }), true,
+    "the originating tab response remains current before activation changes state");
 });
 
 test("popup and side panel render privacy-safe thumbnails with kind fallbacks", () => {

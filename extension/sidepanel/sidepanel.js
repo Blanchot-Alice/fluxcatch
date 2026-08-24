@@ -2,6 +2,7 @@ import { humanBytes } from "../lib/media.js";
 import { loadPrivacySafeThumbnail } from "../lib/thumbnail.js";
 import { BUILD_PROFILE, HOST_MISMATCH_MESSAGE } from "../lib/build-profile.js";
 import { createToastController, restoreFocus, withPendingAction } from "../ui/interactions.js";
+import { captureMediaRefresh, isMediaRefreshCurrent } from "./refresh-guard.js";
 
 const state = {
   tabId: null,
@@ -140,8 +141,10 @@ async function refreshAll({ propagateError = false } = {}) {
 }
 
 async function refreshMedia() {
-  if (!Number.isInteger(state.tabId)) return;
-  const result = await call({ type: "GET_TAB_MEDIA", tabId: state.tabId });
+  const request = captureMediaRefresh(state);
+  if (!Number.isInteger(request.tabId)) return;
+  const result = await call({ type: "GET_TAB_MEDIA", tabId: request.tabId });
+  if (!isMediaRefreshCurrent(request, state)) return;
   state.items = (result.items || []).filter((item) => item.kind !== "youtube" || BUILD_PROFILE.features.externalToolNetwork);
   state.settings = result.settings || state.settings;
   renderMedia();
