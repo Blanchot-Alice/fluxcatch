@@ -1,5 +1,5 @@
 import { BUILD_PROFILE, HOST_MISMATCH_MESSAGE } from "../lib/build-profile.js";
-import { insertTemplateToken, normalizeFormState, notificationStatusText, resolveNotificationLoadState, statesEqual, validateSettings } from "./form-state.js";
+import { insertTemplateToken, normalizeFormState, notificationStatusText, reconcileSaveCompletion, resolveNotificationLoadState, statesEqual, validateSettings } from "./form-state.js";
 import { waitForNativeRecovery } from "./native-recovery.js";
 import { isActionPending, restoreFocus, runKeyedAction, withPendingAction } from "../ui/interactions.js";
 
@@ -224,7 +224,8 @@ function discardChanges() {
 async function save(event) {
   event.preventDefault();
   if (!ready || !dirty || isActionPending("options-save")) return;
-  const validation = validateSettings(collectRawState());
+  const submittedState = collectRawState();
+  const validation = validateSettings(submittedState);
   if (!validation.valid) {
     renderValidation(validation);
     syncDirtyState();
@@ -256,12 +257,21 @@ async function save(event) {
       if (!response?.ok) throw new Error(response?.error || "保存失败");
       const saved = stateFromSettings(response.settings || settings);
       saved.showNotifications = normalized.showNotifications;
-      writeFormState(saved);
-      baseline = normalizeFormState(saved);
+      const completion = reconcileSaveCompletion({
+        submitted: submittedState,
+        current: collectRawState(),
+        saved
+      });
+      baseline = completion.baseline;
+      if (!completion.changedDuringSave) writeFormState(completion.formState);
       clearValidation();
       syncDirtyState();
       renderNotificationStatus();
-      setStatus("已保存 ✓", "success", 1800);
+      if (completion.changedDuringSave) {
+        setStatus("已保存提交内容；保存期间有新的更改", "warning", 5000);
+      } else {
+        setStatus("已保存 ✓", "success", 1800);
+      }
     }, {
       pendingText: "保存中…",
       successText: "已保存 ✓",

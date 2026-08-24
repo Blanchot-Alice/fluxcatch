@@ -151,6 +151,7 @@ body::before{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;ba
 .save-status{color:var(--muted);font-size:12px}
 .save-status[data-status-type="success"]{color:var(--success-strong)}
 .save-status[data-status-type="pending"]{color:var(--primary-strong)}
+.save-status[data-status-type="warning"]{color:var(--warning-strong)}
 .save-status[data-status-type="error"]{color:var(--danger-strong)}
 .save-buttons{display:flex;align-items:center;gap:8px;flex:none}
 .save-buttons button:disabled{opacity:.52}

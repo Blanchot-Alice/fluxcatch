@@ -256,6 +256,42 @@ export function statesEqual(first, second) {
   return JSON.stringify(firstValidation.normalized) === JSON.stringify(secondValidation.normalized);
 }
 
+/**
+ * Reconcile an asynchronous save without replacing edits made after submit.
+ * The persisted response always becomes the new baseline. The caller may only
+ * write `formState` back into the DOM when `changedDuringSave` is false.
+ */
+export function reconcileSaveCompletion({ submitted, current, saved } = {}) {
+  const submittedSnapshot = editableStateSnapshot(submitted);
+  const currentSnapshot = editableStateSnapshot(current);
+  const changedDuringSave = JSON.stringify(currentSnapshot) !== JSON.stringify(submittedSnapshot);
+  const baseline = normalizeFormState(saved);
+  return {
+    baseline,
+    formState: changedDuringSave ? currentSnapshot : baseline,
+    changedDuringSave
+  };
+}
+
+function editableStateSnapshot(value = {}) {
+  const source = value && typeof value === "object" ? value : {};
+  return {
+    concurrentFragments: String(source.concurrentFragments ?? ""),
+    concurrentRanges: String(source.concurrentRanges ?? ""),
+    outputContainer: String(source.outputContainer ?? ""),
+    minimumKiB: String(source.minimumKiB ?? ""),
+    filenameTemplate: String(source.filenameTemplate ?? ""),
+    blockedDomains: Array.isArray(source.blockedDomains)
+      ? source.blockedDomains.map((item) => String(item ?? "")).join("\n")
+      : String(source.blockedDomains ?? ""),
+    saveAs: source.saveAs === true,
+    useNativeForDirect: source.useNativeForDirect === true,
+    allowPrivateNetworkMedia: source.allowPrivateNetworkMedia === true,
+    autoEnrichSiteQuality: source.autoEnrichSiteQuality === true,
+    showNotifications: source.showNotifications === true
+  };
+}
+
 function domainSourceLines(value) {
   if (Array.isArray(value)) return value.flatMap((item) => String(item ?? "").split(/\r?\n/));
   return String(value ?? "").split(/\r?\n/);

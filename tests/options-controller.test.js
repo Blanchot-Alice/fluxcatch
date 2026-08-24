@@ -22,13 +22,17 @@ test("Options controller owns a normalized baseline and dirty-only unload warnin
 
 test("Save validates, preserves stable gates and never requests notification permission", () => {
   const body = functionBody("save");
-  assert.match(body, /validateSettings\(collectRawState\(\)\)/);
+  assert.match(body, /const submittedState = collectRawState\(\)/);
+  assert.match(body, /validateSettings\(submittedState\)/);
   assert.match(body, /withPendingAction\(saveButton, "options-save"/);
   assert.match(body, /pendingText: "保存中…"/);
   assert.match(body, /successText: "已保存 ✓"/);
   assert.match(body, /liveDuration: 0/);
   assert.match(body, /youtubeEnabled: false/);
   assert.match(body, /blockedDomains: normalized\.blockedDomains/);
+  assert.match(body, /reconcileSaveCompletion\(\{[\s\S]*submitted: submittedState,[\s\S]*current: collectRawState\(\),[\s\S]*saved/);
+  assert.match(body, /if \(!completion\.changedDuringSave\) writeFormState\(completion\.formState\)/);
+  assert.match(body, /保存期间有新的更改/);
   assert.doesNotMatch(body, /permissions\.request|permissions\.remove/);
 });
 

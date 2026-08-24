@@ -8,6 +8,7 @@ import {
   normalizeDomainLines,
   normalizeFormState,
   notificationStatusText,
+  reconcileSaveCompletion,
   resolveNotificationLoadState,
   statesEqual,
   validateFilenameTemplate,
@@ -250,6 +251,33 @@ test("statesEqual compares valid semantic state rather than raw formatting", () 
   assert.equal(statesEqual(first, { ...equivalent, concurrentRanges: 9 }), false);
   assert.equal(statesEqual(first, { ...equivalent, blockedDomains: "example.com\n127.0.0.1" }), false,
     "invalid input must remain dirty instead of normalizing away");
+});
+
+test("save completion preserves fields edited while the request is pending", () => {
+  const submitted = { ...VALID_STATE, filenameTemplate: "{title}" };
+  const current = { ...submitted, filenameTemplate: "{title} - 保存期间的新编辑" };
+  const saved = { ...VALID_STATE, filenameTemplate: "{title}" };
+
+  const completion = reconcileSaveCompletion({ submitted, current, saved });
+
+  assert.equal(completion.changedDuringSave, true);
+  assert.equal(completion.formState.filenameTemplate, current.filenameTemplate);
+  assert.equal(completion.baseline.filenameTemplate, saved.filenameTemplate);
+  assert.equal(statesEqual(completion.formState, completion.baseline), false,
+    "the retained edit must remain dirty against the newly saved baseline");
+});
+
+test("save completion applies the server baseline when no pending edit occurred", () => {
+  const submitted = { ...VALID_STATE, concurrentFragments: "08" };
+  const completion = reconcileSaveCompletion({
+    submitted,
+    current: { ...submitted },
+    saved: { ...VALID_STATE, concurrentFragments: 8 }
+  });
+
+  assert.equal(completion.changedDuringSave, false);
+  assert.deepEqual(completion.formState, completion.baseline);
+  assert.equal(completion.baseline.concurrentFragments, 8);
 });
 
 test("notification status follows saved preference, dirty state and retained permission", () => {
