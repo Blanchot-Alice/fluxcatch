@@ -9,6 +9,7 @@
 - Separated native-host connection, protocol compatibility, FFmpeg installation/local processing, yt-dlp installation, external-tool networking, and build availability so installed tools are not presented as enabled features.
 - Unified restrained pending, success, failure, toast, focus-restoration, and duplicate-action protection across the popup and Side Panel, including card-local manifest loading feedback.
 - Strengthened keyboard, focus-visible, dark-mode, reduced-motion, narrow-width, long-filename, helper/error semantics, and minimum-target behavior without changing media detection or native download protocols.
+- Bound package/E2E evidence to clean Git identity, made dirty diagnostic packages explicitly content-addressed, and made default-on Bilibili quality enrichment obey one user setting across every automatic playback/preload path with documented in-flight, TTL, and failure-cooldown limits.
 
 ## 0.2.4 — 2026-08-23
 

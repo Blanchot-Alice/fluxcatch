@@ -55,6 +55,11 @@ test("normalizeFormState returns only the allowlisted Options schema", () => {
   }
 });
 
+test("automatic site-quality enrichment defaults on while preserving an explicit opt-out", () => {
+  assert.equal(normalizeFormState({}).autoEnrichSiteQuality, true);
+  assert.equal(normalizeFormState({ autoEnrichSiteQuality: false }).autoEnrichSiteQuality, false);
+});
+
 test("normalizeDomainLines strips URL decoration, lowercases and deduplicates", () => {
   const result = normalizeDomainLines([
     "HTTPS://Media.Example.COM.:8443/path/to/file?token=redacted#part",

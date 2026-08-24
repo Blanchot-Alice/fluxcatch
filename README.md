@@ -42,7 +42,7 @@ source service.
 
 | | |
 | --- | --- |
-| 🔍 **Passive by default** | Network detection rides on the page's own traffic. Supported-site quality metadata is requested only after you open FluxCatch, rescan, or explicitly enable automatic quality enrichment. |
+| 🔍 **Passive detection** | Network detection rides on the page's own traffic. Default-on supported-site quality enrichment may call a fixed metadata API after a trusted playback/preload request; it is rate-limited and can be disabled completely. Page completion and merely opening FluxCatch stay read-only. |
 | 📺 **Quality selection** | HLS variants and DASH representations are listed explicitly — including the Bilibili quality ladder your logged-in account can actually play. |
 | ⚡ **Conditional acceleration** | When the source server supports byte ranges and the native path is enabled, FluxCatch can download multiple ranges concurrently. This does not guarantee higher throughput. |
 | 🔒 **Local-first privacy** | No developer telemetry, account, relay, or cloud-processing service. Captured cookies remain scoped to the same origin that received them and are stripped when a native redirect or manifest child crosses origins. |
@@ -90,10 +90,13 @@ keyboard operation, visible focus, system dark mode, narrow widths, and
 `prefers-reduced-motion`. The stable GitHub profile does not actively fetch
 page-derived remote thumbnails; media cards use packaged type tiles instead.
 
-Opening the popup or Side Panel, clicking rescan, or enabling **自动补全站点画质**
-may ask a supported site's own playback-metadata API for the qualities available
-to the current login session. That setting is off by default. Automatic probes
-never follow arbitrary URLs supplied by page markup.
+**自动补全站点画质** is on by default. After a trusted media request (which may
+result from playback or player preload), it may ask the supported site's fixed
+playback-metadata API—with same-site cookies—for the qualities available to the
+current login session. Repeated requests are coalesced and cooldown-limited.
+Turning the setting off blocks every automatic metadata call; **重新扫描**
+remains available. Page completion and merely opening FluxCatch stay read-only,
+and page markup cannot select an arbitrary endpoint.
 
 ## Quick start
 

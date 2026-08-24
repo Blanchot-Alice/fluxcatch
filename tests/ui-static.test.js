@@ -74,7 +74,12 @@ test("download settings explain their effect in user-facing language", () => {
   assert.match(optionsHtml, /云 metadata、link-local、multicast、unspecified 与 reserved 目标/);
   assert.match(optionsHtml, /id="autoEnrichSiteQuality"/);
   assert.match(optionsHtml, /自动补全支持站点的画质/);
-  assert.match(optionsHtml, /使用当前站点登录会话，请求代码中固定的播放信息接口/);
+  assert.match(optionsHtml, /默认开启.*B 站可信媒体请求（播放或预加载）/);
+  assert.match(optionsHtml, /同站 Cookie/);
+  assert.match(optionsHtml, /同页首次可信请求触发.*重复 Range 请求会合并.*缓存 45 秒.*冷却 5 秒/);
+  assert.match(optionsHtml, /关闭后不发起自动补全.*重新扫描.*角标可能延迟出现/);
+  assert.match(optionsHtml, /接口由扩展固定，页面不能指定/);
+  assert.doesNotMatch(optionsHtml, /确认视频已播放|仅在.*播放后/);
   assert.match(optionsJs, /allowPrivateNetworkMedia: privateNetworkInput\.checked/);
   assert.match(optionsJs, /autoEnrichSiteQuality: form\.elements\.namedItem\("autoEnrichSiteQuality"\)\.checked/);
   assert.match(optionsJs, /allowPrivateNetworkMedia: normalized\.allowPrivateNetworkMedia/);

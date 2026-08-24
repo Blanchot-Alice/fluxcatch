@@ -19,16 +19,18 @@ Detect direct media, HLS, and DASH resources requested by the current page and s
 - `storage`: stores local preferences and bounded per-tab detection state.
 - `webRequest`: reads request/response metadata needed to identify media and temporarily associate the exact selected request headers.
 - optional `nativeMessaging`: requested only from an explicit user action when the user authorizes or starts a mode that needs the separately installed local engine for HLS/DASH, remuxing, or parallel Range transfers.
-- `http://*/*`, `https://*/*`: media can be embedded from a CDN different from the page origin; access is used only for passive detection, an explicit inspect/download action, or the off-by-default supported-site quality-enrichment setting. Extension-owned probes are limited by literal URL/host, purpose, provenance, and worker-derived origin checks and reject redirects. Native downloads additionally validate DNS answers, pin connected peers, and recheck redirects and manifest children.
+- `http://*/*`, `https://*/*`: media can be embedded from a CDN different from the page origin; access is used only for passive detection, an explicit inspect/download action, or default-on but user-disableable supported-site quality enrichment after a trusted media request. Extension-owned probes are limited by literal URL/host, purpose, provenance, and worker-derived origin checks and reject redirects. Native downloads additionally validate DNS answers, pin connected peers, and recheck redirects and manifest children.
 - optional `notifications`: requested only when the user enables completion notifications.
 
 The extension executes no remotely hosted code. Manifest and media responses are treated as data and parsed by code bundled in the extension/native host.
 
-Passive detection observes the current page's own traffic. Opening FluxCatch,
-rescanning, or explicitly enabling **自动补全站点画质** may use the current
-site login session to call that supported site's fixed playback-metadata API.
-The setting is off by default; page-provided URLs cannot select an arbitrary
-metadata endpoint.
+Passive detection observes the current page's own traffic. The default-on
+**自动补全站点画质** setting may use same-site cookies to call a supported site's
+fixed playback-metadata API after the first trusted playback/preload request.
+Repeated Range signals are coalesced and cooldown-limited. Turning the setting
+off blocks every automatic metadata call; an explicit rescan remains available.
+Page completion and opening or closing FluxCatch only read current results.
+Page-provided URLs cannot select an arbitrary metadata endpoint.
 
 ## User-data disclosure
 

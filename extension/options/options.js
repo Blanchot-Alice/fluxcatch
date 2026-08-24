@@ -145,7 +145,9 @@ function stateFromSettings(settings) {
     saveAs: Boolean(settings.saveAs),
     useNativeForDirect: Boolean(settings.useNativeForDirect),
     allowPrivateNetworkMedia: Boolean(settings.allowPrivateNetworkMedia),
-    autoEnrichSiteQuality: Boolean(settings.autoEnrichSiteQuality),
+    autoEnrichSiteQuality: typeof settings.autoEnrichSiteQuality === "boolean"
+      ? settings.autoEnrichSiteQuality
+      : true,
     showNotifications: Boolean(settings.showNotifications)
   };
 }

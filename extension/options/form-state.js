@@ -31,7 +31,7 @@ const DEFAULT_FORM_STATE = Object.freeze({
   saveAs: false,
   useNativeForDirect: false,
   allowPrivateNetworkMedia: false,
-  autoEnrichSiteQuality: false,
+  autoEnrichSiteQuality: true,
   showNotifications: false
 });
 
@@ -53,7 +53,9 @@ export function normalizeFormState(value = {}) {
     saveAs: canonicalBoolean(source.saveAs),
     useNativeForDirect: canonicalBoolean(source.useNativeForDirect),
     allowPrivateNetworkMedia: canonicalBoolean(source.allowPrivateNetworkMedia),
-    autoEnrichSiteQuality: canonicalBoolean(source.autoEnrichSiteQuality),
+    autoEnrichSiteQuality: typeof source.autoEnrichSiteQuality === "undefined"
+      ? DEFAULT_FORM_STATE.autoEnrichSiteQuality
+      : canonicalBoolean(source.autoEnrichSiteQuality),
     showNotifications: canonicalBoolean(source.showNotifications)
   };
 }

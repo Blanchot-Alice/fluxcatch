@@ -176,10 +176,12 @@ try {
     if (!after?.ok) throw new Error(after?.error || "GET_SETTINGS failed after fixture opt-in");
     return {
       defaultAllowed: Boolean(before.settings?.allowPrivateNetworkMedia),
+      autoEnrichDefault: before.settings?.autoEnrichSiteQuality,
       enabled: Boolean(after.settings?.allowPrivateNetworkMedia)
     };
   }`);
   assert.equal(fixtureNetworkSetting.defaultAllowed, false, "private-network media must default to disabled");
+  assert.equal(fixtureNetworkSetting.autoEnrichDefault, true, "Bilibili automatic quality enrichment must default to enabled");
   assert.equal(fixtureNetworkSetting.enabled, true, "loopback fixtures require an explicit private-network opt-in");
   report.extension.privateNetworkFixtureOptIn = true;
   const uiDownloadDir = path.join(chromeProfile, "verified-downloads");

@@ -140,7 +140,7 @@ const DEFAULT_SETTINGS = {
   minimumBytes: 500 * 1024,
   liveDuration: 0,
   youtubeEnabled: false,
-  autoEnrichSiteQuality: false,
+  autoEnrichSiteQuality: true,
   allowPrivateNetworkMedia: false,
   blockedDomains: [],
   filenameTemplate: "{title}",
@@ -695,14 +695,28 @@ async function discoverBilibiliDash(tabId, force = false, {
   return task;
 }
 
-// Fan out per-site discovery when a page finishes loading or starts playing.
-// Both underlying helpers are guarded (TTL / in-flight / settings), so calling
-// this repeatedly is a cheap no-op and never blocks the event listener.
-async function triggerSiteDiscovery(tabId, { automatic = false } = {}) {
+// Fan out per-site discovery after a trusted media request (which may be
+// playback or preload). Every automatic entry point shares the same setting
+// gate before credentialed fixed-site I/O; page completion is not an entry.
+// After the first permitted signal, Range/preload repeats are coalesced by the
+// per-page in-flight promise, 45-second success TTL and 5-second failure
+// cooldown; explicit scans remain able to retry immediately.
+async function triggerSiteDiscovery(tabId, {
+  automatic = false,
+  observedPlayback = false,
+  observedMediaUrl = null,
+  expectedTabToken = null
+} = {}) {
   try {
     await sessionReady;
     const settings = await getSettings();
-    if (!automatic || settings.autoEnrichSiteQuality) await discoverBilibiliDash(tabId);
+    if (!automatic || settings.autoEnrichSiteQuality) {
+      await discoverBilibiliDash(tabId, false, {
+        automatic,
+        expectedTabToken,
+        observedMediaUrl: observedPlayback ? observedMediaUrl : null
+      });
+    }
     await maybeAddYouTubeCandidate(tabId);
   } catch {
     // Discovery is best-effort; the popup scan path retries on demand.
@@ -3137,7 +3151,9 @@ function normalizeSettings(value) {
     filenameTemplate: cleanText(value.filenameTemplate, 160) || DEFAULT_SETTINGS.filenameTemplate,
     showNotifications: Boolean(value.showNotifications),
     youtubeEnabled: Boolean(value.youtubeEnabled),
-    autoEnrichSiteQuality: Boolean(value.autoEnrichSiteQuality),
+    autoEnrichSiteQuality: typeof value.autoEnrichSiteQuality === "boolean"
+      ? value.autoEnrichSiteQuality
+      : DEFAULT_SETTINGS.autoEnrichSiteQuality,
     allowPrivateNetworkMedia: Boolean(value.allowPrivateNetworkMedia)
   };
 }

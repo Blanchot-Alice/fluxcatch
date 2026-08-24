@@ -18,6 +18,14 @@ documentation changes alone do not carry test status forward.
 
 ### 0.2.5 product-interface gate
 
+Phase B scope decision (Trinity): `autoEnrichSiteQuality` is intentionally
+enabled by default so the toolbar badge can be completed automatically after
+the first trusted Bilibili media request on the same page. The fixed-site
+metadata requests use same-site cookies and retain the documented in-flight,
+success-TTL, and failure-cooldown limits. Users can turn the setting off to
+disable automatic enrichment. This is an explicit product decision within the
+Phase B candidate scope, not an incidental working-tree difference.
+
 Run this gate against one exact candidate commit and record its commit SHA,
 Chrome for Testing version, assertion counts, and artifact manifest in the
 draft pull request or CI summary:
@@ -48,7 +56,7 @@ unzip -p dist/fluxcatch-extension-0.2.4.zip lib/build-profile.js | grep 'commit:
 - [ ] Keyboard-only operation, helper/error relationships, live regions, light/dark focus rings, 40 px targets, and state labels are verified.
 - [ ] At 125% and 150% zoom, Settings has no horizontal overflow and its sticky save bar does not cover the final field.
 - [ ] `prefers-reduced-motion` removes press transforms and continuous loading animation without hiding progress state.
-- [ ] Existing media detection, selection, and download behavior remains covered and unchanged.
+- [ ] Existing media detection, selection, and download behavior remains covered and unchanged except for the documented Bilibili auto-enrichment boundary: the setting defaults on, every automatic path obeys it, only a trusted playback/preload request triggers enrichment, same-site cookies stay on the fixed API, and in-flight/TTL/failure-cooldown guards suppress repeated Range traffic.
 
 The deterministic visual matrix must include:
 

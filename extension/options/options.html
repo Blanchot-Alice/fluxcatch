@@ -209,13 +209,13 @@
           <fieldset id="privacyNetwork" class="settings-section">
             <legend>
               <span class="section-index" aria-hidden="true">05</span>
-              <span><strong>隐私与网络</strong><small>默认保持被动、公共网络优先。</small></span>
+              <span><strong>隐私与网络</strong><small>固定站点接口，自动行为可随时关闭。</small></span>
             </legend>
             <div class="section-content setting-rows">
               <label class="opt-check">
                 <input id="autoEnrichSiteQuality" name="autoEnrichSiteQuality" type="checkbox" aria-describedby="autoEnrichSiteQualityHelp">
                 <span class="switch" aria-hidden="true"></span>
-                <span class="txt">自动补全支持站点的画质<small id="autoEnrichSiteQualityHelp">默认关闭。开启后可使用当前站点登录会话，请求代码中固定的播放信息接口；页面内容不能指定任意接口。</small></span>
+                <span class="txt">自动补全支持站点的画质<small id="autoEnrichSiteQualityHelp">默认开启。检测到 B 站可信媒体请求（播放或预加载）时，会使用同站 Cookie 自动补全画质候选；同页首次可信请求触发，重复 Range 请求会合并，成功结果缓存 45 秒，失败后至少冷却 5 秒才重试。关闭后不发起自动补全，可在弹窗或侧栏点“重新扫描”手动补全，角标可能延迟出现。接口由扩展固定，页面不能指定。</small></span>
               </label>
 
               <div class="private-network-panel">
