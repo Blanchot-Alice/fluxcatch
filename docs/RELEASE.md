@@ -22,6 +22,23 @@ Run this gate against one exact candidate commit and record its commit SHA,
 Chrome for Testing version, assertion counts, and artifact manifest in the
 draft pull request or CI summary:
 
+`npm run package` is an identity gate as well as a build command: it must run
+from a clean Git worktree and refuses modified or untracked files. A release
+archive is acceptable only when the packaged `BUILD_IDENTITY.commit` equals
+`git rev-parse --short=12 HEAD`. `npm run package -- --allow-dirty` exists only
+for local diagnostics; it labels the archive
+`uncommitted:background.js@sha256:<digest>`, where `<digest>` must equal the
+SHA-256 of `background.js` extracted from that archive. Such an archive never
+satisfies the exact-candidate gate. E2E evidence follows the same boundary:
+its `commit` field is the 12-character HEAD only for a clean worktree,
+`uncommitted` for a dirty worktree, and `not-a-git-repository` only outside Git.
+For a dirty diagnostic archive, verify the label directly against its payload:
+
+```sh
+unzip -p dist/fluxcatch-extension-0.2.4.zip background.js | shasum -a 256
+unzip -p dist/fluxcatch-extension-0.2.4.zip lib/build-profile.js | grep 'commit:'
+```
+
 - [ ] All three extension pages load the shared packaged tokens and control primitives; no remote font, CSS, UI SDK, or executable code is introduced.
 - [ ] Settings is initially clean, enables Save only after a normalized change, resets its baseline after success, and preserves dirty state after failure.
 - [ ] Numeric limits, unknown filename tokens, empty-output risk, and invalid ignored-domain lines produce field errors plus an accessible summary and first-invalid-field focus.

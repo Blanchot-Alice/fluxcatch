@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
@@ -43,6 +43,7 @@ const HLS_RENDITIONS = [
 
 const manifest = JSON.parse(fs.readFileSync(MANIFEST_PATH, "utf8"));
 const EXPECTED_EXTENSION_ID = extensionIdFromManifestKey(manifest.key);
+const E2E_SOURCE_COMMIT = resolveE2eSourceCommit();
 const runId = `${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
 const report = {
   schemaVersion: 3,
@@ -134,10 +135,13 @@ try {
   assert.equal(buildInfo.diagnostics?.extension?.version, manifest.version, "runtime build version differs from manifest");
   assert.equal(buildInfo.diagnostics?.extension?.id, EXPECTED_EXTENSION_ID, "runtime build identity has the wrong extension ID");
   assert.equal(buildInfo.diagnostics?.extension?.channel, "github", "runtime build channel mismatch");
-  assert.equal(buildInfo.diagnostics?.extension?.commit, "development", "unpacked E2E must identify a development source tree");
+  assert.equal(buildInfo.diagnostics?.extension?.commit, "development", "unpacked source must retain its non-release sentinel");
   assert.equal(buildInfo.diagnostics?.capabilities?.externalToolNetwork, false, "stable external-tool gate must stay closed");
   assert.equal(buildInfo.diagnostics?.capabilities?.remoteThumbnails, false, "stable remote thumbnail gate must stay closed");
-  report.extension.buildIdentity = buildInfo.diagnostics.extension;
+  report.extension.buildIdentity = {
+    ...buildInfo.diagnostics.extension,
+    commit: E2E_SOURCE_COMMIT
+  };
   report.extension.capabilityProfile = buildInfo.diagnostics.capabilities;
 
   await auditPhaseBOptionsMatrix(launched.httpOrigin);
@@ -2370,6 +2374,35 @@ class CdpClient {
     this.rejectPending(new Error("CDP client closed"));
     try { this.socket?.close(); } catch { /* Already closed. */ }
   }
+}
+
+function resolveE2eSourceCommit() {
+  const probe = spawnSync("git", ["-C", ROOT, "rev-parse", "--is-inside-work-tree"], { encoding: "utf8" });
+  if (probe.error) throw new Error(`git is required to identify E2E evidence: ${probe.error.message}`);
+  if (probe.status !== 0) {
+    const details = `${probe.stderr || ""}${probe.stdout || ""}`.trim();
+    if (probe.status === 128 && !fs.existsSync(path.join(ROOT, ".git"))) {
+      return "not-a-git-repository";
+    }
+    throw new Error(`failed to identify the E2E Git worktree: ${details || `exit ${probe.status}`}`);
+  }
+
+  const status = spawnSync(
+    "git",
+    ["-C", ROOT, "status", "--porcelain", "--untracked-files=all"],
+    { encoding: "utf8" }
+  );
+  if (status.error) throw new Error(`failed to read E2E worktree status: ${status.error.message}`);
+  if (status.status !== 0) throw new Error(`failed to read E2E worktree status: ${(status.stderr || "").trim() || `exit ${status.status}`}`);
+  if (status.stdout.trim()) return "uncommitted";
+
+  const revision = spawnSync("git", ["-C", ROOT, "rev-parse", "--short=12", "HEAD"], { encoding: "utf8" });
+  if (revision.error) throw new Error(`failed to identify the E2E commit: ${revision.error.message}`);
+  const commit = revision.stdout.trim();
+  if (revision.status !== 0 || !/^[a-f0-9]{12}$/i.test(commit)) {
+    throw new Error(`failed to identify the E2E commit: ${(revision.stderr || "").trim() || commit || `exit ${revision.status}`}`);
+  }
+  return commit;
 }
 
 function extensionIdFromManifestKey(key) {

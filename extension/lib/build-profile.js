@@ -71,7 +71,10 @@ export function buildDiagnostics({ extensionId = "", manifestVersion = "", hostS
       version: cleanVersion(manifestVersion) || BUILD_IDENTITY.extensionVersion,
       id: cleanText(extensionId, 64) || null,
       channel: BUILD_IDENTITY.channel,
-      commit: cleanText(BUILD_IDENTITY.commit, 40) || null,
+      // Dirty diagnostic packages use
+      // `uncommitted:background.js@sha256:<digest>` rather than impersonating
+      // HEAD, so retain the complete verifiable identity string.
+      commit: cleanText(BUILD_IDENTITY.commit, 128) || null,
       buildTimestamp: cleanText(BUILD_IDENTITY.buildTimestamp, 40) || null
     }),
     native: Object.freeze({
