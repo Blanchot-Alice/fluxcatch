@@ -25,12 +25,13 @@ test("host status exposes capabilities without executable paths, probe errors or
       dashPair: "direct-v1",
       future: "CAPABILITY_FUTURE"
     },
+    failureReason: "api_unavailable",
     lastError: "failed at /opt/homebrew/bin/STATUS_PATH token=STATUS_SECRET",
     future: "STATUS_FUTURE"
   });
   assert.deepEqual(Object.keys(status).sort(), [
     "capabilities", "capabilityProfileCompatible", "capabilityProfileVersion", "compatible", "connected", "ffmpeg",
-    "lastError", "needsPermission", "protocolCompatible", "protocolVersion", "version", "versionCompatible"
+    "failureReason", "lastError", "needsPermission", "protocolCompatible", "protocolVersion", "version", "versionCompatible"
   ].sort());
   assert.deepEqual(Object.keys(status.capabilities).sort(), ["dashPair", "dashPlanner", "ffmpeg", "ytdlp"].sort());
   assert.deepEqual(Object.keys(status.capabilities.ffmpeg).sort(), ["available", "demuxers", "encoders", "networkInput", "version"].sort());
@@ -39,8 +40,18 @@ test("host status exposes capabilities without executable paths, probe errors or
   assert.equal(status.capabilities.ytdlp.installed, true);
   assert.equal(status.capabilities.ytdlp.available, false);
   assert.equal(status.capabilities.ytdlp.networkDisabled, true);
+  assert.equal(status.failureReason, "api_unavailable");
   assert.equal(status.compatible, true);
   assert.doesNotMatch(JSON.stringify(status), /FFMPEG_PATH|PROBE_SECRET|DEMUX_SECRET|FFMPEG_FUTURE|YTDLP_PATH|YTDLP_PROBE|CAPABILITY_FUTURE|STATUS_PATH|STATUS_SECRET|STATUS_FUTURE/);
+});
+
+test("host failure reason crosses the public boundary only through a fixed allowlist", () => {
+  for (const reason of ["api_unavailable", "host_missing", "connection_failed"]) {
+    assert.equal(hostStatusForUi({ failureReason: reason }).failureReason, reason);
+  }
+  assert.equal(hostStatusForUi({ failureReason: "future_failure" }).failureReason, null);
+  assert.equal(hostStatusForUi({ failureReason: "/Users/private/FAILURE_REASON_SECRET" }).failureReason, null);
+  assert.equal(hostStatusForUi({}).failureReason, null);
 });
 
 test("host status does not turn an unknown network gate into explicit permission", () => {

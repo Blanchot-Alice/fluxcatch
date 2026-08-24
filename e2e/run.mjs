@@ -141,11 +141,15 @@ try {
 
   await auditPhaseBOptionsMatrix(launched.httpOrigin);
 
-  await auditExistingExtensionPage("options", controlPage, 720, 900, `(() => ({
+  await auditExistingExtensionPage("options", controlPage, 720, 900, `(async () => ({
     title: document.title,
     heading: document.querySelector("h1")?.textContent,
     saveButton: document.querySelector(".save-btn")?.textContent,
     nativePermissionButton: document.querySelector("#nativePermissionButton")?.textContent,
+    nativePermissionStatus: document.querySelector("#nativePermissionStatus")?.textContent,
+    nativePermissionGranted: await chrome.permissions.contains({ permissions: ["nativeMessaging"] }),
+    nativeInstallGuideOpen: Boolean(document.querySelector("#nativeInstallGuide")?.open),
+    nativeConnection: document.querySelector("#capabilityNativeConnection")?.textContent,
     labelledFields: [...document.querySelectorAll(".opt-field input, .opt-field select, .opt-field textarea")].every((node) => Boolean(document.querySelector('label[for="' + node.id + '"]'))),
     deadControls: ["liveDuration", "youtubeEnabled", "ytdlpStatus", "ytdlpRefreshButton", "ytdlpGuide"].filter((id) => document.getElementById(id)),
     capabilities: [...document.querySelectorAll("#capabilityList li")].map((node) => ({
@@ -829,20 +833,27 @@ async function auditPhaseBOptionsMatrix(devtoolsOrigin) {
       document.querySelector("#localCapabilities").scrollIntoView({ block: "center", behavior: "auto" });
       root.style.scrollBehavior = priorScrollBehavior;
       const { renderHostStatus } = await import(chrome.runtime.getURL("options/options.js"));
-      renderHostStatus({ connected: false }, { permissionGranted: true, failed: true });
+      renderHostStatus({ connected: false, failureReason: "host_missing" }, { permissionGranted: true });
       const matrixRect = document.querySelector("#localCapabilities .local-capability-matrix").getBoundingClientRect();
       const saveRect = document.querySelector("#saveBar").getBoundingClientRect();
+      const guide = document.querySelector("#nativeInstallGuide");
       return {
         states: [...document.querySelectorAll("#localCapabilities dd[data-state]")].map((node) => node.dataset.state),
         native: document.querySelector("#capabilityNativeConnection").textContent,
         permission: document.querySelector("#nativePermissionStatus").textContent,
         action: document.querySelector("#nativePermissionButton").textContent,
+        guideOpen: Boolean(guide.open),
+        guideText: guide.textContent.trim(),
         matrixVisible: matrixRect.top >= 0 && matrixRect.bottom <= saveRect.top
       };
     })()`);
-    assert.match(missingMatrix.native, /未连接.*检查安装/);
-    assert.match(missingMatrix.permission, /已授权.*未连接/);
+    assert.match(missingMatrix.native, /未安装|未注册/);
+    assert.match(missingMatrix.permission, /已授权.*未安装|已授权.*未注册/);
+    assert.match(missingMatrix.permission, /bash native-host\/install-macos\.sh/);
     assert.equal(missingMatrix.action, "重新检查");
+    assert.equal(missingMatrix.guideOpen, true, "missing native host did not open its installation guide");
+    assert.match(missingMatrix.guideText, /bash native-host\/install-macos\.sh/);
+    assert.doesNotMatch(JSON.stringify(missingMatrix), /TypeError|connectNative is not a function/);
     assert.equal(missingMatrix.matrixVisible, true, "missing-host capability matrix is outside its evidence screenshot");
     assert.ok(missingMatrix.states.every((state) => ["ready", "gated", "missing", "mismatch", "unknown"].includes(state)),
       `missing-host fixture produced an unknown production state: ${JSON.stringify(missingMatrix.states)}`);
@@ -851,6 +862,33 @@ async function auditPhaseBOptionsMatrix(devtoolsOrigin) {
       fixture: "deterministic host DTO rendered by production renderHostStatus",
       model: missingMatrix
     });
+
+    const unavailableApiMatrix = await evaluate(client, `(async () => {
+      const { renderHostStatus } = await import(chrome.runtime.getURL("options/options.js"));
+      renderHostStatus({ connected: false, failureReason: "api_unavailable" }, { permissionGranted: true });
+      const guide = document.querySelector("#nativeInstallGuide");
+      return {
+        states: [...document.querySelectorAll("#localCapabilities dd[data-state]")].map((node) => node.dataset.state),
+        native: document.querySelector("#capabilityNativeConnection").textContent,
+        permission: document.querySelector("#nativePermissionStatus").textContent,
+        action: document.querySelector("#nativePermissionButton").textContent,
+        guideOpen: Boolean(guide.open),
+        bodyText: document.body.textContent
+      };
+    })()`);
+    assert.match(unavailableApiMatrix.native, /授权已生效.*接口待恢复/);
+    assert.match(unavailableApiMatrix.permission, /Chrome.*初始化.*自动重试/);
+    assert.equal(unavailableApiMatrix.action, "重新检查");
+    assert.equal(unavailableApiMatrix.guideOpen, false, "API-binding recovery was misclassified as a missing host");
+    assert.equal(unavailableApiMatrix.states[0], "mismatch");
+    assert.doesNotMatch(JSON.stringify(unavailableApiMatrix), /TypeError|connectNative is not a function/);
+    report.extension.nativeFailureEvidence = {
+      hostMissing: missingMatrix,
+      apiUnavailable: {
+        ...unavailableApiMatrix,
+        bodyText: undefined
+      }
+    };
 
     const readyMatrix = await evaluate(client, `(async () => {
       const { renderHostStatus } = await import(chrome.runtime.getURL("options/options.js"));
@@ -1737,7 +1775,11 @@ async function auditExtensionPage(name, client, width, height, expression, close
       assert.equal(result.heading, "FluxCatch 设置");
       assert.equal(result.saveButton, "保存设置");
       assert.equal(result.labelledFields, true, "options contains an unlabelled field");
-      assert.ok(["开启高速下载功能", "重新检查"].includes(result.nativePermissionButton));
+      assert.equal(result.nativePermissionGranted, false, "fresh E2E profile unexpectedly has nativeMessaging permission");
+      assert.equal(result.nativePermissionButton, "开启高速下载功能");
+      assert.match(result.nativePermissionStatus || "", /需要开启/);
+      assert.match(result.nativeConnection || "", /尚未授权/);
+      assert.equal(result.nativeInstallGuideOpen, false, "ungranted native access should not show the host installation failure guide");
       assert.deepEqual(result.deadControls, [], "stable options still exposes unavailable controls");
       assert.equal(result.capabilities.length, 9, "options capability matrix is incomplete");
       const capabilityMap = Object.fromEntries(result.capabilities.map((entry) => [entry.feature, entry]));

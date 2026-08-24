@@ -44,7 +44,7 @@ cd "$REPO_ROOT"
 ./native-host/install-macos.sh
 ```
 
-The installer creates a private runtime copy under `~/Library/Application Support/FluxCatch/` and registers the host under Chrome's per-user `NativeMessagingHosts` directory. Reload the extension after installation.
+The installer creates a private runtime copy under `~/Library/Application Support/FluxCatch/` and registers the host under Chrome's per-user `NativeMessagingHosts` directory. Return to **Settings → Local capabilities** and click **Recheck** after installation. Reload the extension only if Chrome still caches the old native-host registration.
 
 Advanced downloads require Python 3.9+ and FFmpeg. FluxCatch uses its built-in pinned HTTP client for network transfers and gives FFmpeg local files only for merge, remux, and MP3 work. Static DASH support depends on the built-in planner. HLS download support in 0.2.4 is limited to clear static VOD; live, encrypted, discontinuous, and separate-audio playlists fail closed instead of handing a network URL to FFmpeg.
 

@@ -7,6 +7,7 @@ const HOST_EVENT_TYPES = new Set([
   "error",
   "host-disconnected"
 ]);
+const HOST_FAILURE_REASONS = new Set(["api_unavailable", "host_missing", "connection_failed"]);
 
 function cleanText(value, max) {
   return typeof value === "string" ? value.replace(/[\u0000-\u001f]/g, " ").trim().slice(0, max) : "";
@@ -92,6 +93,7 @@ export function hostStatusForUi(status = {}) {
     ffmpeg: Boolean(status.ffmpeg),
     capabilities,
     needsPermission: Boolean(status.needsPermission),
+    failureReason: HOST_FAILURE_REASONS.has(status.failureReason) ? status.failureReason : null,
     lastError: redactText(status.lastError, 240) || null
   };
 }

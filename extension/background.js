@@ -19,6 +19,13 @@ import { hostEventForUi, hostStatusForUi } from "./lib/host-public.js";
 import { BUILD_PROFILE, HOST_MISMATCH_MESSAGE, buildDiagnostics, hostCompatibility } from "./lib/build-profile.js";
 
 const HOST_NAME = "io.github.blanchot_alice.fluxcatch";
+const NATIVE_API_BINDING_WAIT_MS = 500;
+const NATIVE_API_RECOVERY_KEY = "nativeApiRecovery";
+const NATIVE_API_RECOVERY_WAIT_MS = 35_000;
+const NATIVE_API_RECOVERY_TTL_MS = 2 * 60_000;
+const NATIVE_API_UNAVAILABLE_MESSAGE = "高速下载授权已生效，但 Chrome 尚未加载连接接口。FluxCatch 将自动重试；若仍未恢复，请在 chrome://extensions 中重新加载 FluxCatch。";
+const NATIVE_HOST_MISSING_MESSAGE = "本地引擎尚未安装或未注册。请在终端运行 bash native-host/install-macos.sh 后重试。";
+const NATIVE_CONNECTION_FAILED_MESSAGE = "暂时未能连接本地引擎。请稍后点击“重新检查”；若持续失败，请在 chrome://extensions 中查看 FluxCatch 的错误。";
 const EXTENSION_ORIGIN = chrome.runtime.getURL("");
 const MAX_ITEMS_PER_TAB = 160;
 const HEADER_TTL_MS = 5 * 60 * 1000;
@@ -173,12 +180,19 @@ let hostStatus = {
   ffmpeg: false,
   capabilities: null,
   needsPermission: true,
+  failureReason: null,
   lastError: null
 };
 
 // Register listeners synchronously, but make every state consumer wait for the
 // MV3 session restore so early webRequest/content events cannot be overwritten.
 const sessionReady = restoreSession();
+const nativeRecoveryReady = prepareNativeApiRecoveryAtStartup();
+
+chrome.permissions.onRemoved?.addListener((permissions) => {
+  if (!permissions?.permissions?.includes("nativeMessaging")) return;
+  void handleNativePermissionRemoved();
+});
 
 chrome.webRequest.onBeforeSendHeaders.addListener(
   (details) => {
@@ -416,20 +430,39 @@ async function handleMessage(message, sender) {
       return startDownload(requireTabCandidate(tabId, message.candidate), message.options || {}, tabId);
     }
     case "PING_HOST": {
+      await nativeRecoveryReady;
       if (!await hasNativePermission()) {
         hostStatus = disconnectedHostStatus({ needsPermission: true });
         return { hostStatus: hostStatusForUi(hostStatus) };
       }
-      const port = await ensureNativePort({ requireCompatibility: false });
-      // A live port answers with capabilities probed when its process started;
-      // yt-dlp may have been installed or upgraded since. Force a fresh ping
-      // round-trip so the UI's "重新检查" reports the machine's current state
-      // instead of a stale snapshot. The host re-probes yt-dlp on every ping.
-      if (nativePort === port && hostStatus.connected) {
-        try { await pingNativePort(port); } catch { /* a dead port has already reset hostStatus via onDisconnect */ }
+      try {
+        const port = await ensureNativePort({ requireCompatibility: false });
+        // A live port answers with capabilities probed when its process started;
+        // yt-dlp may have been installed or upgraded since. Force a fresh ping
+        // round-trip so the UI's "重新检查" reports the machine's current state
+        // instead of a stale snapshot. The host re-probes yt-dlp on every ping.
+        if (nativePort === port && hostStatus.connected) {
+          try {
+            await pingNativePort(port);
+          } catch (error) {
+            if (nativePort === port) {
+              nativePort = null;
+              const failure = nativeConnectionFailure(error);
+              hostStatus = disconnectedHostStatus(failure);
+              try { port.disconnect?.(); } catch { /* The failed port may already be closed. */ }
+              void handleNativeDisconnect(failure.lastError);
+            }
+          }
+        }
+      } catch {
+        // Connection failures are represented by the public host state below.
+        // PING_HOST is a status probe, so callers should not have to parse raw
+        // Chrome errors to distinguish permission, API binding and install state.
       }
       return { hostStatus: hostStatusForUi(hostStatus) };
     }
+    case "RECOVER_NATIVE_API":
+      return recoverNativeMessagingApi();
     case "CANCEL_JOB": {
       const jobId = cleanText(message.jobId, 128);
       if (!jobId) throw new Error("任务编号无效");
@@ -2326,7 +2359,14 @@ async function ensureNativePort({ requireCompatibility = true } = {}) {
     if (requireCompatibility) requireCompatibleNativeHost();
     return nativePort;
   }
-  if (nativeConnectPromise) return nativeConnectPromise;
+  if (nativeConnectPromise) {
+    const port = await nativeConnectPromise;
+    // A status probe may own the shared connection with compatibility checks
+    // disabled. Every concurrent action must still enforce its own policy
+    // before it can use that same port for a download or cancellation.
+    if (requireCompatibility) requireCompatibleNativeHost();
+    return port;
+  }
   nativeConnectPromise = openNativePort();
   try {
     const port = await nativeConnectPromise;
@@ -2339,12 +2379,26 @@ async function ensureNativePort({ requireCompatibility = true } = {}) {
 
 async function openNativePort() {
   if (!await hasNativePermission()) throw new Error("尚未授权连接本地引擎");
+  if (!await waitForNativeMessagingApi()) {
+    hostStatus = disconnectedHostStatus({
+      failureReason: "api_unavailable",
+      lastError: NATIVE_API_UNAVAILABLE_MESSAGE
+    });
+    throw new Error(NATIVE_API_UNAVAILABLE_MESSAGE);
+  }
+  // The optional permission may be removed while the worker is waiting for
+  // Chrome to expose connectNative. Never connect on a stale permission read.
+  if (!await hasNativePermission()) {
+    hostStatus = disconnectedHostStatus({ needsPermission: true });
+    throw new Error("尚未授权连接本地引擎");
+  }
   let port;
   try {
     port = chrome.runtime.connectNative(HOST_NAME);
   } catch (error) {
-    hostStatus = disconnectedHostStatus({ lastError: error.message });
-    throw new Error(`本地引擎尚未安装或未注册：${error.message}`);
+    const failure = nativeConnectionFailure(error);
+    hostStatus = disconnectedHostStatus(failure);
+    throw new Error(failure.lastError);
   }
   nativePort = port;
   port.onMessage.addListener((message) => {
@@ -2357,20 +2411,22 @@ async function openNativePort() {
         ffmpeg: Boolean(message.ffmpeg),
         capabilities: message.capabilities && typeof message.capabilities === "object" ? message.capabilities : null,
         needsPermission: false,
+        failureReason: null,
         lastError: null
       };
+      void clearNativeApiRecoveryMarker();
       if (ytdlpNetworkDisabled()) void dropYouTubeCandidates();
       resolveHostPing(port, message.requestId);
     }
     void handleNativeHostMessage(message);
   });
   port.onDisconnect.addListener(() => {
-    const error = chrome.runtime.lastError?.message || "本地引擎连接已断开";
-    rejectHostPings(port, new Error(error));
+    const failure = nativeConnectionFailure(chrome.runtime.lastError?.message || "");
+    rejectHostPings(port, new Error(failure.lastError));
     if (nativePort !== port) return;
     nativePort = null;
-    hostStatus = disconnectedHostStatus({ lastError: error });
-    void handleNativeDisconnect(error);
+    hostStatus = disconnectedHostStatus(failure);
+    void handleNativeDisconnect(failure.lastError);
   });
   try {
     await pingNativePort(port);
@@ -2378,11 +2434,130 @@ async function openNativePort() {
   } catch (error) {
     if (nativePort === port) {
       nativePort = null;
-      hostStatus = disconnectedHostStatus({ lastError: error.message });
+      const failure = nativeConnectionFailure(error);
+      hostStatus = disconnectedHostStatus(failure);
     }
     try { port.disconnect?.(); } catch { /* The failed port may already be closed. */ }
     throw error;
   }
+}
+
+async function recoverNativeMessagingApi() {
+  await nativeRecoveryReady;
+  if (!await hasNativePermission()) {
+    await clearNativeApiRecoveryMarker();
+    hostStatus = disconnectedHostStatus({ needsPermission: true });
+    return { retryAfterMs: 0, recoveryBlocked: false, hostStatus: hostStatusForUi(hostStatus) };
+  }
+  if (typeof chrome.runtime.connectNative === "function") {
+    try { await ensureNativePort({ requireCompatibility: false }); } catch { /* Public status describes the failure. */ }
+    return { retryAfterMs: 0, recoveryBlocked: false, hostStatus: hostStatusForUi(hostStatus) };
+  }
+
+  const marker = await readNativeApiRecoveryMarker();
+  if (marker?.phase === "resumed") {
+    hostStatus = disconnectedHostStatus({ failureReason: "api_unavailable", lastError: NATIVE_API_UNAVAILABLE_MESSAGE });
+    return { retryAfterMs: 0, recoveryBlocked: true, hostStatus: hostStatusForUi(hostStatus) };
+  }
+  if (marker?.phase === "waiting") {
+    const retryAfterMs = Math.max(0, marker.retryAt - Date.now());
+    if (retryAfterMs > 0) {
+      return { retryAfterMs, recoveryBlocked: false, hostStatus: hostStatusForUi(hostStatus) };
+    }
+    if (!await writeNativeApiRecoveryMarker({ ...marker, phase: "resumed" })) {
+      hostStatus = disconnectedHostStatus({ needsPermission: true });
+      return { retryAfterMs: 0, recoveryBlocked: false, hostStatus: hostStatusForUi(hostStatus) };
+    }
+    hostStatus = disconnectedHostStatus({ failureReason: "api_unavailable", lastError: NATIVE_API_UNAVAILABLE_MESSAGE });
+    return { retryAfterMs: 0, recoveryBlocked: true, hostStatus: hostStatusForUi(hostStatus) };
+  }
+
+  const now = Date.now();
+  const waiting = {
+    phase: "waiting",
+    requestedAt: now,
+    retryAt: now + NATIVE_API_RECOVERY_WAIT_MS,
+    expiresAt: now + NATIVE_API_RECOVERY_TTL_MS
+  };
+  if (!await writeNativeApiRecoveryMarker(waiting)) {
+    hostStatus = disconnectedHostStatus({ needsPermission: true });
+    return { retryAfterMs: 0, recoveryBlocked: false, hostStatus: hostStatusForUi(hostStatus) };
+  }
+  return { retryAfterMs: NATIVE_API_RECOVERY_WAIT_MS, recoveryBlocked: false, hostStatus: hostStatusForUi(hostStatus) };
+}
+
+async function writeNativeApiRecoveryMarker(marker) {
+  await chrome.storage.local.set({ [NATIVE_API_RECOVERY_KEY]: marker });
+  if (await hasNativePermission()) return true;
+  await clearNativeApiRecoveryMarker();
+  return false;
+}
+
+async function prepareNativeApiRecoveryAtStartup() {
+  const marker = await readNativeApiRecoveryMarker();
+  if (marker?.phase !== "waiting" || marker.retryAt > Date.now()) return;
+  if (!await hasNativePermission()) {
+    await clearNativeApiRecoveryMarker();
+    return;
+  }
+  const current = await readNativeApiRecoveryMarker();
+  if (current?.phase !== "waiting" || current.requestedAt !== marker.requestedAt) return;
+  await chrome.storage.local.set({ [NATIVE_API_RECOVERY_KEY]: { ...current, phase: "resumed" } });
+  // onRemoved and startup initialization can interleave around storage I/O.
+  // A post-write permission check makes either ordering converge on a cleared
+  // marker instead of blocking the user's next legitimate authorization.
+  if (!await hasNativePermission()) await clearNativeApiRecoveryMarker();
+}
+
+async function readNativeApiRecoveryMarker() {
+  let stored;
+  try { stored = (await chrome.storage.local.get(NATIVE_API_RECOVERY_KEY))?.[NATIVE_API_RECOVERY_KEY]; } catch { return null; }
+  const valid = stored && (stored.phase === "waiting" || stored.phase === "resumed")
+    && Number.isFinite(stored.requestedAt) && Number.isFinite(stored.retryAt) && Number.isFinite(stored.expiresAt)
+    && stored.retryAt >= stored.requestedAt && stored.retryAt <= stored.expiresAt
+    && stored.expiresAt > Date.now() && stored.expiresAt - stored.requestedAt <= NATIVE_API_RECOVERY_TTL_MS;
+  if (valid) return stored;
+  if (stored) await clearNativeApiRecoveryMarker();
+  return null;
+}
+
+async function clearNativeApiRecoveryMarker() {
+  try {
+    if (typeof chrome.storage.local.remove === "function") await chrome.storage.local.remove(NATIVE_API_RECOVERY_KEY);
+    else await chrome.storage.local.set({ [NATIVE_API_RECOVERY_KEY]: null });
+  } catch { /* Recovery state is best-effort and contains no sensitive data. */ }
+}
+
+async function handleNativePermissionRemoved() {
+  const port = nativePort;
+  nativePort = null;
+  hostStatus = disconnectedHostStatus({ needsPermission: true });
+  rejectHostPings(port, new Error("高速下载功能授权已关闭"));
+  try { port?.disconnect?.(); } catch { /* The port may already be closed. */ }
+  await clearNativeApiRecoveryMarker();
+  await handleNativeDisconnect("高速下载功能授权已关闭");
+}
+
+async function waitForNativeMessagingApi() {
+  const deadline = Date.now() + NATIVE_API_BINDING_WAIT_MS;
+  do {
+    if (typeof chrome.runtime.connectNative === "function") return true;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  } while (Date.now() < deadline);
+  return typeof chrome.runtime.connectNative === "function";
+}
+
+function nativeConnectionFailure(error) {
+  const raw = typeof error === "string" ? error : error?.message || "";
+  // Keep classification idempotent: an onDisconnect listener rejects the
+  // pending ping with the already-sanitized message, which is then handled by
+  // openNativePort's catch path a second time.
+  const hostMissing = raw === NATIVE_HOST_MISSING_MESSAGE
+    || /specified native messaging host not found|native messaging host.*not found/i.test(raw);
+  return {
+    failureReason: hostMissing ? "host_missing" : "connection_failed",
+    lastError: hostMissing ? NATIVE_HOST_MISSING_MESSAGE : NATIVE_CONNECTION_FAILED_MESSAGE
+  };
 }
 
 function pingNativePort(port) {
@@ -3015,7 +3190,7 @@ function ytdlpNetworkAllowed() {
     && ytdlp?.networkDisabled === false;
 }
 
-function disconnectedHostStatus({ needsPermission = false, lastError = null } = {}) {
+function disconnectedHostStatus({ needsPermission = false, failureReason = null, lastError = null } = {}) {
   return {
     connected: false,
     version: null,
@@ -3024,6 +3199,7 @@ function disconnectedHostStatus({ needsPermission = false, lastError = null } = 
     ffmpeg: false,
     capabilities: null,
     needsPermission: Boolean(needsPermission),
+    failureReason,
     lastError: lastError || null
   };
 }

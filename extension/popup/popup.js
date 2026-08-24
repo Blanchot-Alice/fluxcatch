@@ -34,7 +34,7 @@ port.onMessage.addListener((message) => {
     consumeJobUpdate(message.event);
   }
 });
-port.onDisconnect.addListener(() => updateHost({ connected: false, lastError: chrome.runtime.lastError?.message || "扩展后台已断开" }));
+port.onDisconnect.addListener(() => updateHost(nativeStatusFromError(chrome.runtime.lastError?.message || "扩展后台已断开")));
 
 document.addEventListener("DOMContentLoaded", init);
 
@@ -50,7 +50,7 @@ async function init() {
     showToast(error?.message || "读取页面失败");
     emptyState.hidden = false;
   }
-  void call({ type: "PING_HOST" }).then((result) => updateHost(result.hostStatus)).catch((error) => updateHost({ connected: false, lastError: error.message }));
+  void refreshNativeHost().catch(() => {});
 }
 
 function bindEvents() {
@@ -84,13 +84,8 @@ function bindEvents() {
   }, { pendingText: "打开中…", successDurationMs: 0 }));
   $("#settingsButton").addEventListener("click", () => void chrome.runtime.openOptionsPage().catch((error) => showToast(error.message)));
   $("#pingButton").addEventListener("click", (event) => void runUiAction(event.currentTarget, "popup:ping-host", async () => {
-    try {
-      const result = await call({ type: "PING_HOST" });
-      updateHost(result.hostStatus);
-    } catch (error) {
-      updateHost({ connected: false, lastError: error.message });
-      throw error;
-    }
+    const host = await refreshNativeHost();
+    requireNativeHostReady(host);
   }, { pendingText: "", successText: "✓" }));
   $("#installHelpButton").addEventListener("click", () => void chrome.runtime.openOptionsPage().catch((error) => showToast(error?.message || "无法打开设置页")));
   const tabs = [...document.querySelectorAll('[role="tab"]')];
@@ -396,6 +391,11 @@ async function submitDownload(event) {
       if (advanced) {
         const granted = await chrome.permissions.request({ permissions: ["nativeMessaging"] });
         if (!granted) throw new Error("请先允许使用高速下载功能，再继续下载");
+        // An optional permission can be granted while the current MV3 worker
+        // still has a stale runtime API binding. Probe before sending the job;
+        // the settings page owns the single automatic recovery state machine.
+        const host = await refreshNativeHost();
+        requireNativeHostReady(host);
       }
       const result = await call({ type: "DOWNLOAD", tabId: state.tabId, candidate: candidateReference(item), options });
       dialog.close();
@@ -498,7 +498,65 @@ function announceJobChange(previous, current) {
   $("#jobAnnouncer").textContent = `${current.filename || "媒体"}：${statusLabel(current.status)}`;
 }
 
+function nativeFailureReasonFromMessage(message) {
+  const raw = String(message || "");
+  if (/connectNative(?:\s+is not a function)?|chrome\.runtime\.connectNative|尚未加载连接接口|连接接口.*(?:待恢复|尚未就绪)/i.test(raw)) return "api_unavailable";
+  if (/specified native messaging host not found|native messaging host.*not found|未安装或未注册/i.test(raw)) return "host_missing";
+  return "connection_failed";
+}
+
+function nativeStatusFromError(error) {
+  const raw = String(error?.message || error || "");
+  if (/尚未授权|未获授权|nativeMessaging.*(?:permission|权限)|请先允许使用高速下载功能/i.test(raw)) {
+    return { connected: false, needsPermission: true, failureReason: null, lastError: null };
+  }
+  const failureReason = nativeFailureReasonFromMessage(raw);
+  return { connected: false, needsPermission: false, failureReason, lastError: nativeHostIssueMessage({ failureReason }) };
+}
+
+function normalizeNativeHostStatus(status = {}) {
+  status = status && typeof status === "object" ? status : {};
+  if (status.needsPermission) return { ...status, failureReason: null, lastError: null };
+  if (status.connected || ["api_unavailable", "host_missing", "connection_failed"].includes(status.failureReason)) return status;
+  if (!status.lastError) return status;
+  const failureReason = nativeFailureReasonFromMessage(status.lastError);
+  return { ...status, failureReason, lastError: nativeHostIssueMessage({ failureReason }) };
+}
+
+function nativeHostIssueMessage(status = {}) {
+  if (status.needsPermission) return "请先允许使用高速下载功能，再继续操作";
+  if (status.failureReason === "api_unavailable") {
+    return status.recoveryBlocked
+      ? "Chrome 尚未恢复高速下载连接接口；请打开 chrome://extensions，重新加载 FluxCatch 后重试"
+      : "授权已生效，但 Chrome 的高速下载连接接口尚未就绪；请打开设置页完成自动恢复后重试";
+  }
+  if (status.failureReason === "host_missing") return "高速下载配套程序尚未安装或未注册；请打开安装方法查看步骤";
+  if (status.failureReason === "connection_failed") return "高速下载配套程序连接失败；请重试，仍失败时打开设置页检查";
+  if (status.connected && status.compatible !== true) return HOST_MISMATCH_MESSAGE;
+  return "高速下载功能暂未就绪；普通文件仍可直接下载";
+}
+
+function requireNativeHostReady(status = {}) {
+  if (!status.connected || status.needsPermission) throw new Error(nativeHostIssueMessage(status));
+  if (status.compatible !== true) throw new Error(HOST_MISMATCH_MESSAGE);
+  return status;
+}
+
+async function refreshNativeHost() {
+  try {
+    const result = await call({ type: "PING_HOST" });
+    const host = normalizeNativeHostStatus(result.hostStatus || {});
+    updateHost(host);
+    return host;
+  } catch (error) {
+    const host = nativeStatusFromError(error);
+    updateHost(host);
+    throw new Error(nativeHostIssueMessage(host));
+  }
+}
+
 function updateHost(status = {}) {
+  status = normalizeNativeHostStatus(status);
   state.hostStatus = status;
   if (dialog.open) {
     const containerSelect = $("#containerSelect");
@@ -511,22 +569,20 @@ function updateHost(status = {}) {
   }
   const dot = $("#hostDot");
   const mismatch = status.connected && status.compatible !== true;
-  dot.className = `dot ${status.connected && !mismatch ? "ok" : status.lastError || mismatch ? "bad" : ""}`;
+  dot.className = `dot ${status.connected && !mismatch ? "ok" : status.failureReason || status.lastError || mismatch ? "bad" : ""}`;
   $("#hostTitle").textContent = mismatch ? "高速下载功能版本不匹配" : status.connected ? "高速下载功能已就绪" : "高速下载功能暂未就绪";
   const installHelp = $("#installHelpButton");
-  // The connect attempt itself failed (engine missing / not registered):
-  // point the user at the install guidance instead of a bare error.
-  installHelp.hidden = Boolean((status.connected && !mismatch) || status.needsPermission || (!status.lastError && !mismatch));
+  const helpReason = mismatch ? "mismatch" : status.failureReason;
+  installHelp.hidden = !["mismatch", "api_unavailable", "host_missing", "connection_failed"].includes(helpReason);
+  installHelp.textContent = helpReason === "host_missing" ? "安装方法" : helpReason === "mismatch" ? "更新方法" : "打开设置";
   if (mismatch) {
     $("#hostDetail").textContent = HOST_MISMATCH_MESSAGE;
     return;
   }
   if (!status.connected) {
     $("#hostDetail").textContent = status.needsPermission
-      ? "需要加速、合并或转换格式时会请你授权"
-      : status.lastError
-        ? "配套程序尚未就绪；点「安装方法」查看一分钟安装指引"
-        : "普通文件仍可直接下载";
+      ? "尚未开启；需要加速、合并或转换格式时会请你授权"
+      : nativeHostIssueMessage(status);
     return;
   }
   const ffmpeg = status.capabilities?.ffmpeg;
@@ -623,6 +679,9 @@ function friendlyErrorMessage(message) {
   const raw = String(message || "下载失败").trim();
   if (/FFmpeg/i.test(raw)) return "此下载需要合并视频片段或转换格式，请确认高速下载功能已就绪后重试。";
   if (/DASH/i.test(raw)) return "这种流媒体暂时不支持下载。";
+  if (/connectNative|native messaging|尚未授权连接本地引擎|本地(?:高速)?引擎.*(?:安装|注册|连接)|Chrome.*连接接口/i.test(raw)) {
+    return nativeHostIssueMessage(nativeStatusFromError(raw));
+  }
   return raw.replace(/本地(?:高速)?引擎/g, "高速下载功能");
 }
 function el(tag, className) { const node = document.createElement(tag); if (className) node.className = className; return node; }
