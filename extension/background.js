@@ -41,6 +41,8 @@ const MAX_MANIFEST_SELECTOR_MAPPINGS = 512;
 const MAX_STORED_JOBS = 200;
 const MAX_THUMBNAIL_URL_LENGTH = 4096;
 const BILIBILI_DISCOVERY_TTL_MS = 45_000;
+const BILIBILI_AUTOMATIC_RETRY_COOLDOWN_MS = 5_000;
+const BILIBILI_OBSERVED_METADATA_TIMEOUT_MS = 2_000;
 const BILIBILI_TRACK_TTL_MS = 2 * 60_000;
 const BILIBILI_PAIR_WINDOW_MS = 30_000;
 const BILIBILI_SAFE_REFERER = "https://www.bilibili.com/";
@@ -165,6 +167,7 @@ const manifestInspectionAttempted = new Set();
 const bilibiliDashStates = new Map();
 const bilibiliDiscoveryInFlight = new Map();
 const bilibiliDiscoveryAt = new Map();
+const bilibiliAutomaticDiscoveryAttemptAt = new Map();
 const bilibiliObservationChains = new Map();
 const bilibiliPruneTimers = new Map();
 const bilibiliTabTokens = new Map();
@@ -203,10 +206,19 @@ chrome.webRequest.onBeforeSendHeaders.addListener(
     // response from the previous History API route must not be classified
     // against the URL that happens to be current when the response arrives.
     const bilibiliGeneration = isBilibiliMediaUrl(url) ? bilibiliTabToken(details.tabId) : null;
-    // Observed player traffic remains passive by default. This event only
-    // starts site metadata enrichment when the user explicitly enabled the
-    // automatic quality-completion setting.
-    if (bilibiliGeneration) void triggerSiteDiscovery(details.tabId, { automatic: true });
+    // With automatic quality enrichment enabled, the first trusted Bilibili
+    // media signal for a page (playback or preload) may complete its DASH pair.
+    // triggerSiteDiscovery checks the setting before any fixed-site API I/O;
+    // discoverBilibiliDash then coalesces Range repeats with its in-flight,
+    // success-TTL and failed-attempt cooldown guards.
+    if (bilibiliGeneration) {
+      void triggerSiteDiscovery(details.tabId, {
+        automatic: true,
+        observedPlayback: true,
+        observedMediaUrl: url,
+        expectedTabToken: bilibiliGeneration
+      });
+    }
     const allowed = new Set(["accept", "authorization", "cookie", "origin", "referer", "user-agent"]);
     const headers = {};
     let capturedBytes = 0;
@@ -327,9 +339,8 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
     void clearTabAfterRestore(tabId, true);
     return;
   }
-  // Page completion may run opted-in site enrichment. Passive webRequest and
-  // content detection update the badge independently with no metadata fetch.
-  if (changeInfo.status === "complete") void triggerSiteDiscovery(tabId, { automatic: true });
+  // Page completion alone is not a trusted media signal. Automatic Bilibili
+  // enrichment starts only from the observed media-request path above.
 });
 
 chrome.tabs.onActivated.addListener(({ tabId }) => {
@@ -369,10 +380,10 @@ async function handleMessage(message, sender) {
     case "GET_TAB_MEDIA": {
       const tabId = validTabId(message.tabId);
       await expireBilibiliState(tabId);
-      // Public API discovery is opportunistic. Give a fast response time-box,
-      // then let the in-flight promise publish through MEDIA_UPDATED instead
-      // of making every popup wait on two remote requests.
-      await settleWithin(discoverBilibiliDash(tabId), 900);
+      // Reading the current media list is deliberately side-effect free for
+      // site discovery. Opening or closing popup/Side Panel must not be what
+      // creates a Bilibili candidate or changes its toolbar badge; trusted
+      // playback traffic and the explicit SCAN_TAB action own that work.
       await maybeAddYouTubeCandidate(tabId);
       const settings = await getSettings();
       const items = [...(tabMedia.get(tabId)?.values() || [])]
@@ -512,18 +523,6 @@ async function handleMessage(message, sender) {
   }
 }
 
-async function settleWithin(promise, milliseconds) {
-  let timer = null;
-  try {
-    await Promise.race([
-      promise,
-      new Promise((resolve) => { timer = setTimeout(resolve, milliseconds); timer?.unref?.(); })
-    ]);
-  } finally {
-    if (timer !== null) clearTimeout(timer);
-  }
-}
-
 function dashPairProbeForUi(candidate) {
   const now = Date.now();
   if (!isFreshBilibiliCandidate(candidate, now)) throw new Error("视频清晰度地址已过期，请重新扫描页面");
@@ -584,6 +583,20 @@ function bilibiliPageKey(tabUrl) {
   return identity ? `${identity.key}:${identity.value}:p${identity.page}` : "";
 }
 
+function bilibiliCidFromMediaUrl(value) {
+  try {
+    const parsed = new URL(value);
+    if (!isBilibiliMediaUrl(parsed.href)) return null;
+    const basename = decodeURIComponent(parsed.pathname.split("/").pop() || "");
+    const match = basename.match(/^(\d{1,20})-\d{1,4}-30[0-2]\d{2}\.(?:m4s|cmfv|cmfa)$/i);
+    if (!match) return null;
+    const cid = Number(match[1]);
+    return Number.isSafeInteger(cid) && cid > 0 ? cid : null;
+  } catch {
+    return null;
+  }
+}
+
 function publicBilibiliPageUrl(tabUrl) {
   const identity = bilibiliVideoIdentity(tabUrl);
   if (!identity) return null;
@@ -592,9 +605,14 @@ function publicBilibiliPageUrl(tabUrl) {
   return page.href;
 }
 
-async function discoverBilibiliDash(tabId, force = false) {
+async function discoverBilibiliDash(tabId, force = false, {
+  automatic = false,
+  expectedTabToken = null,
+  observedMediaUrl = null
+} = {}) {
   let tab;
   try { tab = await chrome.tabs.get(tabId); } catch { return false; }
+  if (expectedTabToken && bilibiliTabTokens.get(tabId) !== expectedTabToken) return false;
   const video = bilibiliVideoIdentity(tab?.url);
   if (!video) return false;
   const tabToken = bilibiliTabToken(tabId);
@@ -604,13 +622,34 @@ async function discoverBilibiliDash(tabId, force = false) {
   if (!force && previousDiscovery?.pageKey === pageKey && now - previousDiscovery.at < BILIBILI_DISCOVERY_TTL_MS) return true;
   const existingDiscovery = bilibiliDiscoveryInFlight.get(tabId);
   if (existingDiscovery?.pageKey === pageKey) return existingDiscovery.promise;
+  const previousAutomaticAttempt = bilibiliAutomaticDiscoveryAttemptAt.get(tabId);
+  if (automatic && !force && previousAutomaticAttempt?.pageKey === pageKey
+      && now - previousAutomaticAttempt.at < BILIBILI_AUTOMATIC_RETRY_COOLDOWN_MS) return false;
+  // A playback/preload stream can issue many short Range requests. Record the
+  // automatic attempt before starting I/O so both successful and failed fixed-
+  // endpoint lookups receive the same cooldown. Explicit rescans use `force`
+  // and remain able to retry immediately.
+  if (automatic) bilibiliAutomaticDiscoveryAttemptAt.set(tabId, { pageKey, at: now });
   const task = (async () => {
-    const pageListUrl = new URL("https://api.bilibili.com/x/player/pagelist");
-    pageListUrl.searchParams.set(video.key, video.value);
-    const pages = await fetchPublicJson(pageListUrl.href, { credentials: "include" });
-    if (pages?.code !== 0 || !Array.isArray(pages.data) || !pages.data.length) return false;
-    const page = pages.data[Math.min(video.page - 1, pages.data.length - 1)] || pages.data[0];
-    const cid = Number(page?.cid);
+    const observedDeadlineAt = observedMediaUrl ? Date.now() + BILIBILI_OBSERVED_METADATA_TIMEOUT_MS : 0;
+    const observedTimeRemaining = () => Math.max(0, observedDeadlineAt - Date.now());
+    // Bilibili's immutable DASH object name starts with the numeric cid. When
+    // a strictly validated media request triggered discovery, use that cid
+    // directly and avoid the extra pagelist round trip. This keeps the normal
+    // playback-to-badge path inside the three-second UI budget.
+    let cid = bilibiliCidFromMediaUrl(observedMediaUrl);
+    if (!cid) {
+      if (observedDeadlineAt && observedTimeRemaining() < 250) return false;
+      const pageListUrl = new URL("https://api.bilibili.com/x/player/pagelist");
+      pageListUrl.searchParams.set(video.key, video.value);
+      const pages = await fetchPublicJson(pageListUrl.href, {
+        credentials: "include",
+        timeoutMs: observedDeadlineAt ? observedTimeRemaining() : 3_000
+      });
+      if (pages?.code !== 0 || !Array.isArray(pages.data) || !pages.data.length) return false;
+      const page = pages.data[Math.min(video.page - 1, pages.data.length - 1)] || pages.data[0];
+      cid = Number(page?.cid);
+    }
     if (!Number.isSafeInteger(cid) || cid <= 0) return false;
     const playUrl = new URL("https://api.bilibili.com/x/player/playurl");
     playUrl.searchParams.set(video.key, video.value);
@@ -618,7 +657,11 @@ async function discoverBilibiliDash(tabId, force = false) {
     playUrl.searchParams.set("qn", "127");
     playUrl.searchParams.set("fnval", "16");
     playUrl.searchParams.set("fourk", "1");
-    const play = await fetchPublicJson(playUrl.href, { credentials: "include" });
+    if (observedDeadlineAt && observedTimeRemaining() < 250) return false;
+    const play = await fetchPublicJson(playUrl.href, {
+      credentials: "include",
+      timeoutMs: observedDeadlineAt ? observedTimeRemaining() : 3_000
+    });
     const dash = play?.code === 0 && play?.data?.dash;
     if (!dash || typeof dash !== "object") return false;
     const videoTracks = (Array.isArray(dash.video) ? dash.video : [])
@@ -728,7 +771,7 @@ async function dropYouTubeCandidates() {
 // guest-tier 480p ceiling. Guests keep the anonymous tier because no cookie
 // is attached. Cookies only ever travel to the api.bilibili.com origin named
 // in the URL itself.
-async function fetchPublicJson(url, { credentials = "omit" } = {}) {
+async function fetchPublicJson(url, { credentials = "omit", timeoutMs = 3_000 } = {}) {
   const allowedUrl = requireNetworkRequest({
     url,
     purpose: "site_metadata",
@@ -736,7 +779,8 @@ async function fetchPublicJson(url, { credentials = "omit" } = {}) {
     networkScope: "public_only"
   });
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 3_000);
+  const timeout = Math.max(250, Math.min(3_000, Number(timeoutMs) || 3_000));
+  const timer = setTimeout(() => controller.abort(), timeout);
   timer?.unref?.();
   try {
     const response = await fetch(allowedUrl, {
@@ -926,12 +970,32 @@ async function publishBilibiliDashPair(tabId, tab, tabToken = bilibiliTabTokens.
     || Number(b.bandwidth || 0) - Number(a.bandwidth || 0)
     || Number(b.lastSeen || 0) - Number(a.lastSeen || 0));
   const currentVideo = state.video.get(state.currentVideoIdentity);
-  const selectedVideo = currentVideo && isFreshBilibiliTrack(currentVideo, now) ? currentVideo : rankedVideos[0];
-  const compatibleAudios = audios
-    .filter((track) => canPairBilibiliTracks(track, selectedVideo, true))
-    .sort((a, b) => bilibiliAudioCompatibilityRank(b) - bilibiliAudioCompatibilityRank(a)
-      || Number(b.bandwidth || 0) - Number(a.bandwidth || 0)
-      || Number(b.lastSeen || 0) - Number(a.lastSeen || 0));
+  const candidateVideoOrder = currentVideo && isFreshBilibiliTrack(currentVideo, now)
+    ? [currentVideo, ...rankedVideos.filter((track) => track !== currentVideo)]
+    : rankedVideos;
+  let selectedVideo = null;
+  let compatibleAudios = [];
+  // Some accepted CDN object names do not expose their cid. The fixed API may
+  // then return a canonical track family that differs from the observed URL.
+  // Prefer the current observed rendition only when it has a compatible audio
+  // partner; otherwise fall back to the best complete API pair.
+  const hasCurrentVideo = Boolean(currentVideo && isFreshBilibiliTrack(currentVideo, now));
+  for (const video of candidateVideoOrder) {
+    // A later incompatible observed object deliberately withdraws an older
+    // observed pair. Only a complete pair returned by this fixed-site lookup
+    // may replace the current opaque observation.
+    if (hasCurrentVideo && video !== currentVideo && video.provenance !== "fixed_site_api") continue;
+    const matches = audios
+      .filter((track) => canPairBilibiliTracks(track, video, true))
+      .sort((a, b) => bilibiliAudioCompatibilityRank(b) - bilibiliAudioCompatibilityRank(a)
+        || Number(b.bandwidth || 0) - Number(a.bandwidth || 0)
+        || Number(b.lastSeen || 0) - Number(a.lastSeen || 0));
+    if (!matches.length || (hasCurrentVideo && video !== currentVideo
+      && !matches.some((track) => track.provenance === "fixed_site_api"))) continue;
+    selectedVideo = video;
+    compatibleAudios = matches;
+    break;
+  }
   const currentAudio = state.audio.get(state.currentAudioIdentity);
   const selectedAudio = currentAudio && compatibleAudios.includes(currentAudio) ? currentAudio : compatibleAudios[0];
   if (!selectedVideo || !selectedAudio || selectedVideo.url === selectedAudio.url) {
@@ -1344,10 +1408,17 @@ async function addCandidate(tabId, input, commitGuard = null) {
     while (map.size > MAX_ITEMS_PER_TAB && removable.length) map.delete(removable.shift()[0]);
     regroupManifestCandidates(tabId);
   }
-  await persistSession();
-  if (commitGuard && !commitGuard()) return false;
-  await updateBadge(tabId);
-  if (commitGuard && !commitGuard()) return false;
+  // Paint the badge independently of storage latency. Both operations still
+  // finish before the candidate broadcast, but a slow storage.session write
+  // cannot consume the observed-media three-second feedback budget.
+  await Promise.all([persistSession(), updateBadge(tabId)]);
+  if (commitGuard && !commitGuard()) {
+    // Navigation may have invalidated the candidate while persistence was in
+    // flight. Repaint from the current map so a stale page cannot win the last
+    // badge write.
+    await updateBadge(tabId);
+    return false;
+  }
   broadcast({ type: "MEDIA_UPDATED", tabId, item: withoutManifestText(candidate) });
   if (kind === "hls") scheduleTabManifestInspections(tabId, key, Boolean(input.manifestText));
   return true;
@@ -2757,9 +2828,11 @@ async function updateBadge(tabId) {
   const count = [...(tabMedia.get(tabId)?.values() || [])].filter((item) => item.kind !== "segment" && !item.mergedInto).length;
   try {
     await chrome.action.setBadgeText({ tabId, text: count ? String(Math.min(count, 99)) : "" });
-    await chrome.action.setBadgeBackgroundColor({ tabId, color: count ? "#7C6FA3" : "#66716D" });
-    try { await chrome.action.setBadgeTextColor({ tabId, color: "#FFFFFF" }); } catch { /* older builds */ }
-    await chrome.action.setTitle({ tabId, title: count ? `FluxCatch — 检测到 ${count} 个媒体` : "FluxCatch — 暂未检测到媒体" });
+    await Promise.allSettled([
+      chrome.action.setBadgeBackgroundColor({ tabId, color: count ? "#7C6FA3" : "#66716D" }),
+      chrome.action.setBadgeTextColor?.({ tabId, color: "#FFFFFF" }),
+      chrome.action.setTitle({ tabId, title: count ? `FluxCatch — 检测到 ${count} 个媒体` : "FluxCatch — 暂未检测到媒体" })
+    ]);
   } catch {
     // The tab may have closed.
   }
@@ -2878,7 +2951,8 @@ let persistChain = Promise.resolve();
 function persistSession() {
   const data = {};
   // Bilibili track URLs carry short-lived signatures. dash_pair candidates
-  // are intentionally volatile and are rediscovered after worker restart.
+  // are intentionally volatile and are rediscovered only from later trusted
+  // playback traffic or an explicit rescan after a worker restart.
   for (const [tabId, map] of tabMedia) {
     data[tabId] = [...map.values()]
       .filter((item) => item.kind !== "dash_pair")
@@ -3232,6 +3306,7 @@ function dropTabState(tabId) {
   tabPreviews.delete(tabId);
   bilibiliDashStates.delete(tabId);
   bilibiliDiscoveryAt.delete(tabId);
+  bilibiliAutomaticDiscoveryAttemptAt.delete(tabId);
   bilibiliDiscoveryInFlight.delete(tabId);
   bilibiliObservationChains.delete(tabId);
   bilibiliTabTokens.delete(tabId);

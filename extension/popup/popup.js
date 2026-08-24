@@ -117,9 +117,9 @@ function bindEvents() {
     const currentTrigger = findMediaAction(trigger?.dataset?.mediaId, trigger?.dataset?.mediaAction);
     const target = $("#jobsView").hidden ? currentTrigger || trigger || $("#scanButton") : $("#jobsTab");
     state.dialogTrigger = null;
-    // Let the native <dialog> finish its own focus restoration first; doing
-    // this synchronously can leave focus trapped on a now-hidden action.
-    globalThis.setTimeout(() => restoreFocus(target), 0);
+    // Run after the close event finishes without depending on background-page
+    // timers, which may be throttled while a synthetic popup loses visibility.
+    queueMicrotask(() => restoreFocus(target));
   });
 }
 
@@ -340,7 +340,7 @@ function openDownloadDialog(item, { probeWarning = false } = {}) {
         ? "这类在线视频由许多小片段组成。FluxCatch 会逐段下载并自动组合，最后保存为一个可直接播放的文件。"
         : "普通文件会直接使用浏览器下载；开启多连接可加速大文件。";
   dialog.showModal();
-  requestAnimationFrame(() => {
+  queueMicrotask(() => {
     if (dialog.open) $("#filenameInput").focus({ preventScroll: true });
   });
 }

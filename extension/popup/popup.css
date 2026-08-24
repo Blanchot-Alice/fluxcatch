@@ -149,8 +149,8 @@ dialog::backdrop{background:rgba(20,24,22,.45);backdrop-filter:blur(2px)}
 .brand .tagline{letter-spacing:.2px}
 
 /* ===== Typed toast ===== */
-#toast{position:absolute;top:8px;left:50%;display:flex;align-items:center;gap:8px;transform:translate(-50%,-6px);width:max-content;max-width:calc(100% - 24px);min-height:40px;padding:7px 10px 7px 12px;border:1px solid var(--border);border-radius:var(--r-row);background:var(--surface);color:var(--ink);font-size:12px;font-weight:600;line-height:1.45;box-shadow:var(--shadow-md);opacity:0;pointer-events:none;transition:opacity var(--motion-base) ease,transform var(--motion-base) var(--ease-standard);z-index:20}
-#toast.show{opacity:1;pointer-events:auto;transform:translate(-50%,0)}
+#toast{position:absolute;top:8px;left:12px;right:12px;display:flex;align-items:center;gap:8px;transform:translateY(-6px);width:auto;max-width:none;min-height:40px;padding:7px 10px 7px 12px;border:1px solid var(--border);border-radius:var(--r-row);background:var(--surface);color:var(--ink);font-size:12px;font-weight:600;line-height:1.45;box-shadow:var(--shadow-md);opacity:0;pointer-events:none;transition:opacity var(--motion-base) ease,transform var(--motion-base) var(--ease-standard);z-index:20}
+#toast.show{opacity:1;pointer-events:auto;transform:translateY(0)}
 #toast[data-toast-type="success"]{border-color:color-mix(in srgb,var(--success) 48%,var(--border));background:color-mix(in srgb,var(--surface) 90%,var(--success))}
 #toast[data-toast-type="warning"]{border-color:color-mix(in srgb,var(--warning) 55%,var(--border));background:color-mix(in srgb,var(--surface) 90%,var(--warning))}
 #toast[data-toast-type="error"]{border-color:color-mix(in srgb,var(--danger) 55%,var(--border));background:color-mix(in srgb,var(--surface) 90%,var(--danger))}

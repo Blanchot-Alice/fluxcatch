@@ -22,6 +22,7 @@ const FIXTURE_RESULT_KEY = "__FLUXCATCH_E2E_RESULT__";
 const POLL_INTERVAL_MS = 100;
 const START_TIMEOUT_MS = 20_000;
 const CASE_TIMEOUT_MS = 15_000;
+const BADGE_APPEAR_TIMEOUT_MS = 3_000;
 const HLS_DISPLAY_TITLE = "Volume of Distribution Interactive | Pharmacokinetics - Part 1";
 const HLS_INTERNAL_ASSET_TOKEN = "an_PHRM_PK1_2CM_v04_comp_v01_wm_cr_cc03";
 const UI_DIRECT_FILENAME = "FluxCatch arrayBuffer fixture.mp4";
@@ -409,6 +410,23 @@ async function runCase(definition, devtoolsOrigin) {
     assert.equal(fetchResult.ok, true, `fixture fetch failed: ${fetchResult.error || "unknown error"}`);
     assert.ok(fetchResult.status >= 200 && fetchResult.status < 300, "fixture fetch was not a successful HTTP response");
     assert.equal(fetchResult.url, expectedUrl, "fixture fetched a different media URL");
+
+    // This check deliberately precedes the first post-navigation
+    // GET_TAB_MEDIA call. Reading extension UI state must not be what causes
+    // the toolbar badge to appear.
+    const badgeBeforeRead = await poll(async () => {
+      const value = await control(`async () => {
+        const [text, title] = await Promise.all([
+          chrome.action.getBadgeText({ tabId: ${JSON.stringify(tabId)} }),
+          chrome.action.getTitle({ tabId: ${JSON.stringify(tabId)} })
+        ]);
+        return { text, title };
+      }`);
+      return value?.text === "1" ? value : null;
+    }, BADGE_APPEAR_TIMEOUT_MS, `${definition.name} automatic toolbar badge before media UI read`);
+    assert.equal(badgeBeforeRead.text, "1", `${definition.name} toolbar badge count mismatch`);
+    assert.match(badgeBeforeRead.title || "", /FluxCatch.*检测到 1 个媒体/, `${definition.name} toolbar title did not describe the detected media`);
+    item.badgeBeforeRead = badgeBeforeRead;
 
     const detection = await poll(async () => {
       const response = await control(`async () => chrome.runtime.sendMessage({
@@ -1085,6 +1103,7 @@ async function openExtensionTarget(relativePath, devtoolsOrigin, label) {
   const client = await CdpClient.connect(target.webSocketDebuggerUrl);
   await client.send("Runtime.enable");
   await client.send("Page.enable");
+  await client.send("Emulation.setFocusEmulationEnabled", { enabled: true });
   await poll(async () => await evaluate(client, `document.readyState === "complete"`), CASE_TIMEOUT_MS, `${label} DOM ready`);
   return { targetId, client };
 }
@@ -1105,8 +1124,9 @@ async function captureMatrixState(client, name, width, height, evidence = {}) {
       document.body.scrollTop = 0;
       scrollTo({ left: 0, top: 0, behavior: "instant" });` : ""}
       return {
-        width: document.documentElement.clientWidth,
-        height: document.documentElement.clientHeight,
+        width: window.innerWidth,
+        height: window.innerHeight,
+        contentWidth: document.documentElement.clientWidth,
         scrollY,
         overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth
       };
@@ -1154,6 +1174,7 @@ async function auditHlsDownloadDialog(tabId, expectedUrl, expectedTitle) {
     client = await CdpClient.connect(target.webSocketDebuggerUrl);
     await client.send("Runtime.enable");
     await client.send("Page.enable");
+    await client.send("Emulation.setFocusEmulationEnabled", { enabled: true });
     await client.send("Emulation.setDeviceMetricsOverride", {
       width: 372,
       height: 560,
@@ -1174,7 +1195,7 @@ async function auditHlsDownloadDialog(tabId, expectedUrl, expectedTitle) {
       const dialog = document.querySelector("#downloadDialog");
       while (!dialog?.open && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50));
       while (document.activeElement?.id !== "filenameInput" && Date.now() < deadline) {
-        await new Promise((resolve) => requestAnimationFrame(resolve));
+        await new Promise((resolve) => setTimeout(resolve, 50));
       }
       const cardTitle = card?.querySelector(".media-title")?.textContent?.trim() || "";
       const filenameBefore = document.querySelector("#filenameInput")?.value || "";
