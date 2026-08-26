@@ -149,6 +149,20 @@ main { width:min(100%,680px); margin:0 auto; padding:14px 16px 30px; }
 .chip { padding:2px 6px; border-radius:6px; color:var(--muted); background:var(--surfaceSubtle); font-size:12px; font-weight:650; }
 .chip.stream { color:var(--primary-strong); background:var(--mist-tint); }
 .chip.quality { color:var(--warning-strong); background:var(--warning-tint); }
+.variant-select {
+  width:100%;
+  max-width:100%;
+  min-width:0;
+  margin-top:7px;
+  padding:6px 8px;
+  border:1px solid var(--border);
+  border-radius:7px;
+  color:var(--ink);
+  background:var(--surface);
+  font:inherit;
+  font-size:12.5px;
+}
+.variant-select:focus-visible { outline:2px solid var(--primary); outline-offset:1px; }
 .media-side { align-self:stretch; display:flex; flex-direction:column; align-items:flex-end; justify-content:space-between; gap:7px; }
 .media-age { color:var(--muted); font:12px/1.3 var(--mono); white-space:nowrap; }
 .media-download { min-width:40px; min-height:40px; padding:6px 9px; border-radius:7px; font-size:12px; white-space:nowrap; }

@@ -16,6 +16,37 @@ function strings(value, limit = 40) {
 const PATH_CREDENTIAL_KEY = /(?:^|[;._~-])(?:access[_-]?token|auth|authorization|bearer|credential|jwt|key|license|secret|session|signature|sig|token)(?:[=;._~-]|$)/i;
 const JWT_PATH_SEGMENT = /^[A-Za-z0-9_-]{12,}\.[A-Za-z0-9_-]{12,}\.[A-Za-z0-9_-]{8,}$/;
 
+// Quality options reference media playlists only through opaque selector
+// tokens minted by the background worker under this reserved origin. Real
+// playlist URLs never cross the worker -> extension-page boundary, in memory
+// or into storage.session.
+const MANIFEST_SELECTOR_PREFIX = "https://fluxcatch.invalid/manifest/";
+const MAX_UI_GROUP_VARIANTS = 16;
+
+function publicTrackHints(hints) {
+  if (!hints || typeof hints !== "object"
+    || typeof hints.video !== "boolean" || typeof hints.audio !== "boolean") return null;
+  return { video: hints.video, audio: hints.audio };
+}
+
+function publicVariantGroup(variants) {
+  if (!Array.isArray(variants)) return [];
+  const projected = [];
+  for (const variant of variants) {
+    if (projected.length >= MAX_UI_GROUP_VARIANTS) break;
+    const selector = string(variant?.selector);
+    if (!selector.startsWith(MANIFEST_SELECTOR_PREFIX)) continue;
+    projected.push({
+      id: string(variant?.id),
+      url: selector,
+      bandwidth: Math.max(0, numberOrNull(variant?.bandwidth) || 0),
+      width: numberOrNull(variant?.width),
+      height: numberOrNull(variant?.height)
+    });
+  }
+  return projected;
+}
+
 function pathMayContainCredential(pathname) {
   let decoded = String(pathname || "");
   try { decoded = decodeURIComponent(decoded); } catch { /* Keep malformed escapes opaque. */ }
@@ -198,6 +229,9 @@ export function candidateForUi(candidate, dashPair = null) {
     manifestProbeStatus: string(candidate?.manifestProbeStatus) || null,
     manifestInspectedAt: numberOrNull(candidate?.manifestInspectedAt),
     groupSize: Math.max(1, numberOrNull(candidate?.groupSize) || 1),
+    variants: candidate?.kind === "hls" ? publicVariantGroup(candidate?.variants) : [],
+    audioCandidates: candidate?.kind === "hls" ? publicVariantGroup(candidate?.audioCandidates) : [],
+    trackHints: publicTrackHints(candidate?.trackHints),
     aliases,
     firstSeen: numberOrNull(candidate?.firstSeen),
     lastSeen: numberOrNull(candidate?.lastSeen)

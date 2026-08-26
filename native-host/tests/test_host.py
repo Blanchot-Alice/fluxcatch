@@ -162,6 +162,18 @@ class FixtureHandler(http.server.BaseHTTPRequestHandler):
             body = b"#EXTM3U\n#EXTINF:4,\nseparate-video-0.ts\n#EXTINF:4,\nseparate-video-1.ts\n#EXT-X-ENDLIST\n"
             self._bytes(body, "application/vnd.apple.mpegurl")
             return
+        if path == "/rendition/video-1080.m3u8":
+            body = b"#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXTINF:4,\n/separate-video-0.ts\n#EXTINF:4,\n/separate-video-1.ts\n#EXT-X-ENDLIST\n"
+            self._bytes(body, "application/vnd.apple.mpegurl")
+            return
+        if path == "/rendition/video-720.m3u8":
+            body = b"#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXTINF:4,\n/separate-video-1.ts\n#EXT-X-ENDLIST\n"
+            self._bytes(body, "application/vnd.apple.mpegurl")
+            return
+        if path == "/rendition/audio.m3u8":
+            body = b"#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXTINF:4,\n/separate-audio-0.aac\n#EXTINF:4,\n/separate-audio-1.aac\n#EXT-X-ENDLIST\n"
+            self._bytes(body, "application/vnd.apple.mpegurl")
+            return
         if path == "/audio-default.m3u8":
             body = b"#EXTM3U\n#EXTINF:4,\nseparate-audio-0.aac\n#EXTINF:4,\nseparate-audio-1.aac\n#EXT-X-ENDLIST\n"
             self._bytes(body, "application/vnd.apple.mpegurl")
@@ -1724,6 +1736,202 @@ class HostTests(unittest.TestCase):
         self.assertIn("/audio-default.m3u8", requested)
         self.assertFalse(set(HLS_VIDEO_SEGMENTS).intersection(requested))
         self.assertTrue(set(HLS_AUDIO_SEGMENTS).issubset(requested))
+
+    def test_dual_media_playlist_pair_downloads_and_merges_locally(self):
+        """Rendition-style entries: the extension passes two media playlists."""
+        events = []
+        observed = {}
+        with tempfile.TemporaryDirectory() as directory:
+            target = pathlib.Path(directory) / "rendition-pair.mp4"
+            progress = host.Progress(events.append, "hls-rendition", target.name)
+
+            def fake_run(args, output, _cancel, _progress, **kwargs):
+                inputs = [args[index + 1] for index, value in enumerate(args[:-1]) if value == "-i"]
+                self.assertEqual(len(inputs), 2)
+                self.assertTrue(all(pathlib.Path(value).is_file() for value in inputs))
+                self.assertEqual(
+                    pathlib.Path(inputs[0]).read_bytes(),
+                    b"".join(HLS_VIDEO_SEGMENTS.values()),
+                )
+                self.assertEqual(
+                    pathlib.Path(inputs[1]).read_bytes(),
+                    b"".join(HLS_AUDIO_SEGMENTS.values()),
+                )
+                self.assertFalse(any("http://" in value or "https://" in value for value in args))
+                maps = [args[index + 1] for index, value in enumerate(args[:-1]) if value == "-map"]
+                self.assertEqual(maps, ["0:v:0", "1:a:0"])
+                observed.update(kwargs)
+                output.write_bytes(b"locally-muxed-renditions")
+                return output
+
+            with mock.patch.object(host, "run_ffmpeg", side_effect=fake_run):
+                result = host.hls_fast_download(
+                    f"{self.base}/rendition/video-1080.m3u8",
+                    target,
+                    {"Cookie": "session=fixture"},
+                    2,
+                    threading.Event(),
+                    progress,
+                    "/fixture/ffmpeg",
+                    audio_url=f"{self.base}/rendition/audio.m3u8",
+                )
+
+            self.assertEqual(result.read_bytes(), b"locally-muxed-renditions")
+            self.assertEqual(observed["activity"], "正在无损合并 HLS 音视频")
+            starting_messages = [
+                str(event.get("message")) for event in events if event.get("status") == "starting"
+            ]
+            self.assertTrue(
+                any("正在获取播放列表" in message for message in starting_messages),
+                f"job start must announce playlist fetching, saw: {starting_messages}",
+            )
+
+        requested = [path for path, _range in FixtureHandler.request_log]
+        self.assertIn("/rendition/video-1080.m3u8", requested)
+        self.assertIn("/rendition/audio.m3u8", requested)
+        self.assertNotIn("/rendition/video-720.m3u8", requested)
+        self.assertTrue(set(HLS_VIDEO_SEGMENTS).issubset(requested))
+        self.assertTrue(set(HLS_AUDIO_SEGMENTS).issubset(requested))
+
+    def test_download_message_routes_rendition_audio_url_into_dual_playlist_merge(self):
+        """Regression: options.audioUrl from the extension must reach the merge, not the floor."""
+        events = []
+        capability = host.FfmpegCapabilities(path="/fixture/ffmpeg")
+        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(
+            os.environ,
+            {"FLUXCATCH_DOWNLOAD_DIR": directory},
+        ), mock.patch.object(host, "probe_ffmpeg", return_value=capability):
+            native = host.Host()
+            try:
+                def fake_run(args, output, _cancel, _progress, **kwargs):
+                    inputs = [args[index + 1] for index, value in enumerate(args[:-1]) if value == "-i"]
+                    self.assertEqual(
+                        len(inputs),
+                        2,
+                        "options.audioUrl must trigger the dual-playlist merge, not a silent video-only download",
+                    )
+                    maps = [args[index + 1] for index, value in enumerate(args[:-1]) if value == "-map"]
+                    self.assertEqual(maps, ["0:v:0", "1:a:0"])
+                    self.assertEqual(kwargs.get("activity"), "正在无损合并 HLS 音视频")
+                    output.write_bytes(b"dispatched-dual-merge")
+                    return output
+
+                with mock.patch.object(native, "send", side_effect=events.append), mock.patch.object(host, "run_ffmpeg", side_effect=fake_run):
+                    native.run_job("rendition-dispatch", {
+                        "type": "download",
+                        "mediaKind": "hls",
+                        "url": f"{self.base}/rendition/video-1080.m3u8",
+                        "filename": "Rendition episode.mp4",
+                        "headers": {"Cookie": "session=fixture"},
+                        "options": {
+                            "audioUrl": f"{self.base}/rendition/audio.m3u8",
+                            "concurrentFragments": 2,
+                            "allowPrivateNetworkMedia": True,
+                        },
+                    }, threading.Event())
+
+                completed = next(event for event in events if event.get("type") == "complete")
+                self.assertEqual(pathlib.Path(completed["path"]).read_bytes(), b"dispatched-dual-merge")
+            finally:
+                native.close()
+
+        requested = [path for path, _range in FixtureHandler.request_log]
+        self.assertIn("/rendition/video-1080.m3u8", requested)
+        self.assertIn("/rendition/audio.m3u8", requested)
+
+    def test_legacy_single_playlist_entry_is_unchanged_without_audio_url(self):
+        """Regression guard: the pre-dual-entry single-URL path keeps its shape."""
+        observed = {}
+        with tempfile.TemporaryDirectory() as directory:
+            target = pathlib.Path(directory) / "legacy.mp4"
+            progress = host.Progress(lambda _event: None, "hls-legacy", target.name)
+
+            def fake_run(args, output, _cancel, _progress, **kwargs):
+                inputs = [args[index + 1] for index, value in enumerate(args[:-1]) if value == "-i"]
+                self.assertEqual(len(inputs), 1)
+                self.assertEqual(pathlib.Path(inputs[0]).read_bytes(), b"".join(SEGMENTS.values()))
+                observed.update(kwargs)
+                output.write_bytes(b"legacy-remux")
+                return output
+
+            with mock.patch.object(host, "run_ffmpeg", side_effect=fake_run):
+                result = host.hls_fast_download(
+                    f"{self.base}/master.m3u8",
+                    target,
+                    {},
+                    2,
+                    threading.Event(),
+                    progress,
+                    "/fixture/ffmpeg",
+                )
+
+            self.assertEqual(result.read_bytes(), b"legacy-remux")
+
+        requested = [path for path, _range in FixtureHandler.request_log]
+        self.assertIn("/master.m3u8", requested)
+        self.assertIn("/media.m3u8", requested)
+        self.assertFalse(set(HLS_AUDIO_SEGMENTS).intersection(requested))
+        self.assertNotIn("/rendition/audio.m3u8", requested)
+
+    def test_manifest_fetch_fails_after_single_bounded_timeout_retry(self):
+        attempts = []
+
+        def fake_request(url, headers, **kwargs):  # noqa: ARG001 - fixture signature
+            attempts.append(kwargs.get("timeout"))
+            raise TimeoutError("the read operation timed out")
+
+        with mock.patch.object(host, "request", side_effect=fake_request):
+            with self.assertRaisesRegex(host.DownloadError, r"获取播放列表超时\(20s\): example\.test"):
+                host.fetch_manifest("https://example.test/media/index.m3u8", {})
+
+        self.assertEqual(attempts, [20, 20], "exactly one bounded retry after the first stall")
+
+    def test_manifest_fetch_recovers_when_the_single_retry_succeeds(self):
+        class StubResponse:
+            status = 200
+
+            def __init__(self, payload: bytes):
+                self._payload = payload
+
+            def read(self, _size=-1):
+                chunk, self._payload = self._payload, b""
+                return chunk
+
+            def close(self):
+                pass
+
+            def geturl(self):
+                return "https://example.test/media/index.m3u8"
+
+        attempts = []
+
+        def fake_request(url, headers, **kwargs):  # noqa: ARG001 - fixture signature
+            attempts.append(kwargs.get("timeout"))
+            if len(attempts) == 1:
+                raise TimeoutError("timed out")
+            response = StubResponse(b"#EXTM3U\n#EXT-X-ENDLIST\n")
+            response._fluxcatch_request_headers = {"user-agent": "fixture"}  # noqa: SLF001
+            return response
+
+        with mock.patch.object(host, "request", side_effect=fake_request):
+            fetched = host.fetch_manifest("https://example.test/media/index.m3u8", {})
+
+        self.assertEqual(fetched.text, "#EXTM3U\n#EXT-X-ENDLIST\n")
+        self.assertEqual(attempts, [20, 20])
+
+    def test_manifest_fetch_non_timeout_failures_keep_the_old_retry_budget(self):
+        attempts = []
+
+        def failing_request(url, headers, **kwargs):  # noqa: ARG001 - fixture signature
+            attempts.append(kwargs.get("timeout"))
+            raise ConnectionError("connection refused")
+
+        with mock.patch.object(host, "request", side_effect=failing_request):
+            with self.assertRaisesRegex(host.DownloadError, "Manifest download failed after retries"):
+                host.fetch_manifest("https://example.test/media/index.m3u8", {})
+
+        self.assertEqual(len(attempts), 4)
+        self.assertTrue(all(timeout == 20 for timeout in attempts))
 
     def test_hls_redirect_final_url_and_headers_follow_the_response_chain(self):
         server_a, base_a = self.start_lineage_server()

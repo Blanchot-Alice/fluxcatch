@@ -239,6 +239,9 @@ function createMediaRow(item) {
   }
   main.append(title, url, chips);
 
+  const variantSelect = createVariantSelect(item);
+  if (variantSelect) main.append(variantSelect);
+
   const side = document.createElement("div");
   side.className = "media-side";
   const age = document.createElement("time");
@@ -540,9 +543,50 @@ function mediaChips(item) {
   const stream = isStreamKind(item);
   const chips = [{ label: streamTypeLabel(item), className: stream ? "stream" : "" }];
   if (item.height) chips.push({ label: `${item.height}p`, className: "quality" });
+  const grouped = Array.isArray(item.variants) && item.variants.length > 0;
+  if (item.trackHints
+    && item.trackHints.video === false
+    && item.trackHints.audio === true
+    && !grouped) {
+    chips.push({ label: "仅音频", className: "quality" });
+  }
   if (item.contentLength) chips.push({ label: humanBytes(item.contentLength), className: "" });
   if (item.duration) chips.push({ label: formatDuration(item.duration), className: "" });
   return chips;
+}
+
+// Mirrors the popup's master-playlist quality labels for rendition groups:
+// 「MP4 · 1920×1080」 when a height is known, otherwise the declared bitrate.
+function variantOptionLabel(variant) {
+  const height = Math.round(Number(variant?.height) || 0);
+  if (height > 0) {
+    const width = Math.round(Number(variant?.width) || 0);
+    return width > 0 ? `MP4 · ${width}×${height}` : `MP4 · ${height}p`;
+  }
+  const bandwidth = Number(variant?.bandwidth) || 0;
+  if (bandwidth > 0) {
+    const mbps = bandwidth / 1_000_000;
+    return `MP4 · ${mbps >= 10 ? String(Math.round(mbps)) : mbps.toFixed(1)} Mbps`;
+  }
+  return "MP4 · 自动画质";
+}
+
+// Rendition-style group cards carry their quality ladder directly on the
+// candidate (same opaque selectors the download dialog uses). The ladder is
+// ranked best-first, so leaving the native <select> untouched means "highest".
+function createVariantSelect(item) {
+  if (item.kind !== "hls" || !Array.isArray(item.variants) || item.variants.length === 0) return null;
+  const select = document.createElement("select");
+  select.className = "variant-select";
+  select.dataset.variantFor = item.id || item.displayUrl;
+  select.setAttribute("aria-label", `选择清晰度：${readableMediaTitle(item)}`);
+  for (const variant of item.variants) {
+    const option = document.createElement("option");
+    option.value = variant.url;
+    option.textContent = variantOptionLabel(variant);
+    select.append(option);
+  }
+  return select;
 }
 
 function byteSummary(job) {

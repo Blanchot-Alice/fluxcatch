@@ -58,6 +58,9 @@ NATIVE_PROTOCOL_VERSION = 1
 CAPABILITY_PROFILE_VERSION = 1
 MAX_MESSAGE = 1024 * 1024
 MAX_MANIFEST = 4 * 1024 * 1024
+# Bounded manifest fetch: a stalled playlist connection gets one retry and
+# then fails the job with a diagnosable timeout instead of hanging forever.
+MANIFEST_FETCH_TIMEOUT_SECONDS = 20
 ALLOWED_HEADERS = {"accept", "authorization", "cookie", "origin", "referer", "user-agent"}
 USER_AGENT = f"Mozilla/5.0 FluxCatch/{VERSION}"
 SENSITIVE_REDIRECT_HEADERS = {"authorization", "cookie", "origin", "referer"}
@@ -1454,6 +1457,28 @@ class ManifestFetchResult:
     request_headers: dict[str, str]
 
 
+def is_manifest_fetch_timeout(error: BaseException) -> bool:
+    """True when a manifest request died from a connection/read timeout."""
+    seen: set[int] = set()
+    candidates: list[BaseException | None] = [error]
+    reason = getattr(error, "reason", None)
+    if isinstance(reason, BaseException):
+        candidates.append(reason)
+    while candidates:
+        current = candidates.pop(0)
+        if current is None or id(current) in seen:
+            continue
+        seen.add(id(current))
+        if isinstance(current, TimeoutError):  # socket.timeout aliases this on 3.10+
+            return True
+        if isinstance(current, OSError) and "timed out" in str(current).lower():
+            return True
+        cause = current.__cause__
+        if isinstance(cause, BaseException):
+            candidates.append(cause)
+    return False
+
+
 def fetch_manifest(
     url: str,
     headers: dict[str, str],
@@ -1461,12 +1486,13 @@ def fetch_manifest(
 ) -> ManifestFetchResult:
     cancel = cancel or threading.Event()
     last_error: Exception | None = None
+    timeout_streak = 0
     for attempt in range(4):
         if cancel.is_set():
             raise Cancelled()
         response = None
         try:
-            response = request(url, headers, timeout=30)
+            response = request(url, headers, timeout=MANIFEST_FETCH_TIMEOUT_SECONDS)
             return ManifestFetchResult(
                 text=read_limited(response, MAX_MANIFEST).decode("utf-8-sig", "replace"),
                 final_url=valid_url(response.geturl()),
@@ -1478,6 +1504,17 @@ def fetch_manifest(
             raise
         except Exception as error:  # noqa: BLE001 - retry manifest network failures
             last_error = error
+            if is_manifest_fetch_timeout(error):
+                # One bounded immediate retry; a second stall surfaces a clear
+                # user-facing timeout instead of a raw socket traceback.
+                timeout_streak += 1
+                if timeout_streak >= 2:
+                    host_name = urllib.parse.urlsplit(url).hostname or urllib.parse.urlsplit(url).netloc or "unknown"
+                    raise DownloadError(
+                        f"获取播放列表超时({MANIFEST_FETCH_TIMEOUT_SECONDS}s): {host_name}"
+                    ) from error
+                continue
+            timeout_streak = 0
             if attempt < 3:
                 _retry_wait(cancel, min(4.0, 0.35 * (2**attempt)))
         finally:
@@ -2251,9 +2288,11 @@ def hls_fast_download(
     variant_url: str | None = None,
     live_duration: int = 0,
     extract_audio: bool = False,
+    audio_url: str | None = None,
 ) -> Path:
     if cancel.is_set():
         raise Cancelled()
+    progress.status("starting", "正在获取播放列表")
     playlist, _text, master, selected = select_hls_media(url, headers, variant_url, cancel)
     authorize_hls_playlist(playlist)
     if master:
@@ -2265,14 +2304,18 @@ def hls_fast_download(
         raise DownloadError(f"AES-128 HLS is not supported in FluxCatch {VERSION}")
 
     audio_rendition = select_hls_audio_rendition(master, selected) if master else None
+    # Rendition-style players never expose a master playlist. The extension
+    # probes the sibling media playlists and passes the best audio one here.
+    explicit_audio_url = valid_url(audio_url) if audio_url else None
+    wants_separate_audio = audio_rendition is not None or explicit_audio_url is not None
     # The selected video media is fetched first. Validate it before following
     # an alternate rendition so a protected/complex playlist cannot cause
     # extra network activity before the static-mode decision is made.
     validate_hls_static_media(
         playlist,
-        require_segments=not (extract_audio and audio_rendition is not None),
+        require_segments=not (extract_audio and wants_separate_audio),
     )
-    if audio_rendition and not ffmpeg:
+    if wants_separate_audio and not ffmpeg:
         raise DownloadError("Separate-audio HLS requires FFmpeg")
     if extract_audio and not ffmpeg:
         raise DownloadError("HLS audio extraction requires FFmpeg")
@@ -2281,10 +2324,25 @@ def hls_fast_download(
     audio_master: HlsPlaylist | None = None
     audio_selected: dict[str, Any] | None = None
     if audio_rendition:
-        audio_url = audio_rendition["url"]
+        resolved_audio_url = audio_rendition["url"]
         audio_playlist, _audio_text, audio_master, audio_selected = select_hls_media(
-            audio_url,
-            scope_subresource_headers(master.url, [audio_url], master.request_headers),
+            resolved_audio_url,
+            scope_subresource_headers(master.url, [resolved_audio_url], master.request_headers),
+            cancel=cancel,
+        )
+        authorize_hls_playlist(audio_playlist, purpose="HLS audio manifest child")
+        if audio_master:
+            authorize_hls_playlist(audio_master, purpose="HLS audio master child")
+            if audio_master.protection == "drm":
+                raise DownloadError("DRM/SAMPLE-AES audio HLS is metadata-only")
+            if audio_master.encrypted or audio_master.protection == "aes128":
+                raise DownloadError(f"AES-128 audio HLS is not supported in FluxCatch {VERSION}")
+            if select_hls_audio_rendition(audio_master, audio_selected):
+                raise DownloadError("Nested separate-audio HLS is not supported")
+    elif explicit_audio_url:
+        audio_playlist, _audio_text, audio_master, audio_selected = select_hls_media(
+            explicit_audio_url,
+            headers,
             cancel=cancel,
         )
         authorize_hls_playlist(audio_playlist, purpose="HLS audio manifest child")
@@ -3246,6 +3304,7 @@ class Host:
                     )
             elif kind == "hls":
                 variant_url = valid_url(options.get("variantUrl")) if options.get("variantUrl") else None
+                rendition_audio_url = valid_url(options.get("audioUrl")) if options.get("audioUrl") else None
                 target = hls_fast_download(
                     url,
                     target,
@@ -3257,6 +3316,7 @@ class Host:
                     variant_url,
                     live_duration,
                     extract_audio,
+                    rendition_audio_url,
                 )
             elif kind == "dash":
                 if not self.ffmpeg:

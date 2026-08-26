@@ -13,6 +13,7 @@ import {
   sanitizeFilename
 } from "./lib/media.js";
 import { parseHls, sortHlsVariants } from "./lib/hls.js";
+import { probeHlsTrackTypes } from "./lib/hls-probe.js";
 import { parseDash } from "./lib/dash.js";
 import { candidateForPersistence, candidateForUi, previewForPersistence } from "./lib/candidate-public.js";
 import { CANDIDATE_PROVENANCES, evaluateNetworkRequest, requireNetworkRequest } from "./lib/network-policy.js";
@@ -42,6 +43,11 @@ const MANIFEST_INSPECTION_TIMEOUT_MS = 7_000;
 const MAX_MANIFEST_CACHE_CHARS_PER_TAB = 4_000_000;
 const MAX_MANIFEST_CACHE_CHARS_GLOBAL = 12_000_000;
 const MAX_MANIFEST_SELECTOR_MAPPINGS = 512;
+// Sibling rendition playlists of one player collapse into a single quality
+// card. The cap bounds both the dropdown length and the in-memory selector
+// mappings a single group can allocate.
+const MAX_HLS_GROUP_VARIANTS = 16;
+const TRACK_HINT_PROBE_BYTES = 64 * 1024;
 const MAX_STORED_JOBS = 200;
 const JOB_PROGRESS_PERSIST_INTERVAL_MS = 1_000;
 const MAX_THUMBNAIL_URL_LENGTH = 4096;
@@ -210,6 +216,11 @@ const jobs = new Map();
 const jobHeaderKeys = new Map();
 const manifestInspectionInFlight = new Map();
 const manifestInspectionAttempted = new Set();
+// Rendition track-type probing state. Results stay in worker memory
+// (candidate.trackHints); neither storage.session nor any extension page ever
+// receives the probed playlist URL or its raw bytes.
+const trackHintProbesInFlight = new Set();
+const trackHintProbesAttempted = new Set();
 const bilibiliDashStates = new Map();
 const bilibiliDiscoveryInFlight = new Map();
 const bilibiliDiscoveryAt = new Map();
@@ -538,7 +549,7 @@ async function handleMessage(message, sender) {
       await maybeAddYouTubeCandidate(tabId);
       const settings = await getSettings();
       const items = [...(tabMedia.get(tabId)?.values() || [])]
-        .filter((item) => item.kind !== "segment" && !item.mergedInto)
+        .filter((item) => item.kind !== "segment" && !item.mergedInto && !item.variantGroupInto)
         .filter((item) => item.kind !== "dash_pair" || isFreshBilibiliCandidate(item))
         .filter((item) => item.kind !== "youtube" || settings.youtubeEnabled)
         .sort((a, b) => candidateScore(b) - candidateScore(a) || b.lastSeen - a.lastSeen)
@@ -582,7 +593,8 @@ async function handleMessage(message, sender) {
       const settings = await getSettings();
       const inspection = await probeManifest(candidate, {
         userInitiated: true,
-        networkScope: networkScopeForSettings(settings)
+        networkScope: networkScopeForSettings(settings),
+        timeoutMs: MANIFEST_INSPECTION_TIMEOUT_MS
       });
       await recordManifestInspection(tabId, candidate, inspection);
       return { probe: probeForUi(inspection, candidate) };
@@ -1588,6 +1600,15 @@ async function addCandidate(tabId, input, commitGuard = null) {
     manifestProbeStatus: cleanText(old?.manifestProbeStatus, 24) || null,
     manifestInspectedAt: positive(old?.manifestInspectedAt) || null,
     mergedInto: old?.mergedInto || null,
+    // Volatile probe/group state survives candidate replacement: the track
+    // sniff is one-shot per candidate (trackHintProbesAttempted), so losing
+    // it here would silently demote a probed rendition back to unprobed.
+    trackHints: usableTrackHints(old?.trackHints) ? old.trackHints : null,
+    variants: Array.isArray(old?.variants) ? old.variants : [],
+    audioCandidates: Array.isArray(old?.audioCandidates) ? old.audioCandidates : [],
+    variantGroupInto: old?.variantGroupInto || null,
+    manifestVariantSelectors: old?.manifestVariantSelectors instanceof Map ? old.manifestVariantSelectors : new Map(),
+    manifestVariantSelectorsByUrl: old?.manifestVariantSelectorsByUrl instanceof Map ? old.manifestVariantSelectorsByUrl : new Map(),
     aliases: Array.isArray(old?.aliases) ? old.aliases : [],
     manifestText: typeof input.manifestText === "string" && input.manifestText.length <= 1_500_000 ? input.manifestText : old?.manifestText || null,
     pairedAudioUrl,
@@ -1602,11 +1623,13 @@ async function addCandidate(tabId, input, commitGuard = null) {
   if (commitGuard && !commitGuard()) return false;
   map.set(key, candidate);
   regroupManifestCandidates(tabId);
+  regroupHlsVariantGroups(tabId);
   trimManifestCache(tabId, key);
   if (map.size > MAX_ITEMS_PER_TAB) {
     const removable = [...map.entries()].sort((a, b) => candidateScore(a[1]) - candidateScore(b[1]) || a[1].lastSeen - b[1].lastSeen);
     while (map.size > MAX_ITEMS_PER_TAB && removable.length) map.delete(removable.shift()[0]);
     regroupManifestCandidates(tabId);
+    regroupHlsVariantGroups(tabId);
   }
   // Paint the badge independently of storage latency. Both operations still
   // finish before the candidate broadcast, but a slow storage.session write
@@ -2119,6 +2142,142 @@ function inspectionKey(tabId, key) {
   return `${tabId}\n${key}`;
 }
 
+// ===== Rendition variant grouping (boomi-style masterless HLS) ==============
+// Sibling media playlists observed from one player collapse into a single
+// quality card. This is deliberately independent of regroupManifestCandidates:
+// no alias folding happens here, membership relies on byte-level track hints,
+// and every inconclusive input keeps today's independent-card behaviour.
+
+function hlsVariantDirectoryKey(value) {
+  const url = canonicalizeUrl(value);
+  if (!url) return "";
+  try {
+    const parsed = new URL(url);
+    if (!/^https?:$/.test(parsed.protocol) || parsed.username || parsed.password) return "";
+    return `${parsed.hostname.toLowerCase()}${parsed.pathname.replace(/[^/]*$/, "")}`;
+  } catch {
+    return "";
+  }
+}
+
+function usableTrackHints(hints) {
+  return Boolean(hints && typeof hints === "object"
+    && typeof hints.video === "boolean"
+    && typeof hints.audio === "boolean");
+}
+
+function clearVariantGroupFields(candidates) {
+  for (const candidate of candidates) {
+    candidate.variantGroupInto = null;
+    candidate.variants = [];
+    candidate.audioCandidates = [];
+  }
+}
+
+function rankVariantGroupMembers(members) {
+  return [...members].sort((a, b) =>
+    Number(b.height || 0) - Number(a.height || 0)
+    || Number(b.bandwidth || 0) - Number(a.bandwidth || 0)
+    || Number(b.firstSeen || 0) - Number(a.firstSeen || 0)
+    || String(a.url).localeCompare(String(b.url))
+  );
+}
+
+function variantGroupSelector(candidate, value) {
+  const url = canonicalizeUrl(value);
+  if (!url) return null;
+  try {
+    return manifestVariantSelector(candidate, url);
+  } catch {
+    return null;
+  }
+}
+
+function regroupHlsVariantGroups(tabId) {
+  const map = tabMedia.get(tabId);
+  if (!map) return;
+  const candidates = [...map.values()].filter((item) => item.kind === "hls");
+  clearVariantGroupFields(candidates);
+  const buckets = new Map();
+  for (const candidate of candidates) {
+    if (!usableTrackHints(candidate.trackHints)) continue;
+    if (candidate.manifestType !== "media") continue;
+    // Only probed (parsed) playlists may lead a group; an unparsed sibling
+    // URL directory match alone would be too weak a relation signal.
+    if (candidate.manifestProbeStatus !== "parsed") continue;
+    const directory = hlsVariantDirectoryKey(candidate.url);
+    if (!directory) continue;
+    const group = buckets.get(directory) || [];
+    group.push(candidate);
+    buckets.set(directory, group);
+  }
+  for (const members of buckets.values()) {
+    const videoMembers = members.filter((member) => member.trackHints.video);
+    if (!videoMembers.length) continue;
+    const rankedVideos = rankVariantGroupMembers(videoMembers);
+    const representative = rankedVideos[0];
+    const variants = [];
+    for (const member of rankedVideos.slice(0, MAX_HLS_GROUP_VARIANTS)) {
+      const selector = variantGroupSelector(representative, member.url);
+      if (!selector) continue;
+      variants.push({
+        id: cleanText(member.id, 64),
+        url: canonicalizeUrl(member.url),
+        selector,
+        bandwidth: Number(member.bandwidth) > 0 ? Math.max(0, Math.round(Number(member.bandwidth))) : 0,
+        width: positive(member.width),
+        height: positive(member.height),
+        duration: positive(member.duration) || 0,
+        trackHints: { ...member.trackHints }
+      });
+    }
+    if (!variants.length) continue;
+    const audioCandidates = [];
+    for (const member of rankVariantGroupMembers(members.filter((item) => !item.trackHints.video)).slice(0, MAX_HLS_GROUP_VARIANTS)) {
+      const selector = variantGroupSelector(representative, member.url);
+      if (!selector) continue;
+      audioCandidates.push({
+        id: cleanText(member.id, 64),
+        url: canonicalizeUrl(member.url),
+        selector,
+        bandwidth: Number(member.bandwidth) > 0 ? Math.max(0, Math.round(Number(member.bandwidth))) : 0,
+        trackHints: { ...member.trackHints }
+      });
+    }
+    representative.variants = variants;
+    representative.audioCandidates = audioCandidates;
+    for (const member of members) {
+      if (member !== representative) member.variantGroupInto = representative.id;
+    }
+  }
+}
+
+/**
+ * Pick the download pair for a grouped rendition card. Returns null when the
+ * candidate carries no variant group so ordinary single-playlist downloads
+ * follow their existing path untouched.
+ */
+function selectHlsGroupTracks(candidate, resolvedVariantUrl) {
+  const variants = Array.isArray(candidate?.variants)
+    ? candidate.variants.filter((variant) => canonicalizeUrl(variant?.url))
+    : [];
+  if (!variants.length) return null;
+  let video = null;
+  if (typeof resolvedVariantUrl === "string" && resolvedVariantUrl.trim()) {
+    video = variants.find((variant) => variant.url === resolvedVariantUrl
+      || variant.selector === resolvedVariantUrl) || null;
+    if (!video) throw new Error("所选清晰度已失效，请重新读取清晰度");
+  }
+  if (!video) video = variants[0];
+  const audios = Array.isArray(candidate?.audioCandidates)
+    ? candidate.audioCandidates
+      .map((track) => ({ url: canonicalizeUrl(track?.url), bandwidth: Number(track?.bandwidth || 0) }))
+      .filter((track) => track.url)
+      .sort((first, second) => second.bandwidth - first.bandwidth)
+    : [];
+  return { videoUrl: video.url, audioUrl: audios[0]?.url || null };
+}
+
 function scheduleTabManifestInspections(tabId, preferredKey, retryPreferred = false) {
   const entries = [...(tabMedia.get(tabId)?.entries() || [])].filter(([, candidate]) =>
     candidate.kind === "hls"
@@ -2176,12 +2335,22 @@ async function recordManifestInspection(tabId, inspectedCandidate, inspection) {
   const map = tabMedia.get(tabId);
   if (!map) return;
   const key = `hls:${canonicalizeUrl(inspectedCandidate?.url)}`;
-  const candidate = map.get(key);
-  if (!candidate || candidate.id !== inspectedCandidate.id) return;
+  if (!map.get(key)) return;
   const variants = Array.isArray(inspection.variants) ? inspection.variants : [];
   const audioTracks = Array.isArray(inspection.audioTracks) ? inspection.audioTracks : [];
   const subtitleTracks = Array.isArray(inspection.subtitleTracks) ? inspection.subtitleTracks : [];
-  candidate.manifestType = inspection.type === "master" ? "master" : "media";
+  const manifestType = inspection.type === "master" ? "master" : "media";
+  // The fingerprint digest awaits, and a same-URL observation may replace the
+  // candidate object while it runs (ids are inherited across replacement, so
+  // object identity is the only thing that changes). Playlist type,
+  // fingerprint and segment structure are properties of the playlist URL, so
+  // the whole result belongs to whatever object occupies the key once the
+  // digest resolves; the one-shot inspection token means discarding it would
+  // lose the probe permanently.
+  const manifestFingerprint = manifestType === "media" ? await mediaPlaylistFingerprint(inspection) : null;
+  const candidate = map.get(key);
+  if (!candidate || candidate.kind !== "hls") return;
+  candidate.manifestType = manifestType;
   candidate.manifestVariantCount = variants.length;
   candidate.manifestAudioTrackCount = audioTracks.length;
   candidate.manifestSubtitleTrackCount = subtitleTracks.length;
@@ -2191,7 +2360,7 @@ async function recordManifestInspection(tabId, inspectedCandidate, inspection) {
     ...subtitleTracks.map((item) => item.url)
   ]);
   candidate.manifestRedirectUrl = canonicalizeUrl(inspection.manifestUrl) || null;
-  candidate.manifestFingerprint = candidate.manifestType === "media" ? await mediaPlaylistFingerprint(inspection) : null;
+  candidate.manifestFingerprint = manifestFingerprint;
   candidate.manifestProbeStatus = "parsed";
   candidate.manifestInspectedAt = Date.now();
   candidate.manifestSize = Math.max(Number(candidate.manifestSize || 0), Number(inspection.manifestByteLength || 0));
@@ -2202,12 +2371,120 @@ async function recordManifestInspection(tabId, inspectedCandidate, inspection) {
     candidate.codecs = cleanText(bestVariant.codecs, 180) || candidate.codecs;
   }
   regroupManifestCandidates(tabId);
+  regroupHlsVariantGroups(tabId);
   await persistSession();
   await updateBadge(tabId);
-  const representative = candidate.mergedInto
-    ? [...map.values()].find((item) => item.id === candidate.mergedInto)
+  // Variant grouping needs byte-level track hints that only the media
+  // playlist itself can supply. Kick off the bounded one-shot probe; its
+  // completion re-runs regrouping and rebroadcasts the (possibly new)
+  // representative card.
+  if (candidate.manifestType === "media" && !usableTrackHints(candidate.trackHints)) {
+    void probeCandidateTrackHints(tabId, key);
+  }
+  const visibleCandidate = candidate.mergedInto || candidate.variantGroupInto
+    ? [...map.values()].find((item) => item.id === candidate.mergedInto || item.id === candidate.variantGroupInto)
     : candidate;
-  if (representative) broadcast({ type: "MEDIA_UPDATED", tabId, item: withoutManifestText(representative) });
+  if (visibleCandidate) broadcast({ type: "MEDIA_UPDATED", tabId, item: withoutManifestText(visibleCandidate) });
+}
+
+// Creates the authorized fetch adapter shared by every track-hint probe.
+// Requests reuse the manifest-probe pipeline's policy checks and credentials
+// behaviour; no new network path is introduced.
+function createTrackHintFetcher({ provenance, networkScope }) {
+  return async function probeFetch(url, { purpose = "manifest_probe", range = null } = {}) {
+    const allowedUrl = requireNetworkRequest({
+      url,
+      purpose,
+      provenance,
+      networkScope,
+      automatic: true
+    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), MANIFEST_INSPECTION_TIMEOUT_MS);
+    try {
+      const response = await fetch(allowedUrl, {
+        credentials: "omit",
+        cache: "no-store",
+        redirect: "error",
+        headers: range ? { Range: range } : undefined,
+        signal: controller.signal
+      });
+      if (!response.ok) return { ok: false, status: response.status };
+      return {
+        ok: true,
+        status: response.status,
+        // Each probe response is consumed exactly once: the playlist request
+        // via text(), the init/segment sample via bytes().
+        text: () => readResponseTextLimited(response, MAX_MANIFEST_BYTES),
+        bytes: async () => {
+          if (typeof response.body?.getReader !== "function") {
+            const buffer = await response.arrayBuffer();
+            return new Uint8Array(buffer.byteLength > TRACK_HINT_PROBE_BYTES ? buffer.slice(0, TRACK_HINT_PROBE_BYTES) : buffer);
+          }
+          const reader = response.body.getReader();
+          try {
+            const chunks = [];
+            let received = 0;
+            while (received < TRACK_HINT_PROBE_BYTES) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              chunks.push(value);
+              received += value.byteLength;
+            }
+            if (received > TRACK_HINT_PROBE_BYTES) await reader.cancel().catch(() => {});
+            const merged = new Uint8Array(Math.min(received, TRACK_HINT_PROBE_BYTES));
+            let filled = 0;
+            for (const chunk of chunks) {
+              if (filled >= merged.length) break;
+              merged.set(chunk.subarray(0, Math.min(chunk.byteLength, merged.length - filled)), filled);
+              filled += chunk.byteLength;
+            }
+            return merged;
+          } finally {
+            reader.releaseLock();
+          }
+        }
+      };
+    } finally {
+      clearTimeout(timeout);
+    }
+  };
+}
+
+async function probeCandidateTrackHints(tabId, key) {
+  const token = inspectionKey(tabId, key);
+  if (trackHintProbesAttempted.has(token) || trackHintProbesInFlight.has(token)) return;
+  trackHintProbesAttempted.add(token);
+  const promise = (async () => {
+    try {
+      const settings = await getSettings();
+      const candidate = tabMedia.get(tabId)?.get(key);
+      if (!candidate || candidate.kind !== "hls" || usableTrackHints(candidate.trackHints)) return;
+      const hints = await probeHlsTrackTypes(candidate, createTrackHintFetcher({
+        provenance: CANDIDATE_PROVENANCES.includes(candidate.provenance) ? candidate.provenance : "user_supplied",
+        networkScope: networkScopeForSettings(settings)
+      }));
+      const current = tabMedia.get(tabId)?.get(key);
+      // Key identity (kind:url) is what grouping cares about; the candidate
+      // object may have been replaced mid-probe by a same-URL observation, and
+      // the sniff result is equally valid for the replacement. The probe is
+      // one-shot per key, so discarding here would lose it permanently.
+      if (!current || !hints) return;
+      current.trackHints = hints;
+      regroupHlsVariantGroups(tabId);
+      await persistSession();
+      await updateBadge(tabId);
+      const map = tabMedia.get(tabId);
+      const visible = current.variantGroupInto
+        ? [...(map?.values() || [])].find((item) => item.id === current.variantGroupInto)
+        : current;
+      if (visible) broadcast({ type: "MEDIA_UPDATED", tabId, item: withoutManifestText(visible) });
+    } catch {
+      // Fail-open: an unprovable playlist keeps its existing independent card.
+    }
+  })().finally(() => trackHintProbesInFlight.delete(token));
+  trackHintProbesInFlight.add(token);
+  await promise;
 }
 
 async function probeManifest(candidate, options = {}) {
@@ -2246,6 +2523,13 @@ async function probeManifest(candidate, options = {}) {
         });
       } else manifestUrl = allowedUrl;
       text = await readResponseTextLimited(response, MAX_MANIFEST_BYTES);
+    } catch (error) {
+      // A hung first connection used to block the dialog forever with no
+      // explanation. Surface a diagnosable message instead of an AbortError.
+      if (controller?.signal.aborted && (error?.name === "AbortError" || /abort/i.test(error?.message || ""))) {
+        throw new Error(`读取媒体清单超时（${Math.round(Number(options.timeoutMs) / 1000)} 秒无响应）`);
+      }
+      throw error;
     } finally {
       if (timeout !== null) clearTimeout(timeout);
     }
@@ -2362,7 +2646,7 @@ function probeForUi(probe, candidate) {
       name: cleanText(item.name, 160)
     })).filter((item) => item.url);
     const segments = Array.isArray(probe.segments) ? probe.segments : [];
-    return {
+    const result = {
       kind: "hls",
       type: probe.type,
       variants,
@@ -2375,6 +2659,27 @@ function probeForUi(probe, candidate) {
       audioTrackCount: Array.isArray(probe.audioTracks) ? probe.audioTracks.length : 0,
       targetDuration: positive(probe.targetDuration)
     };
+    // Masterless rendition groups carry their quality ladder on the private
+    // candidate instead of inside the media playlist. Project it with the same
+    // opaque selector shape a master probe produces so one dialog code path
+    // serves both; the group is ranked descending so option order = best first.
+    if (probe.type === "media" && !variants.length && Array.isArray(candidate?.variants)) {
+      const groupVariants = candidate.variants
+        .filter((variant) => variantGroupSelector(candidate, variant?.url))
+        .slice(0, MAX_HLS_GROUP_VARIANTS)
+        .map((variant) => ({
+          url: /** @type {string} */ (variantGroupSelector(candidate, variant.url)),
+          bandwidth: positive(variant.bandwidth) || 0,
+          width: positive(variant.width),
+          height: positive(variant.height)
+        }));
+      if (groupVariants.length) {
+        result.variantSource = "rendition_group";
+        result.variants = groupVariants;
+        result.audioTrackCount = Array.isArray(candidate.audioCandidates) ? candidate.audioCandidates.length : result.audioTrackCount;
+      }
+    }
+    return result;
   }
   return {
     kind: "dash",
@@ -2510,7 +2815,12 @@ async function startDownload(candidate, options, tabId) {
   const opts = normalizeDownloadOptions(options, settings);
   if (candidate.kind === "hls" || candidate.kind === "dash") {
     try {
-      const inspection = await probeManifest(candidate, { userInitiated: true, networkScope });
+      const inspection = await probeManifest(candidate, {
+        userInitiated: true,
+        networkScope,
+        // A download click must never hang on a stalled manifest connection.
+        timeoutMs: MANIFEST_INSPECTION_TIMEOUT_MS
+      });
       const unsupportedHls = hlsUnsupportedReason(inspection);
       if (unsupportedHls) {
         const error = new Error(unsupportedHls);
@@ -2559,6 +2869,24 @@ async function startDownload(candidate, options, tabId) {
       networkScope,
       userInitiated: true
     });
+  }
+  // Masterless rendition group: resolve the quality ladder to an explicit
+  // video+audio playlist pair. The native host receives both playlists
+  // directly because a media playlist cannot carry a variant reference.
+  const hasHlsGroup = Boolean(!dashPair && candidate.kind === "hls"
+    && Array.isArray(candidate.variants) && candidate.variants.length);
+  let hlsGroupPair = hasHlsGroup ? selectHlsGroupTracks(candidate, requestedVariantUrl) : null;
+  if (hlsGroupPair) {
+    for (const trackUrl of [hlsGroupPair.videoUrl, hlsGroupPair.audioUrl]) {
+      if (!trackUrl) continue;
+      requireNetworkRequest({
+        url: trackUrl,
+        purpose: "manifest_child",
+        provenance: CANDIDATE_PROVENANCES.includes(candidate?.provenance) ? candidate.provenance : "user_supplied",
+        networkScope,
+        userInitiated: true
+      });
+    }
   }
 
   if (!advanced) {
@@ -2631,6 +2959,17 @@ async function startDownload(candidate, options, tabId) {
       throw new Error("该域名已在 FluxCatch 设置中被忽略");
     }
   }
+  // The native host receives the selected rendition playlist directly; a media
+  // playlist has no variant table, so the master-based variantUrl switch would
+  // be meaningless (and rejected) here.
+  const nativeHlsUrl = hlsGroupPair ? hlsGroupPair.videoUrl : null;
+  const nativeVariantUrl = hlsGroupPair ? null : requestedVariantUrl;
+  const nativeAudioUrl = hlsGroupPair?.audioUrl || dashPair?.audio.url || null;
+  if (hlsGroupPair && [nativeHlsUrl, nativeAudioUrl].some((trackUrl) =>
+    isPolicyBlocked(trackUrl, candidate?.tabUrl)
+    || matchesBlockedDomain(trackUrl, settings.blockedDomains))) {
+    throw new Error("该域名已在 FluxCatch 设置中被忽略");
+  }
   const jobId = crypto.randomUUID();
   const captureKey = headerKey(tabId, url);
   const capture = requestHeaders.get(captureKey);
@@ -2656,6 +2995,15 @@ async function startDownload(candidate, options, tabId) {
     message: "等待本地引擎"
   });
   try {
+    if (hlsGroupPair) {
+      const currentCandidate = requireTabCandidate(tabId, candidate);
+      if (currentCandidate !== candidate) throw new Error("所选清晰度已更新，请重新开始下载");
+      const finalPair = selectHlsGroupTracks(currentCandidate, requestedVariantUrl);
+      if (finalPair.videoUrl !== hlsGroupPair.videoUrl || finalPair.audioUrl !== hlsGroupPair.audioUrl) {
+        throw new Error("所选清晰度已更新，请重新开始下载");
+      }
+      hlsGroupPair = finalPair;
+    }
     if (dashPair) {
       const currentCandidate = requireTabCandidate(tabId, candidate);
       if (currentCandidate !== candidate) throw new Error("视频清晰度地址已更新，请重新开始下载");
@@ -2668,7 +3016,7 @@ async function startDownload(candidate, options, tabId) {
     port.postMessage({
       type: "download",
       jobId,
-      url,
+      url: nativeHlsUrl || url,
       mediaKind: candidate.kind,
       filename,
       headers: captured,
@@ -2679,8 +3027,8 @@ async function startDownload(candidate, options, tabId) {
         extractAudio: Boolean(opts.extractAudio),
         convert: Boolean(opts.convert),
         liveDuration: Number(opts.liveDuration || 0),
-        variantUrl: requestedVariantUrl,
-        audioUrl: dashPair?.audio.url || null,
+        variantUrl: nativeVariantUrl,
+        audioUrl: nativeAudioUrl,
         audioHeaders,
         expiresAt: dashPair?.expiresAt || null,
         expectedDuration: dashPair ? positive(candidate.duration) || 0 : 0,
@@ -3184,7 +3532,7 @@ function broadcast(message) {
 }
 
 async function updateBadge(tabId) {
-  const count = [...(tabMedia.get(tabId)?.values() || [])].filter((item) => item.kind !== "segment" && !item.mergedInto).length;
+  const count = [...(tabMedia.get(tabId)?.values() || [])].filter((item) => item.kind !== "segment" && !item.mergedInto && !item.variantGroupInto).length;
   try {
     await chrome.action.setBadgeText({ tabId, text: count ? String(Math.min(count, 99)) : "" });
     await Promise.allSettled([

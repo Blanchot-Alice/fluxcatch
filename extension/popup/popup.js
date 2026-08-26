@@ -5,7 +5,7 @@ import { friendlyDashMessage } from "../lib/job-presentation.js";
 import { createToastController, isActionPending, restoreFocus, withPendingAction } from "../ui/interactions.js";
 
 const SITE_LABELS = { instagram: "Instagram", twitter: "X" };
-const state = { tabId: null, windowId: null, items: [], settings: {}, hostStatus: {}, jobs: new Map(), selected: null, probes: new Map(), filter: "all", refreshSequence: 0, dialogTrigger: null, lastJobAnnouncementKey: "" };
+const state = { tabId: null, windowId: null, items: [], settings: {}, hostStatus: {}, jobs: new Map(), selected: null, probes: new Map(), filter: "all", refreshSequence: 0, dialogTrigger: null, lastJobAnnouncementKey: "", probeError: "" };
 const $ = (selector) => document.querySelector(selector);
 const mediaList = $("#mediaList");
 const emptyState = $("#emptyState");
@@ -58,7 +58,12 @@ function streamTypeLabel(item) {
 }
 
 port.onMessage.addListener((message) => {
-  if (message?.type === "MEDIA_UPDATED" && message.tabId === state.tabId) void loadMediaState();
+  if (message?.type === "MEDIA_UPDATED" && message.tabId === state.tabId) {
+    // Rendition grouping can complete after an earlier probe. Drop the cached
+    // inspection so the next download dialog re-reads fresh quality options.
+    if (message.item?.id) state.probes.delete(message.item.id);
+    void loadMediaState();
+  }
   if (message?.type === "JOB_UPDATED") consumeJobUpdate(message.job || message.event);
   if (message?.type === "JOBS_UPDATED") replaceJobs(message.jobs || []);
   if (message?.type === "HOST_EVENT") {
@@ -340,11 +345,12 @@ async function prepareDownload(item, button) {
     await task;
   } catch (error) {
     probeWarning = true;
+    state.probeError = typeof error?.message === "string" ? error.message : "";
   } finally {
     setManifestLoadingForItem(item, false);
   }
   state.dialogTrigger = findMediaAction(mediaKey(item), "download") || button;
-  openDownloadDialog(item, { probeWarning });
+  openDownloadDialog(item, { probeWarning, probeError: probeWarning ? state.probeError : "" });
 }
 
 function manifestActionKey(item) {
@@ -434,7 +440,9 @@ function openDownloadDialog(item, { probeWarning = false } = {}) {
   $("#dialogNote").textContent = manifestBlockReason
     ? manifestBlockReason
     : probeWarning
-      ? "未读取到清晰度选项，将自动选择并生成一个可直接播放的文件。"
+      ? probeError
+        ? `清晰度读取失败：${probeError}。仍可直接下载；稍后重试可再次读取清晰度。`
+        : "未读取到清晰度选项，将自动选择并生成一个可直接播放的文件。"
     : separateAudioHls
       ? "这个 HLS 视频使用独立音轨。FluxCatch 会在本地分别下载画面和声音并自动合并，最后保存为一个可直接播放的文件。"
     : item.kind === "dash_pair"
@@ -751,6 +759,12 @@ function mediaChips(item) {
   const values = [{ text: streamTypeLabel(item), cls: stream ? "hls" : "fmt" }];
   if (item.site && SITE_LABELS[item.site]) values.push({ text: SITE_LABELS[item.site], cls: "fmt" });
   if (item.height) values.push({ text: `${item.height}p`, cls: "hd" });
+  if (item.trackHints
+    && item.trackHints.video === false
+    && item.trackHints.audio === true
+    && !(Array.isArray(item.variants) && item.variants.length > 0)) {
+    values.push({ text: "仅音频", cls: "hd" });
+  }
   if (!stream && item.contentLength) values.push({ text: humanBytes(item.contentLength), cls: "" });
   if (item.duration) values.push({ text: formatDuration(item.duration), cls: "" });
   if (!stream && item.rangeSupported) values.push({ text: "支持多连接", cls: "" });

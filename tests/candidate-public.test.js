@@ -44,6 +44,7 @@ test("public candidate is an explicit allowlist and redacts signed queries", () 
   assert.deepEqual(Object.keys(publicCandidate).sort(), [
     "aliases", "codecs", "confidence", "contentLength", "copyable", "displayTitle", "displayUrl", "duration", "ext", "firstSeen",
     "generation", "groupSize", "height", "id", "kind", "lastSeen", "manifestAudioTrackCount", "manifestInspectedAt",
+    "audioCandidates", "trackHints", "variants",
     "manifestProbeStatus", "manifestSize", "manifestSubtitleTrackCount", "manifestType", "manifestVariantCount",
     "mime", "pageTitle", "provenance", "rangeSupported", "site", "source", "sourceFilenames", "sources",
     "suggestedFilename", "thumbnailAdapterImageHosts", "thumbnailAllowedOrigins", "thumbnailAt", "thumbnailFrameId",
