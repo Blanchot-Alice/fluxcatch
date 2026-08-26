@@ -94,7 +94,8 @@ export function hostStatusForUi(status = {}) {
     capabilities,
     needsPermission: Boolean(status.needsPermission),
     failureReason: HOST_FAILURE_REASONS.has(status.failureReason) ? status.failureReason : null,
-    lastError: redactText(status.lastError, 240) || null
+    lastError: redactText(status.lastError, 240) || null,
+    restartRequired: Boolean(status.restartRequired)
   };
 }
 

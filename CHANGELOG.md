@@ -2,6 +2,12 @@
 
 ## 0.2.5 — Unreleased
 
+- Fixed Bilibili CDN probing when a server rejects `HEAD` but accepts a one-byte Range `GET`; HTTP error responses now retain connected-peer validation before the safe fallback runs.
+- Stopped Instagram `bytestart`/`byteend` MediaSource fragments from appearing as dozens of standalone MP4 downloads that QuickTime cannot open.
+- Added bounded top-frame Instagram/X SPA response observers that publish only strictly allowlisted complete MP4 metadata; Instagram keeps one best rendition and X prefers the highest-bitrate progressive variant.
+- Routed those allowlisted Instagram/X progressive MP4 transfers through Chrome by default so they reuse the browser's working network path when the native process is reset or times out on Meta/Twitter CDNs; **可信直链也使用本地下载引擎** opts the exception back into Native, and the save-location prompt applies only to Chrome-backed saves.
+- Made the site observers SPA-aware, replaced stale/recommended Instagram rows with the current shortcode-bound rendition, preserved X source lineage after webRequest merging, and added a bounded page-scoped cache that restores signed candidates after MV3 worker suspension without writing them to extension storage.
+- Added pinned-client download and local FFmpeg merging for clear static HLS masters with separate audio renditions, including audio-only extraction without downloading video segments.
 - Added shared, packaged UI tokens and control primitives for Settings, popup, and Side Panel while retaining vanilla Manifest V3 HTML, CSS, and JavaScript.
 - Reorganized Settings around runtime identity, basic downloads, performance, detection and naming, privacy and network boundaries, local capabilities, notifications, and non-interactive Lab roadmap states.
 - Added normalized dirty-state tracking, field-level validation and an error summary for concurrency, minimum size, filename templates, and ignored domains; failed saves retain the unsaved state.
@@ -10,6 +16,10 @@
 - Unified restrained pending, success, failure, toast, focus-restoration, and duplicate-action protection across the popup and Side Panel, including card-local manifest loading feedback.
 - Strengthened keyboard, focus-visible, dark-mode, reduced-motion, narrow-width, long-filename, helper/error semantics, and minimum-target behavior without changing media detection or native download protocols.
 - Bound package/E2E evidence to clean Git identity, made dirty diagnostic packages explicitly content-addressed, and made default-on Bilibili quality enrichment obey one user setting across every automatic playback/preload path with documented in-flight, TTL, and failure-cooldown limits.
+- Made extension/native ZIPs reproducible from `SOURCE_DATE_EPOCH` or the commit time, normalized archive timestamps/modes/regular-file types, rejected symlink and non-portable paths, bound dirty diagnostics to a canonical digest of the complete extension tree, and made verification require the current canonical extension/native source trees.
+- Changed CI to retain one verified package set and run Chrome E2E against that exact extension ZIP, with native-host compatibility gates on Python 3.9 and 3.12.
+- Added English and Simplified Chinese manifest catalogs, plus a self-contained native-host bundle with checked Python preflight, valid relative documentation links, and root install/uninstall wrappers.
+- Kept ended task rows across popup close and detection clearing; terminal history is removed only by the explicit completed-task cleanup action, while current-page detection clearing affects media results only.
 
 ## 0.2.4 — 2026-08-23
 

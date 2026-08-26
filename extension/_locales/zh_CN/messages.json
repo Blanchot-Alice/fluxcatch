@@ -1,0 +1,8 @@
+{
+  "extensionName": {
+    "message": "FluxCatch"
+  },
+  "extensionDescription": {
+    "message": "检测当前页面请求的直链媒体、HLS 与 DASH 流，并将用户选择的资源保存到本地。"
+  }
+}

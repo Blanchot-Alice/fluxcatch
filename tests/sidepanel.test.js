@@ -28,8 +28,8 @@ test("side panel ships complete workspace assets and accessible states", () => {
   assert.match(html, /id="jobsList"/);
   assert.match(html, /id="jobAnnouncer"[^>]*role="status"/);
   assert.match(html, /id="clearCompletedButton"/);
-  assert.match(html, /<h3>少女祈祷中……<\/h3>/);
-  assert.match(html, /<p>播放视频后自动检测可下载的视频、音频与流媒体<\/p>/);
+  assert.match(html, /<h3>尚未检测到媒体<\/h3>/);
+  assert.match(html, /扫描不会刷新当前页面/);
   assert.match(html, /sidepanel\.css/);
   assert.match(html, /sidepanel\.js/);
   assert.ok(html.indexOf('href="../ui/tokens.css"') < html.indexOf('href="../ui/components.css"'));
@@ -50,10 +50,12 @@ test("side panel ships complete workspace assets and accessible states", () => {
   assert.match(js, /kind === "dash_pair"/);
   assert.match(js, /streamTypeLabel/);
   assert.match(js, /item\.kind !== "youtube" \|\| BUILD_PROFILE\.features\.externalToolNetwork/);
-  assert.match(js, /download\.textContent = "按默认设置下载"/);
+  assert.match(js, /download\.textContent = advanced \? "检查并下载" : "按默认设置下载"/);
+  assert.match(html, /id="downloadSettingsButton"/);
+  assert.match(html, /Chrome 权限只会在你点击该按钮后请求/);
   assert.doesNotMatch(js, /chrome\.action\?\.openPopup|打开下载设置|yt-dlp/);
   assert.match(js, /permissions\.request\(\{ permissions: \["nativeMessaging"\] \}\)/);
-  assert.match(js, /item\.provenance !== "observed_response"/);
+  assert.match(js, /function mediaNeedsLocalEngine[\s\S]*\|\| !trustedBrowserDirect/);
   assert.match(js, /openOptionsPage/);
 });
 

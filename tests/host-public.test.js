@@ -5,7 +5,7 @@ import { hostEventForUi, hostStatusForUi } from "../extension/lib/host-public.js
 test("host status exposes capabilities without executable paths, probe errors or future fields", () => {
   const status = hostStatusForUi({
     connected: true,
-    version: "0.2.4",
+    version: "0.2.5",
     protocolVersion: 1,
     capabilityProfileVersion: 1,
     ffmpeg: true,
@@ -26,12 +26,13 @@ test("host status exposes capabilities without executable paths, probe errors or
       future: "CAPABILITY_FUTURE"
     },
     failureReason: "api_unavailable",
+    restartRequired: true,
     lastError: "failed at /opt/homebrew/bin/STATUS_PATH token=STATUS_SECRET",
     future: "STATUS_FUTURE"
   });
   assert.deepEqual(Object.keys(status).sort(), [
     "capabilities", "capabilityProfileCompatible", "capabilityProfileVersion", "compatible", "connected", "ffmpeg",
-    "failureReason", "lastError", "needsPermission", "protocolCompatible", "protocolVersion", "version", "versionCompatible"
+    "failureReason", "lastError", "needsPermission", "protocolCompatible", "protocolVersion", "restartRequired", "version", "versionCompatible"
   ].sort());
   assert.deepEqual(Object.keys(status.capabilities).sort(), ["dashPair", "dashPlanner", "ffmpeg", "ytdlp"].sort());
   assert.deepEqual(Object.keys(status.capabilities.ffmpeg).sort(), ["available", "demuxers", "encoders", "networkInput", "version"].sort());
@@ -41,6 +42,7 @@ test("host status exposes capabilities without executable paths, probe errors or
   assert.equal(status.capabilities.ytdlp.available, false);
   assert.equal(status.capabilities.ytdlp.networkDisabled, true);
   assert.equal(status.failureReason, "api_unavailable");
+  assert.equal(status.restartRequired, true);
   assert.equal(status.compatible, true);
   assert.doesNotMatch(JSON.stringify(status), /FFMPEG_PATH|PROBE_SECRET|DEMUX_SECRET|FFMPEG_FUTURE|YTDLP_PATH|YTDLP_PROBE|CAPABILITY_FUTURE|STATUS_PATH|STATUS_SECRET|STATUS_FUTURE/);
 });
@@ -66,7 +68,7 @@ test("host status does not turn an unknown network gate into explicit permission
 });
 
 test("host compatibility requires exact extension, protocol and profile versions", () => {
-  const base = { connected: true, version: "0.2.4", protocolVersion: 1, capabilityProfileVersion: 1 };
+  const base = { connected: true, version: "0.2.5", protocolVersion: 1, capabilityProfileVersion: 1 };
   assert.equal(hostStatusForUi(base).compatible, true);
   assert.equal(hostStatusForUi({ ...base, version: "0.2.3" }).versionCompatible, false);
   assert.equal(hostStatusForUi({ ...base, protocolVersion: 2 }).protocolCompatible, false);

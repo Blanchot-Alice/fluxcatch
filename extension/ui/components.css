@@ -119,7 +119,7 @@ button:disabled,
 :where(.save-btn,.download-button,.primary,.dl-btn) {
   border:0;
   border-radius:var(--r-control);
-  color:#fff;
+  color:var(--on-primary,#fff);
   background:var(--primary-action);
   font-family:var(--font);
   font-weight:650;
@@ -187,8 +187,8 @@ button[data-ui-state="success"] {
 }
 
 :where(.save-btn,.download-button,.primary,.dl-btn)[data-ui-state="success"] {
-  color:#fff;
-  background:var(--success-strong);
+  color:var(--on-success,#fff);
+  background:var(--success-action,var(--success-strong));
 }
 
 button[data-ui-state="failure"] {

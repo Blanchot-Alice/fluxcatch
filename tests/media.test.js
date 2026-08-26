@@ -8,11 +8,12 @@ import {
   getExtension,
   isBilibiliMediaUrl,
   isBilibiliVideoPage,
+  isInstagramByteRangeFragment,
   isLikelySubtitleResource,
   parseAttributeList,
   sanitizeFilename
 } from "../extension/lib/media.js";
-import { parseHls, sortHlsVariants } from "../extension/lib/hls.js";
+import { HLS_LIMITS, parseHls, sortHlsVariants } from "../extension/lib/hls.js";
 import { parseDash } from "../extension/lib/dash.js";
 
 test("classifies manifests from URL and MIME", () => {
@@ -42,6 +43,27 @@ test("classifies direct media and suppresses tiny segment rows", () => {
   assert.equal(classifyMedia({ url: "https://cdn.test/12345.m4s", mime: "video/iso.segment", contentLength: 12345 }).kind, "segment");
   assert.equal(classifyMedia({ url: "https://cdn.test/fileSequence0.ts", mime: "video/mp2t", resourceType: "xmlhttprequest", contentLength: 12345 }).kind, "segment");
   assert.equal(classifyMedia({ url: "https://cdn.test/app.js", mime: "text/javascript" }), null);
+});
+
+test("suppresses Instagram query-range MP4 fragments without hiding full CDN assets", () => {
+  const full = "https://scontent-lax7-1.cdninstagram.com/o1/v/t2/f2/m367/fixture.mp4?efg=SIGNED_VALUE&oe=67FFFFFF";
+  const ranged = `${full}&bytestart=1588937&byteend=4876523`;
+  const fbRanged = "https://video-lax3-2.xx.fbcdn.net/v/t42.1790-2/fixture.mp4?byteend=999999&bytestart=500000";
+
+  assert.equal(isInstagramByteRangeFragment(ranged), true);
+  assert.equal(classifyMedia({ url: ranged, mime: "video/mp4", resourceType: "media", contentLength: 3_287_587 })?.kind, "segment");
+  assert.equal(classifyMedia({ url: fbRanged, mime: "video/mp4", resourceType: "xmlhttprequest", contentLength: 500_000 })?.kind, "segment");
+  assert.equal(classifyMedia({ url: full, mime: "video/mp4", resourceType: "media", contentLength: 9_000_000 })?.kind, "video");
+  assert.equal(
+    classifyMedia({ url: `${full}&bytestart=0`, mime: "video/mp4", resourceType: "media" })?.kind,
+    "video",
+    "an ordinary full URL is not hidden when the complete query-range pair is absent"
+  );
+  assert.equal(
+    classifyMedia({ url: "https://media.example.test/fixture.mp4?bytestart=0&byteend=999", mime: "video/mp4", resourceType: "media" })?.kind,
+    "video",
+    "the special query semantics are scoped to Meta media CDNs"
+  );
 });
 
 test("recognizes only trusted Bilibili DASH tracks while generic m4s stays suppressed", () => {
@@ -135,6 +157,26 @@ one.ts
 #EXTINF:6,
 two.ts`, "https://cdn.test/v/index.m3u8");
   assert.equal(mixed.protection, "drm");
+});
+
+test("HLS parser rejects structurally amplified manifests", () => {
+  const tooManySegments = [
+    "#EXTM3U",
+    ...Array.from({ length: HLS_LIMITS.segments + 1 }, (_, index) => `segment-${index}.ts`)
+  ].join("\n");
+  assert.throws(
+    () => parseHls(tooManySegments, "https://media.example/master.m3u8"),
+    /分片数量上限/
+  );
+
+  const tooManyVariants = ["#EXTM3U"];
+  for (let index = 0; index <= HLS_LIMITS.variants; index += 1) {
+    tooManyVariants.push("#EXT-X-STREAM-INF:BANDWIDTH=1", `variant-${index}.m3u8`);
+  }
+  assert.throws(
+    () => parseHls(tooManyVariants.join("\n"), "https://media.example/master.m3u8"),
+    /变体数量上限/
+  );
 });
 
 test("portable DASH parser extracts representations", () => {

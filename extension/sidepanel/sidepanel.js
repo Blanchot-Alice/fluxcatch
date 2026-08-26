@@ -1,6 +1,7 @@
 import { humanBytes } from "../lib/media.js";
 import { loadPrivacySafeThumbnail } from "../lib/thumbnail.js";
 import { BUILD_PROFILE, HOST_MISMATCH_MESSAGE } from "../lib/build-profile.js";
+import { friendlyDashMessage } from "../lib/job-presentation.js";
 import { createToastController, restoreFocus, withPendingAction } from "../ui/interactions.js";
 import { captureMediaRefresh, isMediaRefreshCurrent } from "./refresh-guard.js";
 
@@ -12,7 +13,8 @@ const state = {
   settings: {},
   jobs: [],
   hostStatus: {},
-  refreshToken: 0
+  refreshToken: 0,
+  lastJobAnnouncementKey: ""
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -22,6 +24,39 @@ const toastController = createToastController($("#toast"));
 function isStreamKind(value) {
   const kind = typeof value === "string" ? value : value?.kind;
   return kind === "hls" || kind === "dash" || kind === "dash_pair";
+}
+
+function isTrustedInstagramBrowserItem(item) {
+  if (item?.site !== "instagram"
+      || item?.kind !== "video"
+      || !["site_payload", "dom_metadata", "observed_response"].includes(item?.provenance)) return false;
+  try {
+    const url = new URL(item.displayUrl);
+    const hostname = url.hostname.toLowerCase();
+    return url.protocol === "https:"
+      && !url.username
+      && !url.password
+      && (hostname === "cdninstagram.com" || hostname.endsWith(".cdninstagram.com") || hostname === "fbcdn.net" || hostname.endsWith(".fbcdn.net"))
+      && /\.mp4$/i.test(url.pathname);
+  } catch {
+    return false;
+  }
+}
+
+function isTrustedXBrowserItem(item) {
+  if (item?.site !== "twitter" || item?.kind !== "video" || !["site_payload", "observed_response"].includes(item?.provenance)) return false;
+  const hinted = item.provenance === "observed_response"
+    || item.source === "x-api-response"
+    || item.source === "site-payload"
+    || item.sources?.includes("x-api-response")
+    || item.sources?.includes("site-payload");
+  if (!hinted) return false;
+  try {
+    const url = new URL(item.displayUrl);
+    return url.protocol === "https:" && url.hostname.toLowerCase() === "video.twimg.com";
+  } catch {
+    return false;
+  }
 }
 
 function streamTypeLabel(item) {
@@ -64,6 +99,9 @@ function bindEvents() {
   $("#settingsButton").addEventListener("click", (event) => void runUiAction(event.currentTarget, "sidepanel:open-settings", () => chrome.runtime.openOptionsPage(), {
     labelElement: event.currentTarget.querySelector("[data-action-label]")
   }));
+  $("#downloadSettingsButton").addEventListener("click", (event) => void runUiAction(event.currentTarget, "sidepanel:download-settings", () => chrome.runtime.openOptionsPage(), {
+    pendingText: "打开中…", successText: "已打开"
+  }));
   $("#retryButton").addEventListener("click", (event) => void runUiAction(event.currentTarget, "sidepanel:retry", () => refreshAll({ propagateError: true }), {
     pendingText: "", successText: "完成"
   }));
@@ -80,7 +118,7 @@ function bindEvents() {
   $("#pingButton").addEventListener("click", (event) => void runUiAction(event.currentTarget, "sidepanel:ping-host", async () => {
     const host = await refreshNativeHost();
     requireNativeHostReady(host);
-    showToast("高速下载功能状态已更新", "success");
+    showToast("本地下载引擎状态已更新", "success");
   }, { pendingText: "", successText: "完成" }));
   $("#clearCompletedButton").addEventListener("click", async (event) => {
     const result = await runUiAction(event.currentTarget, "sidepanel:clear-completed", () => call({ type: "CLEAR_COMPLETED_JOBS" }), {
@@ -107,6 +145,7 @@ function bindEvents() {
 
 async function refreshAll({ propagateError = false } = {}) {
   const token = ++state.refreshToken;
+  let succeeded = false;
   setLoading(true);
   hideError();
   try {
@@ -128,15 +167,14 @@ async function refreshAll({ propagateError = false } = {}) {
     state.jobs = jobsResult.jobs || [];
     state.hostStatus = jobsResult.hostStatus || mediaResult.hostStatus || {};
     sortJobs();
-    renderMedia();
-    renderJobs();
     updateHost(state.hostStatus);
+    succeeded = true;
   } catch (error) {
     if (token !== state.refreshToken) return;
     showError(error);
     if (propagateError) throw error;
   } finally {
-    if (token === state.refreshToken) setLoading(false);
+    if (token === state.refreshToken) setLoading(false, { render: succeeded });
   }
 }
 
@@ -211,23 +249,25 @@ function createMediaRow(item) {
   download.className = "media-download";
   download.dataset.mediaId = item.id || item.displayUrl;
   download.type = "button";
-  download.textContent = "按默认设置下载";
-  download.setAttribute("aria-label", `下载 ${title.textContent}`);
+  const advanced = mediaNeedsLocalEngine(item);
+  download.textContent = advanced ? "检查并下载" : "按默认设置下载";
+  download.setAttribute("aria-label", `${download.textContent}：${title.textContent}`);
+  if (advanced) download.setAttribute("aria-describedby", "localEngineBoundary");
   download.addEventListener("click", () => void runUiAction(download, `sidepanel:quick-download:${item.id || item.displayUrl}`, async () => {
-    const advanced = stream || item.provenance !== "observed_response" || Boolean(state.settings.useNativeForDirect);
     if (advanced) {
       // Keep request() inside the originating click gesture. Re-requesting an
       // already granted optional permission resolves without another prompt.
       const granted = await chrome.permissions.request({ permissions: ["nativeMessaging"] });
-      if (!granted) throw new Error("请先允许使用高速下载功能，再继续下载");
+      if (!granted) throw new Error("请先允许使用本地下载引擎，再继续下载");
       // Probe after the gesture-bound grant. When Chrome has not refreshed
       // the API binding yet, direct the user to the settings-owned recovery
       // flow instead of exposing a runtime TypeError or starting a doomed job.
       const host = await refreshNativeHost();
       requireNativeHostReady(host);
     }
-    const result = await call({ type: "DOWNLOAD", tabId: state.tabId, candidate: candidateReference(item), options: {} });
-    showToast(result.method === "native" ? "高速下载任务已开始" : "浏览器下载已开始", "success");
+    const options = stream ? {} : { outputContainer: "original", outputFormat: "original", convert: false, extractAudio: false };
+    const result = await call({ type: "DOWNLOAD", tabId: state.tabId, candidate: candidateReference(item), options });
+    showToast(result.method === "native" ? "本地下载任务已开始" : "浏览器下载已开始", "success");
     const jobsResult = await call({ type: "GET_JOBS" });
     state.jobs = jobsResult.jobs || state.jobs;
     sortJobs();
@@ -243,6 +283,7 @@ function createMediaVisual(item) {
   const fallback = document.createElement("span");
   fallback.className = `kind-icon ${stream ? "stream" : item.kind || "video"}`;
   fallback.textContent = stream ? streamTypeLabel(item) : item.kind === "audio" ? "AUDIO" : "VIDEO";
+  fallback.setAttribute("aria-hidden", "true");
   return loadPrivacySafeThumbnail(item.thumbnailUrl, fallback, {
     allowedThumbnailOrigins: item.thumbnailAllowedOrigins || [],
     adapterImageHosts: item.thumbnailAdapterImageHosts || [],
@@ -332,7 +373,7 @@ function nativeFailureReasonFromMessage(message) {
 
 function nativeStatusFromError(error) {
   const raw = String(error?.message || error || "");
-  if (/尚未授权|未获授权|nativeMessaging.*(?:permission|权限)|请先允许使用高速下载功能/i.test(raw)) {
+  if (/尚未授权|未获授权|nativeMessaging.*(?:permission|权限)|请先允许使用(?:本地下载引擎|高速下载功能)/i.test(raw)) {
     return { connected: false, needsPermission: true, failureReason: null, lastError: null };
   }
   const failureReason = nativeFailureReasonFromMessage(raw);
@@ -349,16 +390,16 @@ function normalizeNativeHostStatus(status = {}) {
 }
 
 function nativeHostIssueMessage(status = {}) {
-  if (status.needsPermission) return "请先允许使用高速下载功能，再继续操作";
+  if (status.needsPermission) return "请先允许使用本地下载引擎，再继续操作";
   if (status.failureReason === "api_unavailable") {
-    return status.recoveryBlocked
-      ? "Chrome 尚未恢复高速下载连接接口；请打开 chrome://extensions，重新加载 FluxCatch 后重试"
-      : "授权已生效，但 Chrome 的高速下载连接接口尚未就绪；请打开设置页完成自动恢复后重试";
+    return status.recoveryBlocked || status.restartRequired
+      ? "Chrome 尚未恢复本地下载引擎连接接口；请完全退出并重新启动 Chrome 后重试"
+      : "授权已生效，但 Chrome 的本地下载引擎连接接口尚未就绪；请打开设置页完成自动恢复后重试";
   }
-  if (status.failureReason === "host_missing") return "高速下载配套程序尚未安装或未注册；请打开设置页查看安装步骤";
-  if (status.failureReason === "connection_failed") return "高速下载配套程序连接失败；请重试，仍失败时打开设置页检查";
+  if (status.failureReason === "host_missing") return "本地下载引擎程序尚未安装或未注册；请打开设置页查看安装步骤";
+  if (status.failureReason === "connection_failed") return "本地下载引擎程序连接失败；请重试，仍失败时打开设置页检查";
   if (status.connected && status.compatible !== true) return HOST_MISMATCH_MESSAGE;
-  return "高速下载功能暂未就绪；普通文件仍可直接下载";
+  return "本地下载引擎暂未就绪；媒体检测与预览仍可用，多数保存需先开启引擎";
 }
 
 function requireNativeHostReady(status = {}) {
@@ -386,7 +427,7 @@ function updateHost(status = {}) {
   const dot = $("#hostDot");
   const mismatch = status.connected && status.compatible !== true;
   dot.className = `status-dot ${status.connected && !mismatch ? "ok" : status.failureReason || status.lastError || mismatch ? "bad" : ""}`;
-  $("#hostTitle").textContent = mismatch ? "高速下载功能版本不匹配" : status.connected ? "高速下载功能已就绪" : "高速下载功能暂未就绪";
+  $("#hostTitle").textContent = mismatch ? "本地下载引擎版本不匹配" : status.connected ? "本地下载引擎已就绪" : "本地下载引擎暂未就绪";
   if (mismatch) {
     $("#hostDetail").textContent = HOST_MISMATCH_MESSAGE;
     return;
@@ -404,7 +445,10 @@ function updateHost(status = {}) {
     : "可加速大文件；合并视频片段和转换格式尚未就绪";
 }
 
-function setLoading(loading) {
+function setLoading(loading, { render = !loading } = {}) {
+  const main = document.querySelector("main");
+  if (loading) main.setAttribute("aria-busy", "true");
+  else main.removeAttribute("aria-busy");
   $("#mediaLoading").hidden = !loading;
   $("#jobsLoading").hidden = !loading;
   if (loading) {
@@ -412,10 +456,17 @@ function setLoading(loading) {
     $("#mediaEmpty").hidden = true;
     $("#jobsList").hidden = true;
     $("#jobsEmpty").hidden = true;
-  } else {
+  } else if (render) {
     renderMedia();
     renderJobs();
   }
+}
+
+function mediaNeedsLocalEngine(item) {
+  const trustedBrowserDirect = isTrustedInstagramBrowserItem(item) || isTrustedXBrowserItem(item);
+  return isStreamKind(item)
+    || !trustedBrowserDirect
+    || Boolean(state.settings.useNativeForDirect);
 }
 
 function showError(error) {
@@ -430,7 +481,11 @@ function hideError() {
 
 async function call(message) {
   const response = await chrome.runtime.sendMessage(message);
-  if (!response?.ok) throw new Error(response?.error || "扩展请求失败");
+  if (!response?.ok) {
+    const error = new Error(response?.error || "扩展请求失败");
+    if (typeof response?.jobId === "string" && response.jobId) error.jobId = response.jobId;
+    throw error;
+  }
   return response;
 }
 
@@ -439,8 +494,21 @@ async function runUiAction(element, key, action, options = {}) {
     hideError();
     return await withPendingAction(element, key, action, { successDurationMs: 500, failureDurationMs: 0, ...options });
   } catch (error) {
-    showError(error);
-    showToast(friendlyErrorMessage(error?.message || "操作失败"), "error");
+    let representedByJob = false;
+    if (error?.jobId) {
+      try {
+        const result = await call({ type: "GET_JOBS" });
+        state.jobs = result.jobs || state.jobs;
+        sortJobs();
+        renderJobs();
+        const representedJob = state.jobs.find((job) => job.jobId === error.jobId);
+        representedByJob = Boolean(representedJob);
+        if (representedJob) announceJobChange(null, representedJob);
+      } catch { /* Keep the inline error when task refresh is unavailable. */ }
+    }
+    // A failed job card and a global alert would repeat the same failure.
+    // Keep the alert only when no durable task row represents this error.
+    if (!representedByJob) showError(error);
     restoreFocus(element);
     return undefined;
   }
@@ -456,8 +524,16 @@ function sortJobs() {
 }
 
 function announceJobChange(previous, current) {
-  if (previous?.status === current?.status) return;
-  $("#jobAnnouncer").textContent = `${current.filename || "媒体"}：${statusLabel(current.status)}`;
+  if (!current || previous?.status === current.status) return;
+  const key = `${current.jobId || current.updatedAt || current.filename || "media"}:${current.status || ""}`;
+  if (state.lastJobAnnouncementKey === key) return;
+  state.lastJobAnnouncementKey = key;
+  const announcement = `${current.filename || "媒体"}：${statusLabel(current.status)}`;
+  const announcer = $("#jobAnnouncer");
+  announcer.textContent = "";
+  queueMicrotask(() => {
+    if (state.lastJobAnnouncementKey === key) announcer.textContent = announcement;
+  });
 }
 
 function mediaChips(item) {
@@ -549,18 +625,20 @@ function statusLabel(status) {
 
 function friendlyJobMessage(job) {
   const raw = String(job.message || job.error || "").trim();
-  if (!raw) return `${job.method === "browser" ? "浏览器下载" : "高速下载"} · ${statusLabel(job.status)}`;
-  if (/FFmpeg/i.test(raw)) return job.status === "failed" ? "视频处理失败，请确认高速下载功能已就绪后重试" : "正在合并视频片段或转换格式";
-  if (/DASH/i.test(raw)) return job.status === "failed" ? "这种流媒体暂不支持下载" : raw.replace(/DASH\s*/gi, "");
-  return raw.replace(/本地(?:高速)?引擎/g, "高速下载功能");
+  if (!raw) return `${job.method === "browser" ? "浏览器下载" : "本地下载"} · ${statusLabel(job.status)}`;
+  if (/FFmpeg/i.test(raw)) return job.status === "failed" ? "视频处理失败，请确认本地下载引擎已就绪后重试" : "正在合并视频片段或转换格式";
+  const dashMessage = friendlyDashMessage(raw, { failed: job.status === "failed" });
+  if (dashMessage) return dashMessage;
+  return raw.replace(/高速下载功能|本地(?:高速|下载)?引擎/g, "本地下载引擎");
 }
 
 function friendlyErrorMessage(message) {
   const raw = String(message || "操作失败").trim();
-  if (/FFmpeg/i.test(raw)) return "此下载需要合并视频片段或转换格式，请确认高速下载功能已就绪后重试。";
-  if (/DASH/i.test(raw)) return "这种流媒体暂时不支持下载。";
-  if (/connectNative|native messaging|尚未授权连接本地引擎|本地(?:高速)?引擎.*(?:安装|注册|连接)|Chrome.*连接接口/i.test(raw)) {
+  if (/FFmpeg/i.test(raw)) return "此下载需要合并视频片段或转换格式，请确认本地下载引擎已就绪后重试。";
+  const dashMessage = friendlyDashMessage(raw, { failed: true });
+  if (dashMessage) return dashMessage;
+  if (/connectNative|native messaging|尚未授权连接本地引擎|本地(?:高速|下载)?引擎.*(?:安装|注册|连接)|Chrome.*连接接口/i.test(raw)) {
     return nativeHostIssueMessage(nativeStatusFromError(raw));
   }
-  return raw.replace(/本地(?:高速)?引擎/g, "高速下载功能");
+  return raw.replace(/高速下载功能|本地(?:高速|下载)?引擎/g, "本地下载引擎");
 }

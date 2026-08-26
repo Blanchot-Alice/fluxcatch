@@ -22,10 +22,11 @@
         </div>
         <div>
           <p class="eyebrow">LOCAL-FIRST MEDIA INSTRUMENT</p>
-          <h1>FluxCatch 设置</h1>
-          <p>调整下载体验，并确认当前构建真正可用的能力。</p>
+          <h1 data-ui-copy="options-title">FluxCatch 设置</h1>
+          <p data-ui-copy="options-description">调整下载体验，并确认当前构建真正可用的能力。</p>
         </div>
       </div>
+      <a class="designer-link secondary-btn" href="../designer/designer.html">界面编辑器</a>
     </header>
 
     <div class="options-layout">
@@ -40,31 +41,46 @@
         <a href="#lab">实验室</a>
       </nav>
 
-      <form id="settingsForm" novalidate>
+      <div class="settings-column">
+      <div id="optionsLoadState" class="page-state" role="status" aria-live="polite" aria-atomic="true">
+        <span class="spinner" aria-hidden="true"></span>
+        <span id="optionsLoadMessage">正在加载设置…</span>
+        <button id="retrySettingsButton" type="button" class="secondary-btn" hidden>重新读取</button>
+      </div>
+      <form id="settingsForm" novalidate aria-busy="true" inert>
         <div id="errorSummary" class="error-summary" role="alert" aria-live="assertive" tabindex="-1" hidden>
           <strong>部分设置需要修正</strong>
           <p>请检查下面标出的字段，然后再次保存。</p>
           <ul id="errorSummaryList"></ul>
         </div>
 
+        <details class="onboarding-guide">
+          <summary>首次使用：下载方式、站点补全与权限</summary>
+          <div>
+            <p><strong>保存路径：</strong>多数媒体保存通过本地下载引擎安全处理；只有严格匹配的 Instagram/X 固定来源可直接交给 Chrome 下载。</p>
+            <p><strong>B 站画质：</strong>默认开启同站媒体信息补全，使用当前页面的同站 Cookie，不上传到云服务，可在“隐私与网络”中关闭。</p>
+            <p><strong>权限：</strong>本地下载引擎、通知和局域网访问都只会在你点击相应操作后请求或确认。</p>
+          </div>
+        </details>
+
         <div class="settings-surface">
           <section id="runtime" class="settings-section runtime-section" aria-labelledby="runtimeHeading">
             <div class="section-heading">
               <span class="section-index" aria-hidden="true">01</span>
               <div>
-                <h2 id="runtimeHeading">运行身份与能力概览</h2>
-                <p>先确认浏览器扩展、本地处理程序与当前能力配置是否一致。</p>
+                <h2 id="runtimeHeading" data-ui-copy="runtime-title">运行身份与能力概览</h2>
+                <p data-ui-copy="runtime-description">先确认浏览器扩展、本地处理程序与当前能力配置是否一致。</p>
               </div>
             </div>
 
             <div class="status-strip" role="list" aria-label="当前运行状态">
               <div class="status-item" role="listitem">
                 <span class="status-dot ok" aria-hidden="true"></span>
-                <span><small>浏览器下载</small><strong>可用</strong></span>
+                <span><small>Chrome 例外通道</small><strong>仅可信 Instagram/X</strong></span>
               </div>
               <div class="status-item" role="listitem">
                 <span class="status-dot" aria-hidden="true"></span>
-                <span><small>高速下载功能</small><strong id="runtimeNativeStatus">正在检查</strong></span>
+                <span><small>本地下载引擎</small><strong id="runtimeNativeStatus">正在检查</strong></span>
               </div>
               <div class="status-item" role="listitem">
                 <span class="status-dot" aria-hidden="true"></span>
@@ -76,32 +92,37 @@
               </div>
             </div>
 
-            <dl class="diagnostic-grid" aria-label="构建身份">
-              <div><dt>扩展版本</dt><dd id="diagnosticExtensionVersion">正在读取…</dd></div>
-              <div><dt>扩展 ID</dt><dd id="diagnosticExtensionId">正在读取…</dd></div>
-              <div><dt>构建</dt><dd id="diagnosticBuild">正在读取…</dd></div>
-              <div><dt>配套程序版本</dt><dd id="diagnosticNativeVersion">正在读取…</dd></div>
-              <div><dt>协议与能力配置</dt><dd id="diagnosticProtocol">正在读取…</dd></div>
-            </dl>
+            <details class="runtime-details">
+              <summary>查看构建身份与能力明细</summary>
+              <div class="runtime-details-body">
+                <dl class="diagnostic-grid" aria-label="构建身份">
+                  <div><dt>扩展版本</dt><dd id="diagnosticExtensionVersion">正在读取…</dd></div>
+                  <div><dt>扩展 ID</dt><dd id="diagnosticExtensionId">正在读取…</dd></div>
+                  <div><dt>构建</dt><dd id="diagnosticBuild">正在读取…</dd></div>
+                  <div><dt>配套程序版本</dt><dd id="diagnosticNativeVersion">正在读取…</dd></div>
+                  <div><dt>协议与能力配置</dt><dd id="diagnosticProtocol">正在读取…</dd></div>
+                </dl>
 
-            <div class="capability-summary" aria-labelledby="capabilityHeading">
-              <div class="subsection-heading">
-                <h3 id="capabilityHeading">当前构建支持范围</h3>
-                <span class="status-badge">以实际配置为准</span>
+                <div class="capability-summary" aria-labelledby="capabilityHeading">
+                  <div class="subsection-heading">
+                    <h3 id="capabilityHeading">当前构建支持范围</h3>
+                    <span class="status-badge">以实际配置为准</span>
+                  </div>
+                  <ul id="capabilityList" class="capability-list" aria-live="polite"></ul>
+                </div>
+
+                <div class="diagnostic-actions">
+                  <p id="diagnosticCopyHelp">复制内容只包含版本、构建、协议和能力状态，不包含网页、媒体、请求凭据或本机路径。</p>
+                  <button id="copyDiagnosticsButton" type="button" class="secondary-btn" aria-describedby="diagnosticCopyHelp">复制诊断信息</button>
+                </div>
               </div>
-              <ul id="capabilityList" class="capability-list" aria-live="polite"></ul>
-            </div>
-
-            <div class="diagnostic-actions">
-              <p id="diagnosticCopyHelp">复制内容只包含版本、构建、协议和能力状态，不包含网页、媒体、请求凭据或本机路径。</p>
-              <button id="copyDiagnosticsButton" type="button" class="secondary-btn" aria-describedby="diagnosticCopyHelp">复制诊断信息</button>
-            </div>
+            </details>
           </section>
 
           <fieldset id="basicDownloads" class="settings-section">
             <legend>
               <span class="section-index" aria-hidden="true">02</span>
-              <span><strong>基础下载</strong><small>普通用户最常用的保存方式。</small></span>
+              <span><strong data-ui-copy="basic-title">基础下载</strong><small data-ui-copy="basic-description">普通用户最常用的保存方式。</small></span>
             </legend>
             <div class="section-content">
               <div class="opt-field">
@@ -119,12 +140,12 @@
                 <label class="opt-check">
                   <input id="saveAs" name="saveAs" type="checkbox" aria-describedby="saveAsHelp">
                   <span class="switch" aria-hidden="true"></span>
-                  <span class="txt">每次下载前选择保存位置<small id="saveAsHelp">开启后会弹出“另存为”窗口；关闭则保存到默认下载目录。</small></span>
+                  <span class="txt">可信浏览器直链下载前选择位置<small id="saveAsHelp">只作用于由 Chrome 保存的固定 Instagram/X 直链；本地下载引擎始终保存到其下载目录。</small></span>
                 </label>
                 <label class="opt-check">
                   <input id="useNativeForDirect" name="useNativeForDirect" type="checkbox" aria-describedby="useNativeForDirectHelp">
                   <span class="switch" aria-hidden="true"></span>
-                  <span class="txt">自动加速大文件<small id="useNativeForDirectHelp">源站支持 Range 且高速下载功能可用时，FluxCatch 会并行下载；速度提升取决于服务器和网络。</small></span>
+                  <span class="txt">可信直链也使用本地下载引擎<small id="useNativeForDirectHelp">开启后，原本可由 Chrome 保存的固定 Instagram/X 直链也走本地安全下载与多连接路径。</small></span>
                 </label>
               </div>
             </div>
@@ -133,7 +154,7 @@
           <fieldset id="performance" class="settings-section">
             <legend>
               <span class="section-index" aria-hidden="true">03</span>
-              <span><strong>性能</strong><small>先选择稳妥预设，需要时再调整具体并发。</small></span>
+              <span><strong data-ui-copy="performance-title">性能</strong><small data-ui-copy="performance-description">先选择稳妥预设，需要时再调整具体并发。</small></span>
             </legend>
             <div class="section-content">
               <div class="preset-group" role="group" aria-label="性能预设" aria-describedby="performancePresetHelp">
@@ -170,7 +191,7 @@
           <fieldset id="detectionNaming" class="settings-section">
             <legend>
               <span class="section-index" aria-hidden="true">04</span>
-              <span><strong>检测与命名</strong><small>控制媒体筛选以及下载文件的可读名称。</small></span>
+              <span><strong data-ui-copy="detection-title">检测与命名</strong><small data-ui-copy="detection-description">控制媒体筛选以及下载文件的可读名称。</small></span>
             </legend>
             <div class="section-content">
               <div class="opt-grid">
@@ -209,7 +230,7 @@
           <fieldset id="privacyNetwork" class="settings-section">
             <legend>
               <span class="section-index" aria-hidden="true">05</span>
-              <span><strong>隐私与网络</strong><small>固定站点接口，自动行为可随时关闭。</small></span>
+              <span><strong data-ui-copy="privacy-title">隐私与网络</strong><small data-ui-copy="privacy-description">固定站点接口，自动行为可随时关闭。</small></span>
             </legend>
             <div class="section-content setting-rows">
               <label class="opt-check">
@@ -224,7 +245,7 @@
                   <span class="switch" aria-hidden="true"></span>
                   <span class="txt">允许访问局域网媒体<small id="privateNetworkHelp">仅在你明确要保存自己局域网设备上的媒体时开启；开启前会再次确认。</small></span>
                 </label>
-                <p id="privateNetworkBoundary" class="boundary-copy"><strong>始终禁止：</strong>云 metadata、link-local、multicast、unspecified 与 reserved 目标不会因该开关放行。</p>
+                <p id="privateNetworkBoundary" class="boundary-copy"><strong>始终禁止：</strong>云元数据服务、链路本地、多播、未指定与保留地址不会因该开关放行。</p>
               </div>
 
               <dl class="privacy-facts" aria-label="本地数据处理说明">
@@ -237,11 +258,11 @@
           <fieldset id="localCapabilities" class="settings-section">
             <legend>
               <span class="section-index" aria-hidden="true">06</span>
-              <span><strong>本地能力</strong><small>安装状态与当前构建是否开放是两件不同的事。</small></span>
+              <span><strong data-ui-copy="local-title">本地能力</strong><small data-ui-copy="local-description">安装状态与当前构建是否开放是两件不同的事。</small></span>
             </legend>
             <div class="section-content">
               <dl class="local-capability-matrix" aria-label="本地工具状态">
-                <div><dt>Native host 连接</dt><dd id="capabilityNativeConnection" data-state="checking">正在检查</dd></div>
+                <div><dt>本地下载程序连接</dt><dd id="capabilityNativeConnection" data-state="checking">正在检查</dd></div>
                 <div><dt>Native 协议兼容</dt><dd id="capabilityNativeProtocol" data-state="checking">等待连接</dd></div>
                 <div><dt>FFmpeg 安装与本地处理</dt><dd id="capabilityFfmpeg" data-state="checking">等待连接</dd></div>
                 <div><dt>yt-dlp 安装状态</dt><dd id="capabilityYtDlp" data-state="unknown">未检查</dd></div>
@@ -250,20 +271,20 @@
 
               <div class="permission-row">
                 <div>
-                  <strong>高速下载功能</strong>
+                  <strong>本地下载引擎</strong>
                   <small id="nativePermissionStatus" role="status" aria-live="polite">正在检查是否可用…</small>
                 </div>
-                <button id="nativePermissionButton" type="button" class="secondary-btn" aria-describedby="nativePermissionStatus">开启高速下载功能</button>
+                <button id="nativePermissionButton" type="button" class="secondary-btn" aria-describedby="nativePermissionStatus">开启本地下载引擎</button>
               </div>
 
               <details class="install-guide" id="nativeInstallGuide">
-                <summary>本地引擎（高速下载）安装方法</summary>
+                <summary>本地下载引擎安装方法</summary>
                 <ol>
-                  <li>高速下载依赖本地引擎，随扩展仓库一起提供，装一次即可。</li>
-                  <li>从源码使用时：在「终端」进入 FluxCatch 仓库目录，然后执行 <code>bash native-host/install-macos.sh</code>。</li>
-                  <li>从 zip 包使用时：解压 native-host 包后，进入目录执行 <code>bash install-macos.sh</code>。</li>
+                  <li>本地下载引擎随扩展仓库一起提供，安装一次即可。</li>
+                  <li>从源码使用时：在「终端」进入 FluxCatch 仓库根目录，然后执行 <code>./scripts/native-install-wrapper.sh</code>。</li>
+                  <li>从 zip 包使用时：解压 native-host 包后，进入目录执行 <code>./install-macos.sh</code>。</li>
                   <li>安装器会同时登记 Google Chrome 与 Chrome for Testing，无需手动选择。</li>
-                  <li>完成后回到本页：尚未授权时点击「开启高速下载功能」，已授权时点击「重新检查」。</li>
+                  <li>完成后回到本页：尚未授权时点击「开启本地下载引擎」，已授权时点击「重新检查」。</li>
                 </ol>
               </details>
             </div>
@@ -272,7 +293,7 @@
           <fieldset id="notifications" class="settings-section">
             <legend>
               <span class="section-index" aria-hidden="true">07</span>
-              <span><strong>通知</strong><small>开启时立即申请权限；通知偏好仍由保存栏确认。</small></span>
+              <span><strong data-ui-copy="notifications-title">通知</strong><small data-ui-copy="notifications-description">开启时立即申请权限；通知偏好仍由保存栏确认。</small></span>
             </legend>
             <div class="section-content setting-rows">
               <label class="opt-check">
@@ -287,13 +308,12 @@
           <section id="lab" class="settings-section lab-section" aria-labelledby="labHeading">
             <div class="section-heading">
               <span class="section-index" aria-hidden="true">08</span>
-              <div><h2 id="labHeading">实验室与当前限制</h2><p>以下项目仅说明路线状态，在当前构建中没有可操作开关。</p></div>
+              <div><h2 id="labHeading" data-ui-copy="lab-title">实验室与当前限制</h2><p data-ui-copy="lab-description">以下项目仅说明路线状态，在当前构建中没有可操作开关。</p></div>
             </div>
             <ul class="roadmap-list" aria-label="当前未开放能力">
               <li><span><strong>YouTube 适配器</strong><small>实验源保留，但稳定构建不发布候选或调用外部工具。</small></span><span class="roadmap-status">规划中</span></li>
               <li><span><strong>HLS 直播录制</strong><small>当前仅支持清晰、静态 VOD。</small></span><span class="roadmap-status">未开放</span></li>
               <li><span><strong>加密 HLS</strong><small>AES-128 与 SAMPLE-AES 保持 fail-closed。</small></span><span class="roadmap-status">未开放</span></li>
-              <li><span><strong>HLS 独立音轨</strong><small>单独音轨结构会给出明确的不支持原因。</small></span><span class="roadmap-status">未开放</span></li>
             </ul>
           </section>
         </div>
@@ -310,6 +330,7 @@
           </div>
         </div>
       </form>
+      </div>
     </div>
   </main>
 
@@ -317,7 +338,7 @@
     <form method="dialog">
       <div class="dialog-icon warning" aria-hidden="true">!</div>
       <h2 id="privateNetworkDialogTitle">允许访问局域网媒体？</h2>
-      <p id="privateNetworkDialogDescription">这会允许 FluxCatch 主动连接你局域网中的媒体设备。云 metadata、link-local、multicast、unspecified 与 reserved 目标仍然保持禁止。</p>
+      <p id="privateNetworkDialogDescription">这会允许 FluxCatch 主动连接你局域网中的媒体设备。云元数据服务、链路本地、多播、未指定与保留地址仍然保持禁止。</p>
       <div class="dialog-actions">
         <button id="privateNetworkCancelButton" type="submit" value="cancel" class="secondary-btn">保持关闭</button>
         <button id="privateNetworkConfirmButton" type="submit" value="confirm" class="warning-button">确认开启</button>

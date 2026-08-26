@@ -71,8 +71,8 @@ test("persisted candidate has an independent allowlist", () => {
   });
   const serialized = JSON.stringify(persisted);
   assert.equal(persisted.url, "https://media.example/video.mp4");
-  assert.deepEqual(persisted.manifestReferences, ["https://media.example/child.m3u8"]);
-  assert.equal(persisted.manifestRedirectUrl, "https://media.example/final.m3u8");
+  assert.deepEqual(persisted.manifestReferences, [], "signed child identities are omitted rather than rewritten into collision-prone queryless URLs");
+  assert.equal(persisted.manifestRedirectUrl, null);
   assert.equal(persisted.thumbnailUrl, null, "query-bearing previews are omitted from storage instead of rewriting a different fetch target");
   assert.doesNotMatch(serialized, /CHILD_SECRET|REDIRECT_SECRET|THUMB_SECRET|THUMB_FUTURE_SECRET|COOKIE_SECRET|FUTURE_SECRET/);
 });
@@ -135,4 +135,23 @@ test("only exact queryless direct candidates publish a copyable address", () => 
   assert.equal(signed.copyable, false);
   assert.equal(signed.requiresRefresh, true);
   assert.doesNotMatch(JSON.stringify(signed), /SECRET/);
+});
+
+test("path-encoded capabilities are neither published nor persisted", () => {
+  const raw = "https://media.example/token/PathBearerABC1234567890/video.mp4";
+  const candidate = candidateForUi({
+    id: "path-secret",
+    generation: "generation-id",
+    kind: "video",
+    url: raw,
+    provenance: "observed_response"
+  });
+  assert.equal(candidate.displayUrl, "https://media.example/…");
+  assert.equal(candidate.urlIsRedacted, true);
+  assert.equal(candidate.copyable, false);
+  assert.doesNotMatch(JSON.stringify(candidate), /PathBearer/);
+  assert.equal(candidateForPersistence({ ...candidate, url: raw }), null);
+
+  const preview = previewForUi({ thumbnailUrl: "https://images.example/session/PRIVATE_PATH/poster.jpg" });
+  assert.equal(preview.thumbnailUrl, "https://images.example/…");
 });

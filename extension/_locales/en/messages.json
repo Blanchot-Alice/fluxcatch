@@ -1,0 +1,8 @@
+{
+  "extensionName": {
+    "message": "FluxCatch"
+  },
+  "extensionDescription": {
+    "message": "Detect direct media, HLS, and DASH streams requested by the current page and save user-selected resources locally."
+  }
+}

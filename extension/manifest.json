@@ -1,8 +1,9 @@
 {
   "manifest_version": 3,
-  "name": "FluxCatch",
-  "description": "FluxCatch — Detect direct media, HLS and DASH streams and download them locally.",
-  "version": "0.2.4",
+  "default_locale": "zh_CN",
+  "name": "__MSG_extensionName__",
+  "description": "__MSG_extensionDescription__",
+  "version": "0.2.5",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsi2KFFuIbrDvw0OwBEQLN+cyWH4ro4ES0kF05kH/gDj3rXErpl7CW4nouT/T2PDx/whV+rm9ThGs1z6MNqLgNvn4vcwYMdv9/4k3HnNMn1t3C0TmLethAAGIW1iC1M7UphNLrIA0UOseFA0kPqyHZthGEzX+Q3OrMnBBJwWQ9Uj3ERKXd4BlXdJWiQR3YT+qCXDv0DfcpAkB2caKa+EuxxWdIUIC2mEYKeb1H5+NuTCAoTgfPwVcL+3fnS/OnPqQ0z5rlL2ixkoSoM1gRi5xDDRrdrDE0EQm5WodzMYP7f0PrnIWwGSl1Ixot10hVscjDUdvBVvartBCXi4EqVeTbQIDAQAB",
   "minimum_chrome_version": "116",
   "permissions": [
@@ -18,7 +19,7 @@
     "type": "module"
   },
   "action": {
-    "default_title": "FluxCatch",
+    "default_title": "__MSG_extensionName__",
     "default_popup": "popup/popup.html"
   },
   "options_page": "options/options.html",
@@ -26,6 +27,24 @@
     "default_path": "sidepanel/sidepanel.html"
   },
   "content_scripts": [
+    {
+      "matches": ["https://*.instagram.com/*"],
+      "js": ["content/instagram-main.js"],
+      "run_at": "document_start",
+      "all_frames": false,
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://x.com/*",
+        "https://*.x.com/*",
+        "https://twitter.com/*",
+        "https://*.twitter.com/*"
+      ],
+      "js": ["content/x-main.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
     {
       "matches": ["http://*/*", "https://*/*"],
       "js": ["lib/site-extract.js", "content/content.js"],

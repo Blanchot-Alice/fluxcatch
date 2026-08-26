@@ -7,6 +7,7 @@ import {
   filenameFromCandidate,
   isBilibiliMediaUrl,
   isBilibiliVideoPage,
+  isInstagramByteRangeFragment,
   isLikelySubtitleResource,
   normalizeMime,
   sanitizeFilename
@@ -23,8 +24,10 @@ const NATIVE_API_BINDING_WAIT_MS = 500;
 const NATIVE_API_RECOVERY_KEY = "nativeApiRecovery";
 const NATIVE_API_RECOVERY_WAIT_MS = 35_000;
 const NATIVE_API_RECOVERY_TTL_MS = 2 * 60_000;
-const NATIVE_API_UNAVAILABLE_MESSAGE = "高速下载授权已生效，但 Chrome 尚未加载连接接口。FluxCatch 将自动重试；若仍未恢复，请在 chrome://extensions 中重新加载 FluxCatch。";
-const NATIVE_HOST_MISSING_MESSAGE = "本地引擎尚未安装或未注册。请在终端运行 bash native-host/install-macos.sh 后重试。";
+const NATIVE_API_RECOVERY_RESUME_LIMIT = 2;
+const NATIVE_API_UNAVAILABLE_MESSAGE = "本地下载引擎权限已开启，Chrome 正在初始化连接接口。FluxCatch 将自动重试。";
+const NATIVE_API_RESTART_MESSAGE = "本地下载引擎权限已开启，但 Chrome 的连接接口长期未恢复。请完全退出并重新启动 Chrome，返回后点击“重新检查”。";
+const NATIVE_HOST_MISSING_MESSAGE = "本地下载引擎尚未安装或未注册。从源码使用时请运行 ./scripts/native-install-wrapper.sh；从 Native ZIP 使用时请运行 ./install-macos.sh。";
 const NATIVE_CONNECTION_FAILED_MESSAGE = "暂时未能连接本地引擎。请稍后点击“重新检查”；若持续失败，请在 chrome://extensions 中查看 FluxCatch 的错误。";
 const EXTENSION_ORIGIN = chrome.runtime.getURL("");
 const MAX_ITEMS_PER_TAB = 160;
@@ -32,6 +35,7 @@ const HEADER_TTL_MS = 5 * 60 * 1000;
 const PENDING_HEADER_TTL_MS = 60 * 1000;
 const MAX_PENDING_HEADER_REQUESTS = 1600;
 const MAX_CAPTURED_HEADERS_BYTES = 64 * 1024;
+const MAX_CAPTURED_HEADERS_GLOBAL_BYTES = 4 * 1024 * 1024;
 const MAX_MANIFEST_BYTES = 4 * 1024 * 1024;
 const MAX_MANIFEST_IDENTITY_KEY_LENGTH = 16_416;
 const MANIFEST_INSPECTION_TIMEOUT_MS = 7_000;
@@ -39,6 +43,7 @@ const MAX_MANIFEST_CACHE_CHARS_PER_TAB = 4_000_000;
 const MAX_MANIFEST_CACHE_CHARS_GLOBAL = 12_000_000;
 const MAX_MANIFEST_SELECTOR_MAPPINGS = 512;
 const MAX_STORED_JOBS = 200;
+const JOB_PROGRESS_PERSIST_INTERVAL_MS = 1_000;
 const MAX_THUMBNAIL_URL_LENGTH = 4096;
 const BILIBILI_DISCOVERY_TTL_MS = 45_000;
 const BILIBILI_AUTOMATIC_RETRY_COOLDOWN_MS = 5_000;
@@ -48,7 +53,7 @@ const BILIBILI_PAIR_WINDOW_MS = 30_000;
 const BILIBILI_SAFE_REFERER = "https://www.bilibili.com/";
 const DASH_PAIR_SELECTOR_ORIGIN = "https://fluxcatch.invalid";
 const MANIFEST_SELECTOR_ORIGIN = "https://fluxcatch.invalid";
-// 0.2.4 has no pinned broker for external tools. Keep the adapter source for
+// 0.2.5 has no pinned broker for external tools. Keep the adapter source for
 // the future GitHub build, but compile every setting/candidate/download gate
 // closed regardless of what an older or replacement native host reports.
 const SENSITIVE_REQUEST_HEADERS = new Set(["authorization", "cookie", "origin", "referer"]);
@@ -57,7 +62,7 @@ const JOB_STATUSES = new Set(["queued", "starting", "downloading", "remuxing", "
 const TERMINAL_JOB_STATUSES = new Set(["completed", "failed", "cancelled"]);
 const CONTENT_SOURCES = new Set([
   "content", "dom", "loadedmetadata", "durationchange", "mutation",
-  "source-element", "metadata", "site-payload"
+  "source-element", "metadata", "site-payload", "instagram-api-response", "x-api-response"
 ]);
 const CONTENT_MESSAGE_TYPES = new Set(["CONTENT_MEDIA", "PAGE_PREVIEW"]);
 const PAGE_PREVIEW_PRIORITIES = new Map([
@@ -118,6 +123,46 @@ function siteAdapterForMediaUrl(url) {
   return SITE_ADAPTERS.find((adapter) => adapter.mediaHostPattern?.test(host)) || null;
 }
 
+function isTrustedInstagramBrowserDirectCandidate(candidate) {
+  const url = canonicalizeUrl(candidate?.url);
+  if (!url || candidate?.kind !== "video" || candidate?.site !== "instagram") return false;
+  if (!["site_payload", "dom_metadata", "observed_response"].includes(candidate?.provenance)) return false;
+  if (siteAdapterForPageUrl(candidate?.tabUrl)?.id !== "instagram") return false;
+  if (siteAdapterForMediaUrl(url)?.id !== "instagram" || isInstagramByteRangeFragment(url)) return false;
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "https:" && /\.mp4$/i.test(parsed.pathname);
+  } catch {
+    return false;
+  }
+}
+
+function candidateHasSource(candidate, source) {
+  return candidate?.source === source || (Array.isArray(candidate?.sources) && candidate.sources.includes(source));
+}
+
+function isTrustedXBrowserDirectCandidate(candidate) {
+  const url = canonicalizeUrl(candidate?.url);
+  if (!url || candidate?.kind !== "video" || candidate?.site !== "twitter") return false;
+  if (!["site_payload", "observed_response"].includes(candidate?.provenance)) return false;
+  if (candidate?.provenance !== "observed_response"
+    && !candidateHasSource(candidate, "x-api-response")
+    && !candidateHasSource(candidate, "site-payload")) return false;
+  try {
+    const page = new URL(candidate.tabUrl);
+    const media = new URL(url);
+    const pageHost = page.hostname.toLowerCase();
+    return page.protocol === "https:"
+      && (pageHost === "x.com" || pageHost.endsWith(".x.com") || pageHost === "twitter.com" || pageHost.endsWith(".twitter.com"))
+      && media.protocol === "https:"
+      && !media.username
+      && !media.password
+      && media.hostname.toLowerCase() === "video.twimg.com";
+  } catch {
+    return false;
+  }
+}
+
 // Canonical watch URL for the page candidate handed to the local yt-dlp engine.
 function youtubeWatchUrl(url) {
   const value = canonicalizeUrl(url);
@@ -150,6 +195,7 @@ const DEFAULT_SETTINGS = {
 const tabMedia = new Map();
 const tabGenerations = new Map();
 const tabPreviews = new Map();
+const siteCandidateRecoveryInFlight = new Map();
 const requestHeaders = new Map();
 const pendingRequestHeaders = new Map();
 const hostClients = new Set();
@@ -172,6 +218,7 @@ const bilibiliObservationChains = new Map();
 const bilibiliPruneTimers = new Map();
 const bilibiliTabTokens = new Map();
 let headerPruneTimer = null;
+let jobPersistTimer = null;
 let nativePort = null;
 let nativeConnectPromise = null;
 const pendingHostPings = new Map();
@@ -202,6 +249,8 @@ chrome.webRequest.onBeforeSendHeaders.addListener(
     if (details.tabId < 0 || !details.url) return;
     const url = canonicalizeUrl(details.url);
     if (!url) return;
+    const routeGeneration = currentTabGeneration(details.tabId);
+    const documentId = cleanText(details.documentId, 128);
     // Bind a Bilibili request to the tab generation in which it started. A
     // response from the previous History API route must not be classified
     // against the URL that happens to be current when the response arrives.
@@ -230,9 +279,19 @@ chrome.webRequest.onBeforeSendHeaders.addListener(
       headers[key] = header.value;
       capturedBytes += bytes;
     }
-    if (Object.keys(headers).length || bilibiliGeneration) {
-      pendingRequestHeaders.set(details.requestId, { headers, at: Date.now(), tabId: details.tabId, url, bilibiliGeneration });
-    }
+    // Keep a bounded route record even when no reusable headers exist. A later
+    // response without the generation/document that initiated it must not be
+    // attached to whatever page happens to occupy the tab after navigation.
+    pendingRequestHeaders.set(details.requestId, {
+      headers,
+      bytes: capturedBytes,
+      at: Date.now(),
+      tabId: details.tabId,
+      url,
+      routeGeneration,
+      documentId,
+      bilibiliGeneration
+    });
     pruneHeaders();
   },
   { urls: ["http://*/*", "https://*/*"], types: ["media", "xmlhttprequest", "other"] },
@@ -256,7 +315,14 @@ chrome.webRequest.onHeadersReceived.addListener(
     });
     const pending = pendingRequestHeaders.get(details.requestId);
     pendingRequestHeaders.delete(details.requestId);
-    if (classification?.kind === "segment") {
+    const routeIsCurrent = Boolean(
+      pending
+      && pending.tabId === details.tabId
+      && pending.routeGeneration
+      && tabGenerations.get(details.tabId) === pending.routeGeneration
+      && (!pending.documentId || pending.documentId === cleanText(details.documentId, 128))
+    );
+    if (routeIsCurrent && classification?.kind === "segment") {
       queueBilibiliDashObservation(details, {
         mime,
         contentLength,
@@ -264,7 +330,7 @@ chrome.webRequest.onHeadersReceived.addListener(
         headers: nonSensitiveMediaHeaders(pending?.headers)
       }, pending?.bilibiliGeneration);
     }
-    if (classification && classification.kind !== "segment" && pending?.headers && !isPolicyBlocked(details.url)) {
+    if (routeIsCurrent && classification && classification.kind !== "segment" && pending?.headers && !isPolicyBlocked(details.url)) {
       const finalUrl = canonicalizeUrl(details.url);
       if (finalUrl) {
         const promotedHeaders = sameOrigin(pending.url, finalUrl)
@@ -272,6 +338,7 @@ chrome.webRequest.onHeadersReceived.addListener(
           : Object.fromEntries(Object.entries(pending.headers).filter(([key]) => !SENSITIVE_REQUEST_HEADERS.has(key)));
         requestHeaders.set(headerKey(details.tabId, finalUrl), {
           headers: promotedHeaders,
+          bytes: capturedHeadersByteLength(promotedHeaders),
           at: Date.now(),
           tabId: details.tabId,
           requestId: details.requestId
@@ -279,7 +346,7 @@ chrome.webRequest.onHeadersReceived.addListener(
         scheduleHeaderPrune();
       }
     }
-    if (!classification || classification.kind === "segment") return;
+    if (!routeIsCurrent || !classification || classification.kind === "segment") return;
     void addCandidate(details.tabId, {
       url: details.url,
       mime,
@@ -287,10 +354,12 @@ chrome.webRequest.onHeadersReceived.addListener(
       resourceType: details.type,
       rangeSupported: rangeLength > 0 || /bytes/i.test(headers["accept-ranges"] || ""),
       suggestedFilename,
+      routeGeneration: pending.routeGeneration,
+      documentId: pending.documentId,
       source: "webRequest",
       provenance: "observed_response",
       ...classification
-    });
+    }, () => tabGenerations.get(details.tabId) === pending.routeGeneration);
   },
   { urls: ["http://*/*", "https://*/*"], types: ["media", "xmlhttprequest", "other"] },
   ["responseHeaders", "extraHeaders"]
@@ -311,17 +380,21 @@ chrome.runtime.onConnect.addListener((port) => {
     hostClients.delete(port);
     if (port.name !== "fluxcatch-popup") return;
     popupClients.delete(port);
-    // The popup is a short-lived progress surface rather than a permanent
-    // download-history page. Once its last window closes, discard only jobs
-    // that have already ended; active downloads continue in the background.
-    if (popupClients.size === 0) void clearTerminalJobsAfterRestore();
+    // Job history is shared with the persistent Side Panel. Closing a transient
+    // popup must never mutate that shared state; ended jobs are removed only by
+    // the explicit CLEAR_COMPLETED_JOBS action.
   });
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   handleMessage(message, sender)
     .then((result) => sendResponse({ ok: true, ...result }))
-    .catch((error) => sendResponse({ ok: false, error: error?.message || String(error) }));
+    .catch((error) => {
+      const response = { ok: false, error: error?.message || String(error) };
+      const jobId = cleanText(error?.jobId, 128);
+      if (jobId) response.jobId = jobId;
+      sendResponse(response);
+    });
   return true;
 });
 
@@ -354,8 +427,73 @@ chrome.downloads.onChanged.addListener((delta) => {
   void updateBrowserDownload(delta);
 });
 
+function recoverableSiteForPage(url) {
+  try {
+    const page = new URL(url);
+    const host = page.hostname.toLowerCase();
+    if (siteAdapterForPageUrl(page.href)?.id === "instagram") return "instagram";
+    if (page.protocol === "https:"
+      && (host === "x.com" || host.endsWith(".x.com") || host === "twitter.com" || host.endsWith(".twitter.com"))) return "twitter";
+  } catch { /* Non-web tabs have no site cache. */ }
+  return "";
+}
+
+async function refreshCachedSiteCandidates(tabId) {
+  if (siteCandidateRecoveryInFlight.has(tabId)) return siteCandidateRecoveryInFlight.get(tabId);
+  const routeGeneration = currentTabGeneration(tabId);
+  const routeGuard = () => tabGenerations.get(tabId) === routeGeneration;
+  const task = (async () => {
+    if (typeof chrome.tabs.sendMessage !== "function") return;
+    let tab;
+    try { tab = await chrome.tabs.get(tabId); } catch { return; }
+    const startUrl = canonicalizeUrl(tab?.url);
+    const site = recoverableSiteForPage(startUrl);
+    if (!site) return;
+    const current = [...(tabMedia.get(tabId)?.values() || [])];
+    const alreadyRecovered = site === "instagram"
+      ? current.some((item) => candidateHasSource(item, "instagram-api-response") && isTrustedInstagramBrowserDirectCandidate(item))
+      : current.some((item) => isTrustedXBrowserDirectCandidate(item));
+    if (alreadyRecovered) return;
+
+    let response;
+    try {
+      response = await chrome.tabs.sendMessage(tabId, { type: "GET_CACHED_SITE_MEDIA" }, { frameId: 0 });
+    } catch { return; }
+    const items = Array.isArray(response?.items) ? response.items.slice(0, 64) : [];
+    if (!items.length) return;
+    let liveTab;
+    try { liveTab = await chrome.tabs.get(tabId); } catch { return; }
+    if (!routeGuard() || canonicalizeUrl(liveTab?.url) !== startUrl) return;
+    const sender = { id: chrome.runtime.id, frameId: 0, url: startUrl, tab: liveTab };
+    for (const item of items) {
+      const validated = await validateContentCandidate(item, sender);
+      if (validated && routeGuard()) await addCandidate(tabId, {
+        ...validated,
+        routeGeneration
+      }, routeGuard);
+    }
+  })();
+  siteCandidateRecoveryInFlight.set(tabId, task);
+  try {
+    await task;
+  } finally {
+    if (siteCandidateRecoveryInFlight.get(tabId) === task) siteCandidateRecoveryInFlight.delete(tabId);
+  }
+}
+
 async function handleMessage(message, sender) {
   if (!message || typeof message.type !== "string") throw new Error("消息格式无效");
+  const earlyContentSender = CONTENT_MESSAGE_TYPES.has(message.type) && isContentSender(sender);
+  const contentRoute = earlyContentSender ? {
+    tabId: sender.tab.id,
+    generation: currentTabGeneration(sender.tab.id),
+    documentId: cleanText(sender.documentId, 128),
+    tabUrl: canonicalizeUrl(sender.tab?.url)
+  } : null;
+  const contentRouteGuard = () => Boolean(
+    contentRoute
+    && tabGenerations.get(contentRoute.tabId) === contentRoute.generation
+  );
   await sessionReady;
   const fromContent = isContentSender(sender);
   const fromExtensionPage = isExtensionPage(sender);
@@ -365,20 +503,33 @@ async function handleMessage(message, sender) {
   switch (message.type) {
     case "CONTENT_MEDIA": {
       const tabId = sender.tab?.id;
+      if (!contentRouteGuard()) return { ignored: true };
       const data = await validateContentCandidate(message.data, sender);
-      if (!data) return { ignored: true };
-      await addCandidate(tabId, data);
-      return { accepted: true };
+      if (!data || !contentRouteGuard()) return { ignored: true };
+      let liveTab;
+      try { liveTab = await chrome.tabs.get(tabId); } catch { return { ignored: true }; }
+      if (!contentRouteGuard() || (contentRoute.tabUrl && canonicalizeUrl(liveTab?.url) !== contentRoute.tabUrl)) return { ignored: true };
+      const accepted = await addCandidate(tabId, {
+        ...data,
+        routeGeneration: contentRoute.generation,
+        documentId: contentRoute.documentId
+      }, contentRouteGuard);
+      return accepted ? { accepted: true } : { ignored: true };
     }
     case "PAGE_PREVIEW": {
       const tabId = sender.tab?.id;
+      if (!contentRouteGuard()) return { ignored: true };
       const preview = await validatePagePreview(message.data, sender);
-      if (!preview) return { ignored: true };
-      await setTabPreview(tabId, preview);
-      return { accepted: true };
+      if (!preview || !contentRouteGuard()) return { ignored: true };
+      await setTabPreview(tabId, preview, contentRouteGuard);
+      return contentRouteGuard() ? { accepted: true } : { ignored: true };
     }
     case "GET_TAB_MEDIA": {
       const tabId = validTabId(message.tabId);
+      // Signed site URLs are intentionally excluded from storage.session. A
+      // still-open content script keeps a small, page-scoped memory cache so a
+      // restarted MV3 worker can recover the current Instagram/X candidate.
+      await refreshCachedSiteCandidates(tabId);
       await expireBilibiliState(tabId);
       // Reading the current media list is deliberately side-effect free for
       // site discovery. Opening or closing popup/Side Panel must not be what
@@ -403,11 +554,11 @@ async function handleMessage(message, sender) {
     }
     case "CLEAR_TAB": {
       const tabId = validTabId(message.tabId);
+      try { await chrome.tabs.sendMessage(tabId, { type: "CLEAR_CACHED_SITE_MEDIA" }, { frameId: 0 }); } catch { /* restricted or closed page */ }
       dropTabState(tabId);
       await persistSession();
       await updateBadge(tabId);
-      const cleared = await clearTerminalJobs();
-      return { removedJobs: cleared.removed, jobs: cleared.jobs };
+      return { removedJobs: 0, jobs: jobsForUi() };
     }
     case "SCAN_TAB": {
       const tabId = validTabId(message.tabId);
@@ -511,7 +662,7 @@ async function handleMessage(message, sender) {
       const requested = normalizeSettings(message.settings);
       const settings = {
         ...requested,
-        // The 0.2.4 build gate is closed. A caller cannot persist the
+        // The 0.2.5 build gate is closed. A caller cannot persist the
         // experimental switch by forging a capability response.
         youtubeEnabled: requested.youtubeEnabled && ytdlpNetworkAllowed()
       };
@@ -737,9 +888,12 @@ async function refreshTabBadge(tabId) {
 // settings; turning it off withdraws the candidate everywhere.
 async function maybeAddYouTubeCandidate(tabId) {
   if (!Number.isInteger(tabId) || tabId < 0) return;
+  const routeGeneration = currentTabGeneration(tabId);
+  const commitGuard = () => tabGenerations.get(tabId) === routeGeneration;
   let tab;
   try { tab = await chrome.tabs.get(tabId); } catch { return; }
   const settings = await getSettings();
+  if (!commitGuard()) return;
   const watchUrl = settings.youtubeEnabled && !ytdlpNetworkDisabled() ? youtubeWatchUrl(tab?.url) : null;
   const map = tabMedia.get(tabId);
   if (!watchUrl) {
@@ -758,8 +912,9 @@ async function maybeAddYouTubeCandidate(tabId) {
     source: "site-adapter",
     provenance: "site_payload",
     site: "youtube",
-    confidence: 1
-  });
+    confidence: 1,
+    routeGeneration
+  }, commitGuard);
 }
 
 async function removeYouTubeCandidatesFromTab(tabId, map) {
@@ -950,7 +1105,13 @@ async function observeBilibiliDashTrack(details, observation, classified, tabTok
   else state.currentAudioIdentity = classified.identity;
   const safeHeaders = nonSensitiveMediaHeaders(observation.headers);
   if (Object.keys(safeHeaders).length) {
-    requestHeaders.set(headerKey(details.tabId, url), { headers: safeHeaders, at: now, tabId: details.tabId, requestId: details.requestId });
+    requestHeaders.set(headerKey(details.tabId, url), {
+      headers: safeHeaders,
+      bytes: capturedHeadersByteLength(safeHeaders),
+      at: now,
+      tabId: details.tabId,
+      requestId: details.requestId
+    });
     scheduleHeaderPrune();
   }
   await publishBilibiliDashPair(details.tabId, tab, tabToken);
@@ -1285,8 +1446,15 @@ async function addCandidate(tabId, input, commitGuard = null) {
   await sessionReady;
   if (commitGuard && !commitGuard()) return false;
   if (!Number.isInteger(tabId) || tabId < 0) return;
+  const routeGeneration = cleanText(input?.routeGeneration, 64);
+  if (routeGeneration && tabGenerations.get(tabId) !== routeGeneration) return false;
   const url = canonicalizeUrl(input.url);
   if (!url) return;
+  // Never persist Meta's query-addressed MediaSource fragments. This guard is
+  // intentionally before input.kind so neither a stale worker nor a trusted
+  // adapter can accidentally override the classifier and recreate the old
+  // broken MP4 rows.
+  if (isInstagramByteRangeFragment(url)) return;
   // Content scripts may already have classified an URL before this worker was
   // upgraded.  Recheck here so caption/text-track manifests never become HLS
   // video rows even when input.kind was supplied by the page.
@@ -1313,16 +1481,33 @@ async function addCandidate(tabId, input, commitGuard = null) {
   if (kind !== "hls" && kind !== "dash" && Number(input.contentLength || 0) > 0 && Number(input.contentLength) < settings.minimumBytes) return;
 
   const incomingPreview = previewFromCandidate(input);
-  if (incomingPreview) await setTabPreview(tabId, incomingPreview);
+  if (incomingPreview) await setTabPreview(tabId, incomingPreview, commitGuard);
   if (commitGuard && !commitGuard()) return false;
 
   let map = tabMedia.get(tabId);
   if (!map) tabMedia.set(tabId, (map = new Map()));
+  if (input.source !== "instagram-api-response"
+    && kind === "video"
+    && siteAdapterForMediaUrl(url)?.id === "instagram"
+    && [...map.values()].some((existing) => existing?.kind === "video"
+      && existing.url !== url
+      && candidateHasSource(existing, "instagram-api-response"))) return false;
+  if (input.source === "instagram-api-response") {
+    // The response observer is shortcode-bound and yields one best complete
+    // rendition. Replace lower-confidence metadata, stale signatures and
+    // recommendation rows for this Reel instead of presenting duplicate jobs.
+    for (const [existingKey, existing] of map) {
+      if (existing?.kind === "video"
+        && siteAdapterForMediaUrl(existing.url)?.id === "instagram"
+        && existing.url !== url) map.delete(existingKey);
+    }
+  }
   const key = `${kind}:${url}`;
   const old = map.get(key);
   let tab = null;
   if (!old && (!input.pageTitle || !input.tabUrl)) {
     try { tab = await chrome.tabs.get(tabId); } catch { /* tab closed */ }
+    if (commitGuard && !commitGuard()) return false;
   }
   const now = Date.now();
   const sources = new Set([...(old?.sources || []), input.source || "unknown"]);
@@ -1364,7 +1549,8 @@ async function addCandidate(tabId, input, commitGuard = null) {
   if (kind === "dash_pair" && (!selectedVideo || !selectedAudio || !Number.isFinite(pairExpiresAt) || pairExpiresAt <= now)) return false;
   const candidate = {
     id: old?.id || reusableOpaqueId(input.id),
-    generation: old?.generation || currentTabGeneration(tabId),
+    generation: old?.generation || routeGeneration || currentTabGeneration(tabId),
+    documentId: cleanText(input.documentId, 128) || old?.documentId || "",
     url,
     kind,
     mime,
@@ -1439,9 +1625,50 @@ async function addCandidate(tabId, input, commitGuard = null) {
 }
 
 function provenanceForContentSource(source) {
+  // MAIN-world response observers are bounded site hints, not an authenticity
+  // boundary: page JavaScript can post the same message channel. Exact page,
+  // CDN, MIME and path checks decide whether a user-selected direct download
+  // may stay in Chrome.
+  if (source === "x-api-response" || source === "instagram-api-response") return "site_payload";
   if (source === "metadata") return "dom_metadata";
   if (source === "site-payload") return "site_payload";
   return "dom_media_element";
+}
+
+function isTrustedXProgressiveCandidate(url, source, sender) {
+  if (source !== "x-api-response" || sender?.frameId !== 0) return false;
+  try {
+    const page = new URL(sender?.tab?.url || sender?.url || "");
+    const media = new URL(url);
+    const pageHost = page.hostname.toLowerCase();
+    return page.protocol === "https:"
+      && (pageHost === "x.com" || pageHost.endsWith(".x.com") || pageHost === "twitter.com" || pageHost.endsWith(".twitter.com"))
+      && media.protocol === "https:"
+      && !media.username
+      && !media.password
+      && media.hostname.toLowerCase() === "video.twimg.com";
+  } catch {
+    return false;
+  }
+}
+
+function isTrustedInstagramProgressiveCandidate(url, source, sender) {
+  if (source !== "instagram-api-response" || sender?.frameId !== 0) return false;
+  try {
+    const page = new URL(sender?.tab?.url || sender?.url || "");
+    const media = new URL(url);
+    return siteAdapterForPageUrl(page.href)?.id === "instagram"
+      && media.protocol === "https:"
+      && !media.username
+      && !media.password
+      && siteAdapterForMediaUrl(media.href)?.id === "instagram"
+      && /\.mp4$/i.test(media.pathname)
+      && !isInstagramByteRangeFragment(media.href)
+      && !media.searchParams.has("bytestart")
+      && !media.searchParams.has("byteend");
+  } catch {
+    return false;
+  }
 }
 
 function deriveCandidateProvenance(input, previous) {
@@ -1507,6 +1734,10 @@ async function validateContentCandidate(data, sender) {
   const tab = sender.tab;
   const manifestText = typeof data.manifestText === "string" && data.manifestText.length <= 1_500_000 ? data.manifestText : null;
   const source = cleanText(data.source, 40);
+  if (source === "x-api-response"
+    && (!isTrustedXProgressiveCandidate(url, source, sender) || normalizeMime(data.mime) !== "video/mp4")) return null;
+  if (source === "instagram-api-response"
+    && (!isTrustedInstagramProgressiveCandidate(url, source, sender) || normalizeMime(data.mime) !== "video/mp4")) return null;
   const preview = cleanText(data.thumbnailSource, 40) === "poster"
     ? await validateThumbnailPreview(data.thumbnailUrl, "poster", sender)
     : null;
@@ -1599,8 +1830,9 @@ function samePreview(first, second) {
     && first?.thumbnailFrameId === second?.thumbnailFrameId;
 }
 
-async function setTabPreview(tabId, preview) {
+async function setTabPreview(tabId, preview, commitGuard = null) {
   if (!Number.isInteger(tabId) || tabId < 0 || !preview) return;
+  if (commitGuard && !commitGuard()) return;
   const previous = tabPreviews.get(tabId);
   const selected = choosePreview(tabPreviews.get(tabId), preview);
   tabPreviews.set(tabId, selected);
@@ -1620,6 +1852,7 @@ async function setTabPreview(tabId, preview) {
   }
   if (!changed.length && !previewChanged) return;
   await persistSession();
+  if (commitGuard && !commitGuard()) return;
   for (const candidate of changed) {
     broadcast({ type: "MEDIA_UPDATED", tabId, item: withoutManifestText(candidate) });
   }
@@ -1731,14 +1964,22 @@ function strongDeliveryPathIdentity(pathname) {
 function manifestIdentityKeys(value) {
   const url = canonicalizeUrl(value);
   if (!url) return [];
+  // Query parameters may be the only asset identity on manifest endpoints.
+  // Candidate-to-candidate identity therefore remains exact. Cross-host or
+  // re-signed aliases are joined only through an explicit manifest reference
+  // (below) or a verified body fingerprint.
+  return [`url:${url}`];
+}
+
+function manifestReferenceIdentityKeys(value) {
+  const url = canonicalizeUrl(value);
+  if (!url) return [];
   try {
     const parsed = new URL(url);
-    const queryless = `${parsed.origin}${parsed.pathname}`;
     return uniqueCleanTexts([
       `url:${url}`,
-      `origin-path:${queryless}`,
       strongDeliveryPathIdentity(parsed.pathname)
-    ], MAX_MANIFEST_IDENTITY_KEY_LENGTH, 3);
+    ], MAX_MANIFEST_IDENTITY_KEY_LENGTH, 2);
   } catch {
     return [];
   }
@@ -1787,6 +2028,7 @@ function regroupManifestCandidates(tabId) {
     if (a !== b) parent[b] = a;
   };
   const byIdentity = new Map();
+  const byReferenceIdentity = new Map();
   const byFingerprint = new Map();
   for (const [index, candidate] of candidates.entries()) {
     candidate.mergedInto = null;
@@ -1798,6 +2040,11 @@ function regroupManifestCandidates(tabId) {
       matches.push(index);
       byIdentity.set(identity, matches);
     }
+    for (const identity of manifestIdentityUrls(candidate).flatMap(manifestReferenceIdentityKeys)) {
+      const matches = byReferenceIdentity.get(identity) || [];
+      matches.push(index);
+      byReferenceIdentity.set(identity, matches);
+    }
     if (candidate.manifestFingerprint) {
       const previous = byFingerprint.get(candidate.manifestFingerprint);
       if (previous !== undefined) union(index, previous);
@@ -1806,8 +2053,8 @@ function regroupManifestCandidates(tabId) {
   }
   for (const [index, candidate] of candidates.entries()) {
     for (const reference of normalizeUrlList(candidate.manifestReferences)) {
-      for (const identity of manifestIdentityKeys(reference)) {
-        for (const target of byIdentity.get(identity) || []) union(index, target);
+      for (const identity of manifestReferenceIdentityKeys(reference)) {
+        for (const target of byReferenceIdentity.get(identity) || []) union(index, target);
       }
     }
   }
@@ -2150,14 +2397,11 @@ function probeForUi(probe, candidate) {
 function hlsUnsupportedReason(probe) {
   if (probe?.kind !== "hls") return null;
   if (probe.protection === "drm" || probe.protected) return "检测到 DRM/SAMPLE-AES 内容保护，仅显示媒体信息";
-  if (probe.protection === "aes128" || probe.encrypted) return "FluxCatch 0.2.4 暂不支持 AES-128 加密的 HLS 下载";
+  if (probe.protection === "aes128" || probe.encrypted) return "FluxCatch 0.2.5 暂不支持 AES-128 加密的 HLS 下载";
   // A master playlist has no EXT-X-ENDLIST of its own. Its selected media
   // playlist is revalidated by the native host before any segment is fetched.
-  if (probe.type === "media" && probe.live) return "FluxCatch 0.2.4 暂不支持 HLS 直播录制";
-  if (probe.discontinuity) return "FluxCatch 0.2.4 暂不支持包含时间线切换的 HLS 下载";
-  if ((probe.audioTracks || []).length > 0 || (probe.variants || []).some((item) => item.audioGroup)) {
-    return "FluxCatch 0.2.4 暂不支持独立音轨 HLS 下载";
-  }
+  if (probe.type === "media" && probe.live) return "FluxCatch 0.2.5 暂不支持 HLS 直播录制";
+  if (probe.discontinuity) return "FluxCatch 0.2.5 暂不支持包含时间线切换的 HLS 下载";
   return null;
 }
 
@@ -2281,14 +2525,29 @@ async function startDownload(candidate, options, tabId) {
       // native host can still use the request headers observed for this tab.
     }
   }
+  const preDispatchCandidate = requireTabCandidate(tabId, candidate);
+  if (preDispatchCandidate.kind !== candidate.kind
+    || (candidate.kind !== "dash_pair" && canonicalizeUrl(preDispatchCandidate.url) !== canonicalizeUrl(candidate.url))) {
+    throw new Error("该媒体候选项已更新，请重新选择后下载");
+  }
+  candidate = preDispatchCandidate;
   const pageTitle = candidate.pageTitle || candidate.title || "media";
   const requestedName = cleanText(options.filename, 200) || renderFilename(candidate, settings.filenameTemplate, pageTitle);
   const filename = sanitizeFilename(requestedName);
   // chrome.downloads follows redirects outside the worker's fetch policy.
-  // Only a final media response observed by webRequest may use that path;
-  // DOM/site hints are delegated to the native host, which revalidates every
-  // redirect and address before connecting.
-  const browserDirectEligible = candidate.provenance === "observed_response";
+  // Keep the generic path limited to a final response observed by webRequest;
+  // the only site-payload exceptions below are complete Instagram/X MP4s with
+  // exact top-frame, provenance, scheme, CDN-host and fragment checks.
+  const instagramBrowserDirect = isTrustedInstagramBrowserDirectCandidate(candidate);
+  const xBrowserDirect = isTrustedXBrowserDirectCandidate(candidate);
+  // Browser download APIs expose neither DNS answers nor connected peer IPs,
+  // and redirects escape this worker's policy hook. In public-only mode the
+  // generic observed-response path therefore uses the pinned native broker.
+  // The two browser exceptions are fixed page/CDN/provenance allowlists above.
+  const browserDirectEligible = instagramBrowserDirect || xBrowserDirect;
+  // A strictly allow-listed Instagram/X MP4 may stay in Chrome by default.
+  // The explicit useNativeForDirect preference is still honored so users can
+  // opt those final browser exceptions into the pinned native path as well.
   const advanced = candidate.kind === "hls" || candidate.kind === "dash" || candidate.kind === "dash_pair" || candidate.kind === "youtube"
     || opts.extractAudio || opts.convert || opts.useNativeForDirect || !browserDirectEligible;
   const requestedVariantUrl = dashPair ? null : resolveManifestVariantSelector(candidate, options.variantUrl);
@@ -2339,13 +2598,17 @@ async function startDownload(candidate, options, tabId) {
   if (!await hasNativePermission()) throw new Error("需要授权连接本地引擎，才能使用此下载模式");
   const port = await ensureNativePort();
   if (candidate.kind === "youtube" && ytdlpNetworkDisabled()) {
-    throw new Error("0.2.4 暂停外部引擎联网，等待受控网络代理");
+    throw new Error("0.2.5 暂停外部引擎联网，等待受控网络代理");
   }
+  const finalCandidate = requireTabCandidate(tabId, candidate);
+  if (!dashPair && (finalCandidate.kind !== candidate.kind || canonicalizeUrl(finalCandidate.url) !== canonicalizeUrl(candidate.url))) {
+    throw new Error("该媒体候选项已更新，请重新选择后下载");
+  }
+  candidate = finalCandidate;
   if (dashPair) {
     // Permission prompts and native-host startup are asynchronous. Resolve the
     // candidate again at the final dispatch boundary so navigation, a newer
     // signature, or TTL expiry cannot leave a stale pair queued in the host.
-    candidate = requireTabCandidate(tabId, candidate);
     dashPair = selectDashPairTracks(candidate, options.variantUrl);
     url = dashPair.video.url;
     requireNetworkRequest({
@@ -2434,7 +2697,9 @@ async function startDownload(candidate, options, tabId) {
     jobHeaderKeys.delete(jobId);
     scheduleHeaderPrune();
     await mergeJob(jobId, { status: "failed", message: error?.message || "本地引擎未接收任务", error: error?.message, speed: 0 });
-    throw error;
+    const dispatchError = new Error(error?.message || "本地引擎未接收任务");
+    dispatchError.jobId = jobId;
+    throw dispatchError;
   }
   return { method: "native", jobId };
 }
@@ -2465,12 +2730,21 @@ async function ensureNativePort({ requireCompatibility = true } = {}) {
 async function openNativePort() {
   if (!await hasNativePermission()) throw new Error("尚未授权连接本地引擎");
   if (!await waitForNativeMessagingApi()) {
+    const marker = await readNativeApiRecoveryMarker();
+    const message = marker?.phase === "restart_required"
+      ? NATIVE_API_RESTART_MESSAGE
+      : NATIVE_API_UNAVAILABLE_MESSAGE;
     hostStatus = disconnectedHostStatus({
       failureReason: "api_unavailable",
-      lastError: NATIVE_API_UNAVAILABLE_MESSAGE
+      lastError: message,
+      restartRequired: marker?.phase === "restart_required"
     });
-    throw new Error(NATIVE_API_UNAVAILABLE_MESSAGE);
+    throw new Error(message);
   }
+  // The binding itself is the recovery signal. Clear stale waiting/terminal
+  // guidance before attempting the host so every recheck converges in one
+  // action even when Chrome restored the API between UI sessions.
+  await clearNativeApiRecoveryMarker();
   // The optional permission may be removed while the worker is waiting for
   // Chrome to expose connectNative. Never connect on a stale permission read.
   if (!await hasNativePermission()) {
@@ -2535,26 +2809,62 @@ async function recoverNativeMessagingApi() {
     return { retryAfterMs: 0, recoveryBlocked: false, hostStatus: hostStatusForUi(hostStatus) };
   }
   if (typeof chrome.runtime.connectNative === "function") {
+    await clearNativeApiRecoveryMarker();
     try { await ensureNativePort({ requireCompatibility: false }); } catch { /* Public status describes the failure. */ }
     return { retryAfterMs: 0, recoveryBlocked: false, hostStatus: hostStatusForUi(hostStatus) };
   }
 
   const marker = await readNativeApiRecoveryMarker();
+  if (marker?.phase === "restart_required") {
+    hostStatus = disconnectedHostStatus({
+      failureReason: "api_unavailable",
+      lastError: NATIVE_API_RESTART_MESSAGE,
+      restartRequired: true
+    });
+    return {
+      retryAfterMs: 0,
+      recoveryBlocked: true,
+      restartRequired: true,
+      hostStatus: hostStatusForUi(hostStatus)
+    };
+  }
   if (marker?.phase === "resumed") {
-    hostStatus = disconnectedHostStatus({ failureReason: "api_unavailable", lastError: NATIVE_API_UNAVAILABLE_MESSAGE });
-    return { retryAfterMs: 0, recoveryBlocked: true, hostStatus: hostStatusForUi(hostStatus) };
+    const resumeCount = Math.min(
+      NATIVE_API_RECOVERY_RESUME_LIMIT,
+      nativeApiRecoveryResumeCount(marker) + 1
+    );
+    const nextMarker = resumeCount >= NATIVE_API_RECOVERY_RESUME_LIMIT
+      ? { ...marker, phase: "restart_required", resumeCount }
+      : { ...marker, resumeCount };
+    if (!await writeNativeApiRecoveryMarker(nextMarker)) {
+      hostStatus = disconnectedHostStatus({ needsPermission: true });
+      return { retryAfterMs: 0, recoveryBlocked: false, hostStatus: hostStatusForUi(hostStatus) };
+    }
+    const restartRequired = nextMarker.phase === "restart_required";
+    const message = restartRequired ? NATIVE_API_RESTART_MESSAGE : NATIVE_API_UNAVAILABLE_MESSAGE;
+    hostStatus = disconnectedHostStatus({ failureReason: "api_unavailable", lastError: message, restartRequired });
+    return {
+      retryAfterMs: 0,
+      recoveryBlocked: restartRequired,
+      restartRequired,
+      hostStatus: hostStatusForUi(hostStatus)
+    };
   }
   if (marker?.phase === "waiting") {
     const retryAfterMs = Math.max(0, marker.retryAt - Date.now());
     if (retryAfterMs > 0) {
       return { retryAfterMs, recoveryBlocked: false, hostStatus: hostStatusForUi(hostStatus) };
     }
-    if (!await writeNativeApiRecoveryMarker({ ...marker, phase: "resumed" })) {
+    if (!await writeNativeApiRecoveryMarker({
+      ...marker,
+      phase: "resumed",
+      resumeCount: Math.min(NATIVE_API_RECOVERY_RESUME_LIMIT, nativeApiRecoveryResumeCount(marker) + 1)
+    })) {
       hostStatus = disconnectedHostStatus({ needsPermission: true });
       return { retryAfterMs: 0, recoveryBlocked: false, hostStatus: hostStatusForUi(hostStatus) };
     }
     hostStatus = disconnectedHostStatus({ failureReason: "api_unavailable", lastError: NATIVE_API_UNAVAILABLE_MESSAGE });
-    return { retryAfterMs: 0, recoveryBlocked: true, hostStatus: hostStatusForUi(hostStatus) };
+    return { retryAfterMs: 0, recoveryBlocked: false, restartRequired: false, hostStatus: hostStatusForUi(hostStatus) };
   }
 
   const now = Date.now();
@@ -2562,7 +2872,8 @@ async function recoverNativeMessagingApi() {
     phase: "waiting",
     requestedAt: now,
     retryAt: now + NATIVE_API_RECOVERY_WAIT_MS,
-    expiresAt: now + NATIVE_API_RECOVERY_TTL_MS
+    expiresAt: now + NATIVE_API_RECOVERY_TTL_MS,
+    resumeCount: 0
   };
   if (!await writeNativeApiRecoveryMarker(waiting)) {
     hostStatus = disconnectedHostStatus({ needsPermission: true });
@@ -2587,23 +2898,49 @@ async function prepareNativeApiRecoveryAtStartup() {
   }
   const current = await readNativeApiRecoveryMarker();
   if (current?.phase !== "waiting" || current.requestedAt !== marker.requestedAt) return;
-  await chrome.storage.local.set({ [NATIVE_API_RECOVERY_KEY]: { ...current, phase: "resumed" } });
-  // onRemoved and startup initialization can interleave around storage I/O.
-  // A post-write permission check makes either ordering converge on a cleared
-  // marker instead of blocking the user's next legitimate authorization.
-  if (!await hasNativePermission()) await clearNativeApiRecoveryMarker();
+  const resumeCount = Math.min(
+    NATIVE_API_RECOVERY_RESUME_LIMIT,
+    nativeApiRecoveryResumeCount(current) + 1
+  );
+  await writeNativeApiRecoveryMarker({
+    ...current,
+    phase: resumeCount >= NATIVE_API_RECOVERY_RESUME_LIMIT ? "restart_required" : "resumed",
+    resumeCount
+  });
 }
 
 async function readNativeApiRecoveryMarker() {
   let stored;
   try { stored = (await chrome.storage.local.get(NATIVE_API_RECOVERY_KEY))?.[NATIVE_API_RECOVERY_KEY]; } catch { return null; }
-  const valid = stored && (stored.phase === "waiting" || stored.phase === "resumed")
+  const valid = stored && ["waiting", "resumed", "restart_required"].includes(stored.phase)
     && Number.isFinite(stored.requestedAt) && Number.isFinite(stored.retryAt) && Number.isFinite(stored.expiresAt)
     && stored.retryAt >= stored.requestedAt && stored.retryAt <= stored.expiresAt
-    && stored.expiresAt > Date.now() && stored.expiresAt - stored.requestedAt <= NATIVE_API_RECOVERY_TTL_MS;
-  if (valid) return stored;
+    && stored.expiresAt - stored.requestedAt <= NATIVE_API_RECOVERY_TTL_MS;
+  if (valid) {
+    const normalized = { ...stored, resumeCount: nativeApiRecoveryResumeCount(stored) };
+    if (stored.phase === "restart_required") return normalized;
+    if (stored.expiresAt > Date.now()) return normalized;
+    // An expired recovery attempt is evidence that Chrome never restored the
+    // API. Preserve that outcome instead of clearing it and starting the same
+    // waiting -> resumed -> expired loop again.
+    const terminal = {
+      ...normalized,
+      phase: "restart_required",
+      resumeCount: NATIVE_API_RECOVERY_RESUME_LIMIT
+    };
+    return await writeNativeApiRecoveryMarker(terminal) ? terminal : null;
+  }
   if (stored) await clearNativeApiRecoveryMarker();
   return null;
+}
+
+function nativeApiRecoveryResumeCount(marker) {
+  if (Number.isInteger(marker?.resumeCount) && marker.resumeCount >= 0) {
+    return Math.min(NATIVE_API_RECOVERY_RESUME_LIMIT, marker.resumeCount);
+  }
+  if (marker?.phase === "resumed") return 1;
+  if (marker?.phase === "restart_required") return NATIVE_API_RECOVERY_RESUME_LIMIT;
+  return 0;
 }
 
 async function clearNativeApiRecoveryMarker() {
@@ -2617,10 +2954,10 @@ async function handleNativePermissionRemoved() {
   const port = nativePort;
   nativePort = null;
   hostStatus = disconnectedHostStatus({ needsPermission: true });
-  rejectHostPings(port, new Error("高速下载功能授权已关闭"));
+  rejectHostPings(port, new Error("本地下载引擎权限已关闭"));
   try { port?.disconnect?.(); } catch { /* The port may already be closed. */ }
   await clearNativeApiRecoveryMarker();
-  await handleNativeDisconnect("高速下载功能授权已关闭");
+  await handleNativeDisconnect("本地下载引擎权限已关闭");
 }
 
 async function waitForNativeMessagingApi() {
@@ -2682,10 +3019,11 @@ function rejectHostPings(port, error) {
 
 async function handleNativeHostMessage(message) {
   const jobId = cleanText(message?.jobId, 128);
+  let updatedJob = null;
   if (jobId) {
     const status = nativeJobStatus(message);
     if (status) {
-      await mergeJob(jobId, {
+      updatedJob = await mergeJob(jobId, {
         method: "native",
         filename: cleanText(message.filename, 180) || undefined,
         status,
@@ -2695,12 +3033,14 @@ async function handleNativeHostMessage(message) {
         total: message.total ?? message.size,
         message: cleanText(message.message, 240) || undefined,
         error: cleanText(message.error, 240) || undefined
+      }, {
+        deferPersistence: message?.type === "progress" && status === "downloading"
       });
       if (TERMINAL_JOB_STATUSES.has(status)) cleanupJobHeaders(jobId);
     }
   }
   broadcast({ type: "HOST_EVENT", event: hostEventForUi(message), hostStatus: hostStatusForUi(hostStatus) });
-  await maybeNotifyHostEvent(message);
+  if (updatedJob && ["completed", "failed"].includes(updatedJob.status)) await maybeNotifyJob(updatedJob);
 }
 
 async function handleNativeDisconnect(error) {
@@ -2719,6 +3059,7 @@ async function handleNativeDisconnect(error) {
     hostStatus: hostStatusForUi(hostStatus)
   });
   for (const job of updates) broadcast({ type: "JOB_UPDATED", job: jobForUi(job) });
+  for (const job of updates) await maybeNotifyJob(job);
 }
 
 async function updateBrowserDownload(delta) {
@@ -2769,13 +3110,16 @@ async function updateBrowserDownload(delta) {
     error
   });
   broadcast({ type: "BROWSER_DOWNLOAD", downloadId: delta.id, state: browserState || status, error: delta.error?.current || null });
+  if (["completed", "failed"].includes(merged.status) && !TERMINAL_JOB_STATUSES.has(current.status)) {
+    await maybeNotifyJob(merged);
+  }
   if (TERMINAL_JOB_STATUSES.has(merged.status)) {
     browserDownloads.delete(delta.id);
     browserCancellationRequested.delete(delta.id);
   }
 }
 
-async function mergeJob(jobId, patch) {
+async function mergeJob(jobId, patch, { deferPersistence = false } = {}) {
   const safeId = cleanText(jobId, 128);
   if (!safeId) throw new Error("任务编号无效");
   const now = Date.now();
@@ -2800,7 +3144,8 @@ async function mergeJob(jobId, patch) {
   });
   jobs.set(safeId, job);
   trimJobs();
-  await persistJobs();
+  if (deferPersistence) scheduleJobPersistence();
+  else await persistJobs();
   broadcast({ type: "JOB_UPDATED", job: jobForUi(job) });
   return job;
 }
@@ -2811,17 +3156,17 @@ function nativeJobStatus(message) {
   return ({ complete: "completed", failed: "failed", cancelled: "cancelled" })[message?.type] || null;
 }
 
-async function maybeNotifyHostEvent(message) {
-  const status = message?.status;
-  if (!message?.jobId || !["completed", "failed"].includes(status)) return;
+async function maybeNotifyJob(job) {
+  const status = job?.status;
+  if (!job?.jobId || !["completed", "failed"].includes(status)) return;
   const settings = await getSettings();
   if (!settings.showNotifications) return;
-  const filename = displayFilename(message.filename);
+  const filename = displayFilename(job.filename);
   const detail = status === "completed"
     ? `${filename} 已保存`
-    : redactJobText(message.message || message.error, 240) || `${filename} 下载失败`;
+    : redactJobText(job.message || job.error, 240) || `${filename} 下载失败`;
   try {
-    await chrome.notifications.create(`fluxcatch:${message.jobId}:${status}`, {
+    await chrome.notifications.create(`fluxcatch:${job.jobId}:${status}`, {
       type: "basic",
       iconUrl: chrome.runtime.getURL("icons/icon128.png"),
       title: status === "completed" ? "FluxCatch 下载完成" : "FluxCatch 下载失败",
@@ -2862,6 +3207,17 @@ async function restoreSession() {
       for (const item of items.slice(0, MAX_ITEMS_PER_TAB)) {
         const url = canonicalizeUrl(item?.url);
         if (!url || isLikelySubtitleResource({ url, mime: item?.mime }) || !["video", "audio", "hls", "dash", "segment", "youtube"].includes(item?.kind)) continue;
+        // Heal session data written by older workers that treated Instagram's
+        // query-addressed MediaSource fragments as complete MP4 candidates.
+        // Keeping them hidden only in the UI would let the stale rows return on
+        // every worker restart, so discard them at the restore boundary.
+        const restoredClassification = classifyMedia({
+          url,
+          mime: item?.mime,
+          resourceType: item?.resourceType,
+          contentLength: item?.contentLength
+        });
+        if (isInstagramByteRangeFragment(url) && restoredClassification?.kind === "segment") continue;
         const persisted = candidateForPersistence({ ...item, url });
         if (!persisted) continue;
         const preview = previewFromCandidate(persisted);
@@ -2988,6 +3344,8 @@ function persistSession() {
 }
 
 function persistJobs() {
+  if (jobPersistTimer !== null) clearTimeout(jobPersistTimer);
+  jobPersistTimer = null;
   const storedJobs = [...jobs.values()]
     .sort((a, b) => a.createdAt - b.createdAt || a.jobId.localeCompare(b.jobId))
     .map(jobForUi);
@@ -2998,15 +3356,19 @@ function persistJobs() {
   return persistChain;
 }
 
+function scheduleJobPersistence() {
+  if (jobPersistTimer !== null) return;
+  jobPersistTimer = setTimeout(() => {
+    jobPersistTimer = null;
+    void persistJobs();
+  }, JOB_PROGRESS_PERSIST_INTERVAL_MS);
+  jobPersistTimer?.unref?.();
+}
+
 function jobsForUi() {
   return [...jobs.values()]
     .sort((a, b) => b.updatedAt - a.updatedAt || b.createdAt - a.createdAt)
     .map(jobForUi);
-}
-
-async function clearTerminalJobsAfterRestore() {
-  await sessionReady;
-  return clearTerminalJobs();
 }
 
 async function clearTerminalJobs() {
@@ -3090,9 +3452,9 @@ function trimJobs() {
     .filter((job) => TERMINAL_JOB_STATUSES.has(job.status))
     .sort((a, b) => a.updatedAt - b.updatedAt || a.createdAt - b.createdAt);
   while (jobs.size > MAX_STORED_JOBS && oldestTerminal.length) jobs.delete(oldestTerminal.shift().jobId);
-  if (jobs.size <= MAX_STORED_JOBS) return;
-  const oldest = [...jobs.values()].sort((a, b) => a.updatedAt - b.updatedAt || a.createdAt - b.createdAt);
-  while (jobs.size > MAX_STORED_JOBS && oldest.length) jobs.delete(oldest.shift().jobId);
+  // Active jobs are durable control state, not cache entries. If every slot is
+  // active, temporarily exceed the history cap rather than orphan cancellation,
+  // progress, or terminal reconciliation for a live transfer.
 }
 
 function cleanupJobHeaders(jobId) {
@@ -3144,7 +3506,7 @@ function normalizeSettings(value) {
     saveAs: Boolean(value.saveAs),
     useNativeForDirect: Boolean(value.useNativeForDirect),
     minimumBytes: boundedInt(value.minimumBytes, 0, 100 * 1024 * 1024, DEFAULT_SETTINGS.minimumBytes),
-    // Live capture is deliberately unavailable in 0.2.4 while external-tool
+    // Live capture is deliberately unavailable in 0.2.5 while external-tool
     // networking is fail-closed. Ignore stale pre-upgrade preferences.
     liveDuration: 0,
     blockedDomains: normalizeDomains(value.blockedDomains),
@@ -3206,7 +3568,12 @@ function contentDispositionFilename(value) {
 }
 
 function candidateScore(item) {
-  const kind = ["hls", "dash", "dash_pair"].includes(item.kind) ? 300 : item.kind === "video" ? 200 : item.kind === "audio" ? 100 : 0;
+  // On X, the progressive rendition is both complete and able to reuse
+  // Chrome's working network path. Prefer it over the equivalent HLS row,
+  // whose native direct connection may be reset on filtered networks.
+  const kind = isTrustedXBrowserDirectCandidate(item)
+    ? 400
+    : ["hls", "dash", "dash_pair"].includes(item.kind) ? 300 : item.kind === "video" ? 200 : item.kind === "audio" ? 100 : 0;
   return kind + Number(item.confidence || 0) * 50 + Math.log10(Math.max(1, Number(item.contentLength || 0)));
 }
 
@@ -3280,7 +3647,7 @@ function ytdlpNetworkAllowed() {
     && ytdlp?.networkDisabled === false;
 }
 
-function disconnectedHostStatus({ needsPermission = false, failureReason = null, lastError = null } = {}) {
+function disconnectedHostStatus({ needsPermission = false, failureReason = null, lastError = null, restartRequired = false } = {}) {
   return {
     connected: false,
     version: null,
@@ -3290,7 +3657,8 @@ function disconnectedHostStatus({ needsPermission = false, failureReason = null,
     capabilities: null,
     needsPermission: Boolean(needsPermission),
     failureReason,
-    lastError: lastError || null
+    lastError: lastError || null,
+    restartRequired: Boolean(restartRequired)
   };
 }
 
@@ -3366,7 +3734,36 @@ function pruneHeaders() {
     const oldest = [...requestHeaders.entries()].sort((a, b) => a[1].at - b[1].at);
     while (requestHeaders.size > 800 && oldest.length) requestHeaders.delete(oldest.shift()[0]);
   }
+  let capturedBytes = 0;
+  const capturedOldest = [];
+  for (const [key, value] of pendingRequestHeaders) {
+    const bytes = Number.isFinite(value.bytes) ? value.bytes : capturedHeadersByteLength(value.headers);
+    capturedBytes += bytes;
+    capturedOldest.push({ map: pendingRequestHeaders, key, at: value.at, bytes });
+  }
+  for (const [key, value] of requestHeaders) {
+    const bytes = Number.isFinite(value.bytes) ? value.bytes : capturedHeadersByteLength(value.headers);
+    capturedBytes += bytes;
+    capturedOldest.push({ map: requestHeaders, key, at: value.at, bytes });
+  }
+  if (capturedBytes > MAX_CAPTURED_HEADERS_GLOBAL_BYTES) {
+    capturedOldest.sort((a, b) => a.at - b.at);
+    let index = 0;
+    while (capturedBytes > MAX_CAPTURED_HEADERS_GLOBAL_BYTES && index < capturedOldest.length) {
+      const entry = capturedOldest[index++];
+      if (!entry.map.delete(entry.key)) continue;
+      capturedBytes -= entry.bytes;
+    }
+  }
   scheduleHeaderPrune();
+}
+
+function capturedHeadersByteLength(headers) {
+  let total = 0;
+  for (const [key, value] of Object.entries(headers || {})) {
+    total += new TextEncoder().encode(`${key}: ${value}`).byteLength;
+  }
+  return total;
 }
 
 function scheduleHeaderPrune() {

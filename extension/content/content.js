@@ -7,14 +7,20 @@
   const MAX_SENT = 800;
   const previewSent = new Map();
   const MAX_MUTATION_ROOTS = 256;
+  const MUTATION_RESCAN_COOLDOWN_MS = 5000;
   const MAX_PREVIEW_URL_LENGTH = 4096;
   const TOP_FRAME = window === window.top;
   const SITE_PAYLOAD_KIND = globalThis.__fluxcatchSiteExtract?.payloadSiteForPage?.(location.hostname, TOP_FRAME) || null;
+  const X_PROGRESSIVE_CHANNEL = "fluxcatch-x-progressive-v1";
+  const SITE_MEDIA_CACHE_MAX = 256;
+  const SITE_MEDIA_CACHE_TTL_MS = 15 * 60 * 1000;
+  const cachedSiteMedia = new Map();
   let processedSiteScripts = new WeakSet();
   const pendingMutationRoots = new Set();
   const pendingAttributeTargets = new Set();
   let mutationFlushQueued = false;
-  let fullMutationScanQueued = false;
+  let mutationOverflowed = false;
+  let lastOverflowRescanAt = 0;
   const PREVIEW_RULES = [
     { selector: "video[poster]", source: "poster", value: (element) => element.poster || element.getAttribute("poster") },
     { selector: 'meta[property="og:image:secure_url" i]', source: "og:image:secure_url", value: (element) => element.content },
@@ -68,14 +74,14 @@
     }
   }
 
-  function send(data) {
+  function send(data, { force = false } = {}) {
     try {
       const url = new URL(data.url, document.baseURI);
       if (!/^https?:$/.test(url.protocol)) return;
       url.hash = "";
       const key = `${url.href}|${data.mime || ""}|${data.width || 0}x${data.height || 0}`;
       const now = Date.now();
-      if (sent.has(key) && now - sent.get(key) < 4000) return;
+      if (!force && sent.has(key) && now - sent.get(key) < 4000) return;
       sent.set(key, now);
       if (sent.size > MAX_SENT) {
         const oldest = [...sent.entries()].sort((a, b) => a[1] - b[1]).slice(0, 200);
@@ -94,6 +100,132 @@
       // Invalid URLs and extension teardown are ignored.
     }
   }
+
+  function currentSitePageKey() {
+    if (!SITE_PAYLOAD_KIND) return "";
+    try {
+      const page = new URL(location.href);
+      page.hash = "";
+      return `${SITE_PAYLOAD_KIND}|${page.origin}${page.pathname}${page.search}`;
+    } catch {
+      return "";
+    }
+  }
+
+  function currentInstagramCode() {
+    return String(location.pathname || "").match(/^\/(?:p|reel|reels|tv)\/([A-Za-z0-9_-]+)/i)?.[1] || "";
+  }
+
+  function currentXStatusId() {
+    return String(location.pathname || "").match(/^\/[^/]+\/status\/(\d+)(?:\/|$)/i)?.[1] || "";
+  }
+
+  function hasSupportedSitePayloadRoute() {
+    return SITE_PAYLOAD_KIND === "instagram" ? Boolean(currentInstagramCode())
+      : SITE_PAYLOAD_KIND === "twitter" ? Boolean(currentXStatusId())
+        : false;
+  }
+
+  function pruneSiteMediaCache(now = Date.now()) {
+    for (const [key, entry] of cachedSiteMedia) {
+      if (!entry || now - entry.at > SITE_MEDIA_CACHE_TTL_MS) cachedSiteMedia.delete(key);
+    }
+    while (cachedSiteMedia.size > SITE_MEDIA_CACHE_MAX) cachedSiteMedia.delete(cachedSiteMedia.keys().next().value);
+  }
+
+  function cacheSiteCandidate(data) {
+    const pageKey = currentSitePageKey();
+    if (!pageKey || !data?.url) return;
+    const now = Date.now();
+    pruneSiteMediaCache(now);
+    const key = `${pageKey}|${data.source || ""}|${data.url}`;
+    cachedSiteMedia.delete(key);
+    cachedSiteMedia.set(key, { pageKey, at: now, data: { ...data } });
+    pruneSiteMediaCache(now);
+  }
+
+  function currentCachedSiteMedia() {
+    const pageKey = currentSitePageKey();
+    const now = Date.now();
+    pruneSiteMediaCache(now);
+    if (!pageKey) return [];
+    return [...cachedSiteMedia.values()]
+      .filter((entry) => entry.pageKey === pageKey)
+      .map((entry) => ({ ...entry.data }))
+      .slice(0, 64);
+  }
+
+  function clearCurrentSiteMediaCache() {
+    const pageKey = currentSitePageKey();
+    if (!pageKey) return;
+    for (const [key, entry] of cachedSiteMedia) if (entry?.pageKey === pageKey) cachedSiteMedia.delete(key);
+  }
+
+  function trustedXProgressiveItem(item) {
+    if (!TOP_FRAME || SITE_PAYLOAD_KIND !== "twitter" || !item || typeof item !== "object") return null;
+    try {
+      const url = new URL(item.url);
+      if (url.protocol !== "https:" || url.username || url.password || url.hostname.toLowerCase() !== "video.twimg.com") return null;
+      if (String(item.contentType || "").toLowerCase() !== "video/mp4") return null;
+      url.hash = "";
+      return {
+        url: url.href,
+        mime: "video/mp4",
+        source: "x-api-response",
+        width: Number.isFinite(Number(item.width)) && Number(item.width) > 0 ? Number(item.width) : null,
+        height: Number.isFinite(Number(item.height)) && Number(item.height) > 0 ? Number(item.height) : null,
+        bandwidth: Number.isFinite(Number(item.bandwidth)) && Number(item.bandwidth) > 0 ? Number(item.bandwidth) : null,
+        title: document.title
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  window.addEventListener("message", (event) => {
+    if (event.source !== window || event.origin !== location.origin || event.data?.channel !== X_PROGRESSIVE_CHANNEL) return;
+    const statusId = currentXStatusId();
+    if (!statusId || event.data?.statusId !== statusId) return;
+    const items = Array.isArray(event.data?.items) ? event.data.items.slice(0, 32) : [];
+    for (const item of items) {
+      const candidate = trustedXProgressiveItem(item);
+      if (candidate) {
+        cacheSiteCandidate(candidate);
+        send(candidate);
+      }
+    }
+  });
+
+  function trustedInstagramProgressiveItem(video) {
+    if (!TOP_FRAME || SITE_PAYLOAD_KIND !== "instagram" || !video || typeof video !== "object") return null;
+    try {
+      const url = new URL(video.url);
+      if (url.protocol !== "https:" || url.username || url.password) return null;
+      if (!/(?:^|\.)(?:cdninstagram\.com|fbcdn\.net)$/i.test(url.hostname) || !/\.mp4$/i.test(url.pathname)) return null;
+      if (url.searchParams.has("bytestart") || url.searchParams.has("byteend")) return null;
+      url.hash = "";
+      return {
+        url: url.href,
+        mime: "video/mp4",
+        source: "instagram-api-response",
+        width: Number.isFinite(Number(video.width)) && Number(video.width) > 0 ? Number(video.width) : null,
+        height: Number.isFinite(Number(video.height)) && Number(video.height) > 0 ? Number(video.height) : null,
+        title: document.title
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  window.addEventListener("message", (event) => {
+    if (!TOP_FRAME || SITE_PAYLOAD_KIND !== "instagram") return;
+    if (event.source !== window || event.origin !== location.origin) return;
+    if (event.data?.type !== "FLUXCATCH_INSTAGRAM_MEDIA_V1" || !event.data.video || typeof event.data.video !== "object") return;
+    const candidate = trustedInstagramProgressiveItem(event.data.video);
+    if (!candidate) return;
+    cacheSiteCandidate(candidate);
+    send(candidate);
+  });
 
   function inspectMedia(element, source = "dom") {
     const candidates = new Set();
@@ -147,6 +279,8 @@
   function scanSitePayloads(root = document) {
     const extract = globalThis.__fluxcatchSiteExtract;
     if (!extract || !SITE_PAYLOAD_KIND) return;
+    const requestedMediaId = SITE_PAYLOAD_KIND === "instagram" ? currentInstagramCode() : currentXStatusId();
+    if (!requestedMediaId) return;
     const scripts = [];
     if (root instanceof HTMLScriptElement) scripts.push(root);
     if (root.querySelectorAll) scripts.push(...root.querySelectorAll("script"));
@@ -157,8 +291,8 @@
       processedSiteScripts.add(script);
       if (text.length > 8_000_000 || !/video_versions|video_info/.test(text)) continue;
       const videos = SITE_PAYLOAD_KIND === "instagram"
-        ? extract.extractInstagramVideos(text)
-        : extract.extractTwitterVideos(text);
+        ? extract.extractInstagramVideos(text, requestedMediaId)
+        : extract.extractTwitterVideos(text, requestedMediaId);
       for (const video of videos) {
         send({
           url: video.url,
@@ -187,7 +321,7 @@
     if (!(element instanceof Element)) return false;
     if (element.matches?.(MEDIA_TARGET_SELECTOR) || element.querySelector?.(MEDIA_TARGET_SELECTOR)) return true;
     if (TOP_FRAME && (element.matches?.(TOP_FRAME_TARGET_SELECTOR) || element.querySelector?.(TOP_FRAME_TARGET_SELECTOR))) return true;
-    if (SITE_PAYLOAD_KIND && (element instanceof HTMLScriptElement || element.querySelector?.("script"))) return true;
+    if (hasSupportedSitePayloadRoute() && (element instanceof HTMLScriptElement || element.querySelector?.("script"))) return true;
     return false;
   }
 
@@ -200,9 +334,8 @@
   function queueMutationRoot(element) {
     if (!elementNeedsScan(element)) return;
     if (pendingMutationRoots.size >= MAX_MUTATION_ROOTS) {
-      pendingMutationRoots.clear();
-      fullMutationScanQueued = true;
-    } else if (!fullMutationScanQueued) {
+      mutationOverflowed = true;
+    } else {
       pendingMutationRoots.add(element);
     }
     scheduleMutationFlush();
@@ -211,9 +344,8 @@
   function queueAttributeTarget(element) {
     if (!attributeTargetNeedsScan(element)) return;
     if (pendingAttributeTargets.size >= MAX_MUTATION_ROOTS) {
-      pendingAttributeTargets.clear();
-      fullMutationScanQueued = true;
-    } else if (!fullMutationScanQueued) {
+      mutationOverflowed = true;
+    } else {
       pendingAttributeTargets.add(element);
     }
     scheduleMutationFlush();
@@ -227,13 +359,8 @@
 
   function flushMutationBatch() {
     mutationFlushQueued = false;
-    if (fullMutationScanQueued) {
-      fullMutationScanQueued = false;
-      pendingMutationRoots.clear();
-      pendingAttributeTargets.clear();
-      scan();
-      return;
-    }
+    const overflowed = mutationOverflowed;
+    mutationOverflowed = false;
     const roots = [...pendingMutationRoots];
     const attributes = [...pendingAttributeTargets];
     pendingMutationRoots.clear();
@@ -249,14 +376,37 @@
       if (roots.some((root) => root === target || root.contains?.(target))) continue;
       scan(target);
     }
+    // A hostile or highly dynamic page can exceed the incremental queue. Keep
+    // the first bounded roots and permit at most one full recovery scan every
+    // five seconds, scheduled during idle time when Chrome exposes it.
+    const now = Date.now();
+    if (overflowed && now - lastOverflowRescanAt >= MUTATION_RESCAN_COOLDOWN_MS) {
+      lastOverflowRescanAt = now;
+      const recover = () => scan();
+      if (typeof globalThis.requestIdleCallback === "function") {
+        globalThis.requestIdleCallback(recover, { timeout: 1000 });
+      } else {
+        queueMicrotask(recover);
+      }
+    }
   }
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if (message?.type === "CLEAR_CACHED_SITE_MEDIA") {
+      clearCurrentSiteMediaCache();
+      sendResponse({ ok: true });
+      return false;
+    }
+    if (message?.type === "GET_CACHED_SITE_MEDIA") {
+      sendResponse({ ok: true, items: currentCachedSiteMedia() });
+      return false;
+    }
     if (message?.type !== "REQUEST_SCAN") return false;
     // A manual scan is a user action: allow a site to re-process a script
     // element whose text may have been replaced in-place since initial load.
     processedSiteScripts = new WeakSet();
     scan();
+    for (const item of currentCachedSiteMedia()) send(item, { force: true });
     sendResponse({ ok: true });
     return false;
   });

@@ -13,12 +13,37 @@ function strings(value, limit = 40) {
     : [];
 }
 
+const PATH_CREDENTIAL_KEY = /(?:^|[;._~-])(?:access[_-]?token|auth|authorization|bearer|credential|jwt|key|license|secret|session|signature|sig|token)(?:[=;._~-]|$)/i;
+const JWT_PATH_SEGMENT = /^[A-Za-z0-9_-]{12,}\.[A-Za-z0-9_-]{12,}\.[A-Za-z0-9_-]{8,}$/;
+
+function pathMayContainCredential(pathname) {
+  let decoded = String(pathname || "");
+  try { decoded = decodeURIComponent(decoded); } catch { /* Keep malformed escapes opaque. */ }
+  const segments = decoded.split("/").filter(Boolean);
+  for (let index = 0; index < segments.length; index += 1) {
+    const segment = segments[index];
+    if (PATH_CREDENTIAL_KEY.test(segment)) return true;
+    if (JWT_PATH_SEGMENT.test(segment)) return true;
+    // Signed CDNs often put a bearer value directly after a key-named path
+    // component rather than in the query string.
+    if (/^(?:access[_-]?token|auth|bearer|credential|key|secret|session|signature|sig|token)$/i.test(segment)
+      && segments[index + 1]) return true;
+    // Treat long mixed/base64url-looking path components as opaque
+    // capabilities. Ordinary filenames and stable page slugs remain useful.
+    if (segment.length >= 32
+      && /^[A-Za-z0-9_-]+$/.test(segment)
+      && (/[A-Z]/.test(segment) && /[a-z]/.test(segment) && /\d/.test(segment))) return true;
+  }
+  return false;
+}
+
 function previewDisplayUrl(value) {
   try {
     const url = new URL(value);
     if (!/^https?:$/.test(url.protocol) || url.username || url.password) return "";
     url.hash = "";
     url.search = "";
+    if (pathMayContainCredential(url.pathname)) return `${url.origin}/…`;
     return url.href;
   } catch {
     return "";
@@ -71,6 +96,10 @@ export function publicDisplayUrl(value, { kind = "", site = "" } = {}) {
       // to this display URL is the actual lookup key for probe/download.
       url.search = "";
     }
+    // Query stripping is insufficient for CDNs that encode bearer material in
+    // path segments (for example /token/VALUE/file.mp4 or ;sig=VALUE). Never
+    // publish or persist those segments in reversible form.
+    if (pathMayContainCredential(url.pathname)) return `${url.origin}/…`;
     return url.href;
   } catch {
     return "";
@@ -105,6 +134,17 @@ function publicTrack(track) {
     height: numberOrNull(track.height),
     codecs: string(track.codecs)
   };
+}
+
+function publicUrlForPersistence(value) {
+  const rawUrl = string(value);
+  try {
+    const normalized = new URL(rawUrl);
+    const displayUrl = publicDisplayUrl(rawUrl);
+    return displayUrl && displayUrl === normalized.href ? displayUrl : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -224,8 +264,8 @@ export function candidateForPersistence(candidate) {
     manifestSubtitleTrackCount: safe.manifestSubtitleTrackCount,
     manifestProbeStatus: safe.manifestProbeStatus,
     manifestInspectedAt: safe.manifestInspectedAt,
-    manifestReferences: strings(candidate?.manifestReferences, 400).map((value) => publicDisplayUrl(value)).filter(Boolean),
-    manifestRedirectUrl: publicDisplayUrl(candidate?.manifestRedirectUrl) || null,
+    manifestReferences: strings(candidate?.manifestReferences, 400).map(publicUrlForPersistence).filter(Boolean),
+    manifestRedirectUrl: publicUrlForPersistence(candidate?.manifestRedirectUrl),
     manifestFingerprint: string(candidate?.manifestFingerprint) || null,
     groupSize: safe.groupSize,
     aliases: safe.aliases,

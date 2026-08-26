@@ -10,3 +10,5 @@ e2e/artifacts/
 e2e/.tmp/
 *.pem
 design/brand-v1/
+.alma-snapshots
+.alma/

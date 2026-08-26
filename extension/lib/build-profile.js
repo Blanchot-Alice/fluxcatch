@@ -12,7 +12,7 @@ export const BUILD_PROFILE = Object.freeze({
     bilibiliDashPair: true,
     liveHls: false,
     encryptedHls: false,
-    separateAudioHls: false,
+    separateAudioHls: true,
     externalToolNetwork: false,
     remoteThumbnails: false
   })
@@ -22,7 +22,7 @@ export const BUILD_PROFILE = Object.freeze({
 // temporary staging directory. Loading extension/ unpacked must never claim
 // to be an immutable release artifact from a commit it may no longer match.
 export const BUILD_IDENTITY = Object.freeze({
-  extensionVersion: "0.2.4",
+  extensionVersion: "0.2.5",
   channel: BUILD_PROFILE.channel,
   commit: "development",
   buildTimestamp: null,
@@ -72,7 +72,7 @@ export function buildDiagnostics({ extensionId = "", manifestVersion = "", hostS
       id: cleanText(extensionId, 64) || null,
       channel: BUILD_IDENTITY.channel,
       // Dirty diagnostic packages use
-      // `uncommitted:background.js@sha256:<digest>` rather than impersonating
+      // `uncommitted:extension@sha256:<digest>` rather than impersonating
       // HEAD, so retain the complete verifiable identity string.
       commit: cleanText(BUILD_IDENTITY.commit, 128) || null,
       buildTimestamp: cleanText(BUILD_IDENTITY.buildTimestamp, 40) || null

@@ -51,7 +51,7 @@ test("native permission remains gesture-bound and host states distinguish instal
   const request = functionBody("requestNativeAccess");
   assert.match(request, /permissionRequest = chrome\.permissions\.request\(\{ permissions: \["nativeMessaging"\] \}\)/);
   assert.match(request, /withPendingAction\(nativePermissionButton, "native-access"/);
-  assert.match(request, /permissionDenied = true[\s\S]*throw new Error\("暂未开启高速下载功能"\)/);
+  assert.match(request, /permissionDenied = true[\s\S]*throw new Error\("暂未开启本地下载引擎"\)/);
   assert.match(request, /recoverNativeApi\(host\)/);
   assert.doesNotMatch(source, /chrome\.runtime\.reload\(\)/);
   const refresh = functionBody("refreshNativeAccess");
@@ -61,7 +61,7 @@ test("native permission remains gesture-bound and host states distinguish instal
   assert.match(recover, /withPendingAction\(nativePermissionButton, "native-recovery"/);
   const complete = functionBody("completeNativeApiRecovery");
   assert.match(complete, /response\.retryAfterMs/);
-  assert.match(complete, /if \(recoveredHost\.needsPermission\)[\s\S]*renderNativePermissionRequired\("高速下载功能授权已撤销；普通文件仍可直接下载"\)/);
+  assert.match(complete, /if \(recoveredHost\.needsPermission\)[\s\S]*renderNativePermissionRequired\("本地下载引擎授权已撤销；检测与预览仍可用，多数保存需重新授权"\)/);
   assert.match(complete, /await waitForNativeRecovery\(retryAfterMs\)/);
   assert.match(complete, /await pingNativeHost\(\)/);
   const waitIndex = complete.indexOf("await waitForNativeRecovery(retryAfterMs)");
@@ -71,7 +71,8 @@ test("native permission remains gesture-bound and host states distinguish instal
   assert.match(complete, /failureReason === "api_unavailable"[\s\S]*requestNativeApiRecovery\(\)/);
   assert.match(complete, /response\.recoveryBlocked/);
   assert.match(complete, /await refreshDiagnostics\(\)/);
-  assert.match(complete, /chrome:\/\/extensions[\s\S]*手动重新加载 FluxCatch/);
+  assert.match(complete, /完全退出并重新启动 Chrome[\s\S]*点击“重新检查”/);
+  assert.doesNotMatch(complete, /手动重新加载 FluxCatch/);
   const recoveryRequest = functionBody("requestNativeApiRecovery");
   assert.match(recoveryRequest, /type: "RECOVER_NATIVE_API"/);
   const render = functionBody("renderHostStatus");
@@ -84,19 +85,22 @@ test("native permission remains gesture-bound and host states distinguish instal
 });
 
 test("native permission changes refresh state and connection failures remain actionable", () => {
-  assert.match(source, /chrome\.permissions\.onAdded\?\.addListener\(handleNativePermissionChange\)/);
-  assert.match(source, /chrome\.permissions\.onRemoved\?\.addListener\(handleNativePermissionChange\)/);
+  assert.match(source, /chrome\.permissions\?\.onAdded\?\.addListener\(handleNativePermissionChange\)/);
+  assert.match(source, /chrome\.permissions\?\.onRemoved\?\.addListener\(handleNativePermissionChange\)/);
   const permissionChange = functionBody("handleNativePermissionChange");
   assert.match(permissionChange, /permissions\?\.permissions\?\.includes\("nativeMessaging"\)/);
   assert.match(permissionChange, /void refreshNativeAccess\(\)/);
 
   const render = functionBody("renderHostStatus");
   assert.match(render, /failureReason === "api_unavailable"/);
+  assert.match(render, /host\.restartRequired === true/);
+  assert.match(render, /需要重启浏览器/);
+  assert.match(render, /接口长期未恢复 · 请重启 Chrome/);
   assert.match(render, /failureReason === "host_missing"/);
   assert.match(render, /nativeInstallGuide\.open = failureReason === "host_missing"/);
   assert.match(render, /等待 Chrome 初始化连接接口/);
   assert.match(render, /FluxCatch 将自动重试/);
-  assert.match(render, /bash native-host\/install-macos\.sh/);
+  assert.match(render, /\.\/scripts\/native-install-wrapper\.sh/);
   assert.doesNotMatch(source, /connectNative is not a function|TypeError/);
 });
 
@@ -107,13 +111,13 @@ test("native access rechecks live permission after an ignored permission-change 
   const finallyBody = request.slice(finallyIndex);
   assert.match(finallyBody, /nativePermissionGranted = await chrome\.permissions\.contains\(\{ permissions: \["nativeMessaging"\] \}\)/);
   assert.match(finallyBody, /if \(!nativePermissionGranted\)[\s\S]*renderNativePermissionRequired/);
-  assert.match(finallyBody, /nativePermissionButton\.textContent = nativePermissionGranted \? "重新检查" : "开启高速下载功能"/);
+  assert.match(finallyBody, /nativePermissionButton\.textContent = nativePermissionGranted \? "重新检查" : "开启本地下载引擎"/);
 });
 
 test("blocked recovery and permission removal use the failed action state without erasing detail", () => {
   const request = functionBody("requestNativeAccess");
   assert.match(request, /if \(recovery\.recoveryBlocked\)[\s\S]*throw nativeAccessFlowFailure\([\s\S]*"native_recovery_blocked"/);
-  assert.match(request, /if \(recovery\.hostStatus\?\.needsPermission\)[\s\S]*renderNativePermissionRequired\("高速下载功能授权已撤销；普通文件仍可直接下载"\)[\s\S]*throw nativeAccessFlowFailure/);
+  assert.match(request, /if \(recovery\.hostStatus\?\.needsPermission\)[\s\S]*renderNativePermissionRequired\("本地下载引擎授权已撤销；检测与预览仍可用，多数保存需重新授权"\)[\s\S]*throw nativeAccessFlowFailure/);
   const diagnosticsIndex = request.indexOf("await refreshDiagnostics()");
   const livePermissionIndex = request.indexOf("nativePermissionGranted = await chrome.permissions.contains", diagnosticsIndex);
   assert.ok(diagnosticsIndex >= 0 && livePermissionIndex > diagnosticsIndex,

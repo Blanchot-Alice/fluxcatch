@@ -28,6 +28,14 @@ SPEC.loader.exec_module(host)
 
 FILE_BYTES = bytes(range(256)) * 131_072  # 32 MiB, enough for multiple ranges.
 SEGMENTS = {"/seg0.ts": b"first-segment\n", "/seg1.ts": b"second-segment\n", "/seg2.ts": b"third-segment\n"}
+HLS_VIDEO_SEGMENTS = {
+    "/separate-video-0.ts": b"separate-video-zero|",
+    "/separate-video-1.ts": b"separate-video-one|",
+}
+HLS_AUDIO_SEGMENTS = {
+    "/separate-audio-0.aac": b"separate-audio-zero|",
+    "/separate-audio-1.aac": b"separate-audio-one|",
+}
 PACKED = b"init-aaaabbbbccccddddeeee"
 DASH_FILES = {
     "/dash/init-stream0.m4s": b"video-init|",
@@ -106,7 +114,7 @@ class FixtureHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
-        if path in {"/file.bin", "/bad-range.bin", "/range-no-id.bin"}:
+        if path in {"/file.bin", "/bad-range.bin", "/range-no-id.bin", "/head-rejected-range.bin"}:
             if range_header:
                 start, end = map(int, range_header.removeprefix("bytes=").split("-"))
                 actual_start, actual_end = start, end
@@ -142,6 +150,26 @@ class FixtureHandler(http.server.BaseHTTPRequestHandler):
             body = b'#EXTM3U\n#EXT-X-KEY:METHOD=SAMPLE-AES,URI="skd://fixture"\n#EXTINF:4,\nseg0.ts\n#EXT-X-ENDLIST\n'
             self._bytes(body, "application/vnd.apple.mpegurl")
             return
+        if path == "/separate-clear-master.m3u8":
+            body = (
+                b'#EXTM3U\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="Alternate",DEFAULT=NO,AUTOSELECT=YES,URI="audio-alternate.m3u8"\n'
+                b'#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="Default",DEFAULT=YES,AUTOSELECT=YES,URI="audio-default.m3u8"\n'
+                b'#EXT-X-STREAM-INF:BANDWIDTH=1000,RESOLUTION=640x360,AUDIO="audio"\nseparate-video.m3u8\n'
+            )
+            self._bytes(body, "application/vnd.apple.mpegurl")
+            return
+        if path == "/separate-video.m3u8":
+            body = b"#EXTM3U\n#EXTINF:4,\nseparate-video-0.ts\n#EXTINF:4,\nseparate-video-1.ts\n#EXT-X-ENDLIST\n"
+            self._bytes(body, "application/vnd.apple.mpegurl")
+            return
+        if path == "/audio-default.m3u8":
+            body = b"#EXTM3U\n#EXTINF:4,\nseparate-audio-0.aac\n#EXTINF:4,\nseparate-audio-1.aac\n#EXT-X-ENDLIST\n"
+            self._bytes(body, "application/vnd.apple.mpegurl")
+            return
+        if path == "/audio-alternate.m3u8":
+            body = b"#EXTM3U\n#EXTINF:4,\nseg0.ts\n#EXT-X-ENDLIST\n"
+            self._bytes(body, "application/vnd.apple.mpegurl")
+            return
         if path == "/byterange.m3u8":
             body = b"#EXTM3U\n#EXTINF:1,\n#EXT-X-BYTERANGE:4@0\npacked.bin\n#EXTINF:1,\n#EXT-X-BYTERANGE:4\npacked.bin\n#EXTINF:1,\n#EXT-X-BYTERANGE:5@8\npacked.bin\n#EXT-X-ENDLIST\n"
             self._bytes(body, "application/vnd.apple.mpegurl")
@@ -167,6 +195,12 @@ class FixtureHandler(http.server.BaseHTTPRequestHandler):
             return
         if path in SEGMENTS:
             self._bytes(SEGMENTS[path], "video/mp2t")
+            return
+        if path in HLS_VIDEO_SEGMENTS:
+            self._bytes(HLS_VIDEO_SEGMENTS[path], "video/mp2t")
+            return
+        if path in HLS_AUDIO_SEGMENTS:
+            self._bytes(HLS_AUDIO_SEGMENTS[path], "audio/aac")
             return
         if path == "/dash/out.mpd":
             self._bytes(DASH_MPD, "application/dash+xml")
@@ -318,7 +352,14 @@ class HostTests(unittest.TestCase):
     def test_redirect_strips_credentials_cross_origin(self):
         request = host.urllib.request.Request(
             "https://one.example/file",
-            headers={"Authorization": "Bearer secret", "Cookie": "a=b", "Referer": "https://page.example/", "Accept": "*/*"},
+            headers={
+                "Authorization": "Bearer secret",
+                "Cookie": "a=b",
+                "Referer": "https://page.example/",
+                "If-Range": '"private-etag"',
+                "If-Match": '"private-match"',
+                "Accept": "*/*",
+            },
         )
         peer_socket = mock.Mock()
         peer_socket.getpeername.return_value = ("93.184.216.34", 443)
@@ -330,7 +371,35 @@ class HostTests(unittest.TestCase):
         self.assertNotIn("authorization", lowered)
         self.assertNotIn("cookie", lowered)
         self.assertNotIn("referer", lowered)
+        self.assertNotIn("if-range", lowered)
+        self.assertNotIn("if-match", lowered)
         self.assertEqual(lowered["accept"], "*/*")
+
+        same_origin = host.urllib.request.Request(
+            "https://one.example/file",
+            headers={"If-Range": '"same-etag"', "If-Match": '"same-match"'},
+        )
+        same_redirect = host.SafeRedirectHandler().redirect_request(
+            same_origin,
+            peer_response,
+            302,
+            "Found",
+            {},
+            "https://one.example/next",
+        )
+        same_headers = {key.lower(): value for key, value in same_redirect.headers.items()}
+        self.assertEqual(same_headers["if-range"], '"same-etag"')
+        self.assertEqual(same_headers["if-match"], '"same-match"')
+
+        with self.assertRaisesRegex(host.NetworkPolicyError, "downgrade"):
+            host.SafeRedirectHandler().redirect_request(
+                same_origin,
+                peer_response,
+                302,
+                "Found",
+                {},
+                "http://one.example/insecure",
+            )
 
         same = host.scope_subresource_headers(
             "https://media.example/manifest.m3u8",
@@ -532,7 +601,7 @@ class HostTests(unittest.TestCase):
             host.reset_current_network_policy(token)
 
         redacted = host.redact_url("https://media.example/path/video.m3u8?token=TOP_SECRET#fragment")
-        self.assertEqual(redacted, "https://media.example/path/video.m3u8")
+        self.assertEqual(redacted, "https://media.example/…")
         self.assertNotIn("TOP_SECRET", host.redact_text(
             "failed https://media.example/path/video.m3u8?token=TOP_SECRET"
         ))
@@ -568,6 +637,14 @@ class HostTests(unittest.TestCase):
             host._ACTIVE_AUTHORIZED_TARGET.reset(target_token)
             host.reset_current_network_policy(policy_token)
 
+    def test_probe_falls_back_to_range_when_cdn_rejects_head(self):
+        info = host.probe_direct(f"{self.base}/head-rejected-range.bin", {})
+
+        self.assertTrue(info.range_supported)
+        self.assertEqual(info.length, len(FILE_BYTES))
+        self.assertEqual(urlsplit(info.final_url).path, "/head-rejected-range.bin")
+        self.assertIn(("/head-rejected-range.bin", "bytes=0-0"), FixtureHandler.request_log)
+
     def test_hls_parser_and_ranges(self):
         parsed = host.parse_hls("#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1000,RESOLUTION=640x360\nv.m3u8\n", f"{self.base}/master.m3u8")
         self.assertEqual(parsed.variants[0]["height"], 360)
@@ -588,21 +665,105 @@ class HostTests(unittest.TestCase):
         )
         self.assertEqual(mixed.protection, "drm")
 
-    def test_hls_separate_audio_fails_before_fetching_alternate_manifest(self):
+    def test_manifest_structural_limits_and_missing_hls_variant_fail_closed(self):
+        too_many_segments = "#EXTM3U\n" + "\n".join(
+            f"segment-{index}.ts" for index in range(host.MAX_HLS_SEGMENTS + 1)
+        )
+        with self.assertRaisesRegex(host.DownloadError, "segment limit"):
+            host.parse_hls(too_many_segments, "https://media.example/master.m3u8")
+
+        representations = "".join(
+            f'<Representation id="v{index}" bandwidth="1"><BaseURL>v{index}.mp4</BaseURL></Representation>'
+            for index in range(host.MAX_DASH_REPRESENTATIONS + 1)
+        )
+        oversized_mpd = (
+            '<MPD xmlns="urn:mpeg:dash:schema:mpd:2011"><Period>'
+            '<AdaptationSet contentType="video">'
+            f"{representations}</AdaptationSet></Period></MPD>"
+        )
+        with self.assertRaisesRegex(host.UnsupportedDashError, "Representation limit"):
+            host.plan_static_dash(oversized_mpd, "https://media.example/out.mpd")
+
+        master = host.ManifestFetchResult(
+            "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1000\ncurrent.m3u8\n",
+            "https://media.example/master.m3u8",
+            {},
+        )
+        with mock.patch.object(host, "fetch_manifest", return_value=master) as fetch:
+            with self.assertRaisesRegex(host.DownloadError, "no longer present"):
+                host.select_hls_media(
+                    master.final_url,
+                    {},
+                    "https://media.example/removed.m3u8",
+                )
+        fetch.assert_called_once()
+
+    def test_progress_report_uses_one_throttle_for_manifest_workers(self):
+        events = []
+        progress = host.Progress(events.append, "bounded-progress", "media.mp4")
+        self.assertTrue(progress.report({"status": "downloading", "progress": 0.1}))
+        self.assertFalse(progress.report({"status": "downloading", "progress": 0.2}))
+        self.assertTrue(progress.report({"status": "downloading", "progress": 1.0}, force=True))
+        self.assertEqual([event["progress"] for event in events], [0.1, 1.0])
+
+    def test_manifest_executor_keeps_a_fixed_future_window(self):
+        gate = threading.Event()
+        fourth_submitted = threading.Event()
+        submitted = 0
+        submitted_lock = threading.Lock()
+        pool = host.concurrent.futures.ThreadPoolExecutor(max_workers=2)
+        real_submit = pool.submit
+
+        def counting_submit(*args, **kwargs):
+            nonlocal submitted
+            with submitted_lock:
+                submitted += 1
+                if submitted == 4:
+                    fourth_submitted.set()
+            return real_submit(*args, **kwargs)
+
+        pool.submit = counting_submit
+        results = []
+
+        def task(value):
+            gate.wait(2)
+            return value
+
+        consumer = threading.Thread(target=lambda: results.extend(host._bounded_executor_results(
+            pool,
+            task,
+            ((value,) for value in range(20)),
+            max_pending=4,
+        )))
+        consumer.start()
+        self.assertTrue(fourth_submitted.wait(1))
+        with submitted_lock:
+            self.assertEqual(submitted, 4, "the remaining manifest is not materialized as Futures")
+        gate.set()
+        consumer.join(3)
+        pool.shutdown(wait=True, cancel_futures=True)
+        self.assertFalse(consumer.is_alive())
+        self.assertEqual(sorted(results), list(range(20)))
+
+    def test_hls_separate_audio_revalidates_alternate_manifest_protection(self):
         FixtureHandler.reset()
         with tempfile.TemporaryDirectory() as directory:
             target = pathlib.Path(directory) / "output.mp4"
-            with self.assertRaisesRegex(host.DownloadError, "Separate-audio HLS.*0.2.4"):
-                host.hls_fast_download(
-                    f"{self.base}/separate-master.m3u8",
-                    target,
-                    {},
-                    2,
-                    threading.Event(),
-                    host.Progress(lambda _event: None, "job", target.name),
-                    sys.executable,
-                )
-        self.assertNotIn("/audio-drm.m3u8", [path for path, _range in FixtureHandler.request_log])
+            with mock.patch.object(host, "run_ffmpeg") as run:
+                with self.assertRaisesRegex(host.DownloadError, "DRM/SAMPLE-AES audio HLS"):
+                    host.hls_fast_download(
+                        f"{self.base}/separate-master.m3u8",
+                        target,
+                        {},
+                        2,
+                        threading.Event(),
+                        host.Progress(lambda _event: None, "job", target.name),
+                        sys.executable,
+                    )
+            run.assert_not_called()
+        requested = [path for path, _range in FixtureHandler.request_log]
+        self.assertIn("/audio-drm.m3u8", requested)
+        self.assertNotIn("/seg0.ts", requested)
 
     def test_dash_protection_is_revalidated(self):
         clear = '<MPD xmlns="urn:mpeg:dash:schema:mpd:2011"><Period><AdaptationSet/></Period></MPD>'
@@ -656,6 +817,33 @@ class HostTests(unittest.TestCase):
                 self.assertEqual(message["capabilities"]["externalNetworkProcesses"], "disabled")
                 self.assertEqual(message["protocolVersion"], host.NATIVE_PROTOCOL_VERSION)
                 self.assertEqual(message["capabilityProfileVersion"], host.CAPABILITY_PROFILE_VERSION)
+            finally:
+                native.close()
+
+    def test_native_admission_queue_is_bounded(self):
+        capability = host.FfmpegCapabilities(path="/fixture/ffmpeg")
+        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(
+            os.environ,
+            {"FLUXCATCH_DOWNLOAD_DIR": directory},
+        ), mock.patch.object(host, "probe_ffmpeg", return_value=capability):
+            native = host.Host()
+            try:
+                native.jobs = {
+                    f"active-{index}": threading.Event()
+                    for index in range(host.MAX_NATIVE_ADMITTED_JOBS)
+                }
+                with mock.patch.object(native, "send") as send, mock.patch.object(native.executor, "submit") as submit:
+                    native.handle({
+                        "type": "download",
+                        "jobId": "overflow",
+                        "url": "https://media.example/file.mp4",
+                    })
+                submit.assert_not_called()
+                message = send.call_args.args[0]
+                self.assertEqual(message["type"], "failed")
+                self.assertEqual(message["status"], "failed")
+                self.assertEqual(message["code"], "host_busy")
+                self.assertNotIn("overflow", native.jobs)
             finally:
                 native.close()
 
@@ -1151,13 +1339,19 @@ class HostTests(unittest.TestCase):
             crash_dir.mkdir()
             (crash_dir / "video.m4s.part").write_bytes(b"partial")
             (crash_dir / "video.m4s.part.json").write_text(json.dumps({"url": secret_url}), "utf-8")
+            crash_dirs = [crash_dir]
+            for name in ("fluxcatch-hls-crashed", "fluxcatch-dash-crashed", ".fluxcatch-convert-crashed"):
+                work = root / name
+                work.mkdir()
+                (work / "partial.bin").write_bytes(b"partial")
+                crash_dirs.append(work)
             unrelated = root / "keep-this-directory"
             unrelated.mkdir()
             capability = host.FfmpegCapabilities(path="/fixture/ffmpeg")
             with mock.patch.dict(os.environ, {"FLUXCATCH_DOWNLOAD_DIR": str(root)}), mock.patch.object(host, "probe_ffmpeg", return_value=capability):
                 native = host.Host()
                 try:
-                    self.assertFalse(crash_dir.exists(), "startup removes legacy signed-query crash artifacts")
+                    self.assertTrue(all(not path.exists() for path in crash_dirs), "startup removes every native temporary-work class")
                     self.assertTrue(unrelated.exists())
                 finally:
                     native.close()
@@ -1418,6 +1612,119 @@ class HostTests(unittest.TestCase):
             self.assertEqual(result.stat().st_mode & 0o777, 0o600)
             self.assertTrue(any(event.get("progress") == 1 for event in events))
 
+    def test_separate_audio_hls_downloads_both_tracks_then_muxes_local_files(self):
+        FixtureHandler.reset()
+        events = []
+        observed = {}
+        with tempfile.TemporaryDirectory() as directory:
+            target = pathlib.Path(directory) / "separate.mp4"
+            progress = host.Progress(events.append, "hls-pair", target.name)
+
+            def fake_run(args, output, _cancel, _progress, **kwargs):
+                inputs = [args[index + 1] for index, value in enumerate(args[:-1]) if value == "-i"]
+                self.assertEqual(len(inputs), 2)
+                self.assertTrue(all(pathlib.Path(value).is_absolute() for value in inputs))
+                self.assertTrue(all(pathlib.Path(value).is_file() for value in inputs))
+                self.assertEqual(
+                    pathlib.Path(inputs[0]).read_bytes(),
+                    b"".join(HLS_VIDEO_SEGMENTS.values()),
+                )
+                self.assertEqual(
+                    pathlib.Path(inputs[1]).read_bytes(),
+                    b"".join(HLS_AUDIO_SEGMENTS.values()),
+                )
+                self.assertFalse(any("http://" in value or "https://" in value for value in args))
+                maps = [args[index + 1] for index, value in enumerate(args[:-1]) if value == "-map"]
+                self.assertEqual(maps, ["0:v:0", "1:a:0"])
+                self.assertEqual(host.local_only_ffmpeg_args(args).count("-protocol_whitelist"), 2)
+                observed.update(kwargs)
+                output.write_bytes(b"locally-muxed-hls")
+                return output
+
+            with mock.patch.object(host, "run_ffmpeg", side_effect=fake_run):
+                result = host.hls_fast_download(
+                    f"{self.base}/separate-clear-master.m3u8",
+                    target,
+                    {"Cookie": "session=fixture"},
+                    3,
+                    threading.Event(),
+                    progress,
+                    "/fixture/ffmpeg",
+                )
+
+            self.assertEqual(result.read_bytes(), b"locally-muxed-hls")
+            self.assertEqual(observed["expected_duration"], 8.0)
+            self.assertEqual(observed["activity"], "正在无损合并 HLS 音视频")
+            self.assertTrue(any(event.get("progress") == 1 for event in events))
+
+        requested = [path for path, _range in FixtureHandler.request_log]
+        self.assertIn("/audio-default.m3u8", requested)
+        self.assertNotIn("/audio-alternate.m3u8", requested)
+        self.assertTrue(set(HLS_VIDEO_SEGMENTS).issubset(requested))
+        self.assertTrue(set(HLS_AUDIO_SEGMENTS).issubset(requested))
+
+    def test_separate_audio_hls_requires_ffmpeg_before_audio_fetch(self):
+        FixtureHandler.reset()
+        with tempfile.TemporaryDirectory() as directory:
+            target = pathlib.Path(directory) / "separate.mp4"
+            with self.assertRaisesRegex(host.DownloadError, "Separate-audio HLS requires FFmpeg"):
+                host.hls_fast_download(
+                    f"{self.base}/separate-clear-master.m3u8",
+                    target,
+                    {},
+                    2,
+                    threading.Event(),
+                    host.Progress(lambda _event: None, "hls-no-ffmpeg", target.name),
+                    None,
+                )
+        requested = [path for path, _range in FixtureHandler.request_log]
+        self.assertNotIn("/audio-default.m3u8", requested)
+        self.assertFalse(set(HLS_VIDEO_SEGMENTS).intersection(requested))
+        self.assertFalse(set(HLS_AUDIO_SEGMENTS).intersection(requested))
+
+    def test_separate_audio_hls_extraction_downloads_only_audio_segments(self):
+        FixtureHandler.reset()
+        observed = {}
+        with tempfile.TemporaryDirectory() as directory:
+            target = pathlib.Path(directory) / "separate.mp3"
+            progress = host.Progress(lambda _event: None, "hls-audio", target.name)
+
+            def fake_run(args, output, _cancel, _progress, **kwargs):
+                inputs = [args[index + 1] for index, value in enumerate(args[:-1]) if value == "-i"]
+                self.assertEqual(len(inputs), 1)
+                self.assertTrue(pathlib.Path(inputs[0]).is_absolute())
+                self.assertEqual(
+                    pathlib.Path(inputs[0]).read_bytes(),
+                    b"".join(HLS_AUDIO_SEGMENTS.values()),
+                )
+                self.assertFalse(any("http://" in value or "https://" in value for value in args))
+                self.assertIn("-vn", args)
+                observed.update(kwargs)
+                output.write_bytes(b"local-audio-only")
+                return output
+
+            with mock.patch.object(host, "run_ffmpeg", side_effect=fake_run):
+                result = host.hls_fast_download(
+                    f"{self.base}/separate-clear-master.m3u8",
+                    target,
+                    {},
+                    3,
+                    threading.Event(),
+                    progress,
+                    "/fixture/ffmpeg",
+                    extract_audio=True,
+                )
+
+            self.assertEqual(result.read_bytes(), b"local-audio-only")
+            self.assertEqual(observed["expected_duration"], 8.0)
+            self.assertFalse(observed["report_output_speed"])
+
+        requested = [path for path, _range in FixtureHandler.request_log]
+        self.assertIn("/separate-video.m3u8", requested)
+        self.assertIn("/audio-default.m3u8", requested)
+        self.assertFalse(set(HLS_VIDEO_SEGMENTS).intersection(requested))
+        self.assertTrue(set(HLS_AUDIO_SEGMENTS).issubset(requested))
+
     def test_hls_redirect_final_url_and_headers_follow_the_response_chain(self):
         server_a, base_a = self.start_lineage_server()
         server_b, base_b = self.start_lineage_server()
@@ -1523,7 +1830,7 @@ class HostTests(unittest.TestCase):
         target = pathlib.Path("capture.mp4")
         progress = host.Progress(lambda _event: None, "job", target.name)
         with mock.patch.object(host, "select_hls_media", return_value=(live, "", None, None)), mock.patch.object(host, "run_ffmpeg") as run:
-            with self.assertRaisesRegex(host.DownloadError, "Live HLS recording.*0.2.4"):
+            with self.assertRaisesRegex(host.DownloadError, "Live HLS recording.*0.2.5"):
                 host.hls_fast_download(live.url, target, {}, 1, threading.Event(), progress, "/ffmpeg", live_duration=37)
         run.assert_not_called()
 
@@ -1532,11 +1839,59 @@ class HostTests(unittest.TestCase):
             audio_tracks=[{"GROUP-ID": "audio", "DEFAULT": "YES", "url": f"{self.base}/audio.m3u8"}],
         )
         selected = {"url": f"{self.base}/media.m3u8", "audio_group": "audio"}
-        audio = host.HlsPlaylist(url=f"{self.base}/audio.m3u8", live=True, segments=[host.HlsSegment(f"{self.base}/seg0.ts")])
-        with mock.patch.object(host, "select_hls_media", side_effect=[(live, "", master, selected), (audio, "", None, None)]), mock.patch.object(host, "run_ffmpeg") as run:
-            with self.assertRaisesRegex(host.DownloadError, "Separate-audio HLS.*0.2.4"):
-                host.hls_fast_download(master.url, target.with_suffix(".mp3"), {}, 1, threading.Event(), progress, "/ffmpeg", live_duration=22, extract_audio=True)
-        run.assert_not_called()
+        video = host.HlsPlaylist(
+            url=f"{self.base}/media.m3u8",
+            live=False,
+            segments=[host.HlsSegment(f"{self.base}/seg0.ts")],
+        )
+        unsupported_audio = [
+            (
+                host.HlsPlaylist(
+                    url=f"{self.base}/audio.m3u8",
+                    live=False,
+                    encrypted=True,
+                    protection="aes128",
+                    segments=[host.HlsSegment(f"{self.base}/seg0.ts")],
+                ),
+                "AES-128 audio HLS",
+            ),
+            (
+                host.HlsPlaylist(
+                    url=f"{self.base}/audio.m3u8",
+                    live=True,
+                    segments=[host.HlsSegment(f"{self.base}/seg0.ts")],
+                ),
+                "Live audio HLS",
+            ),
+            (
+                host.HlsPlaylist(
+                    url=f"{self.base}/audio.m3u8",
+                    live=False,
+                    discontinuity=True,
+                    segments=[host.HlsSegment(f"{self.base}/seg0.ts")],
+                ),
+                "Discontinuous audio HLS",
+            ),
+        ]
+        for audio, message in unsupported_audio:
+            with self.subTest(message=message), mock.patch.object(
+                host,
+                "select_hls_media",
+                side_effect=[(video, "", master, selected), (audio, "", None, None)],
+            ), mock.patch.object(host, "run_ffmpeg") as run:
+                with self.assertRaisesRegex(host.DownloadError, message):
+                    host.hls_fast_download(
+                        master.url,
+                        target.with_suffix(".mp3"),
+                        {},
+                        1,
+                        threading.Event(),
+                        progress,
+                        "/ffmpeg",
+                        live_duration=22,
+                        extract_audio=True,
+                    )
+            run.assert_not_called()
 
         unsupported = [
             (host.HlsPlaylist(url=f"{self.base}/aes.m3u8", live=False, encrypted=True, protection="aes128", segments=[host.HlsSegment(f"{self.base}/seg0.ts")]), "AES-128 HLS"),
@@ -1544,7 +1899,7 @@ class HostTests(unittest.TestCase):
         ]
         for playlist, message in unsupported:
             with self.subTest(message=message), mock.patch.object(host, "select_hls_media", return_value=(playlist, "", None, None)), mock.patch.object(host, "run_ffmpeg") as run:
-                with self.assertRaisesRegex(host.DownloadError, f"{message}.*0.2.4"):
+                with self.assertRaisesRegex(host.DownloadError, f"{message}.*0.2.5"):
                     host.hls_fast_download(playlist.url, target, {}, 1, threading.Event(), progress, "/ffmpeg")
             run.assert_not_called()
 
@@ -1643,7 +1998,7 @@ class HostTests(unittest.TestCase):
                 "pipe:1",
                 str(root / "output.mp4"),
             ])
-            self.assertEqual(local_args[local_args.index("-protocol_whitelist") + 1], "file,pipe")
+            self.assertEqual(local_args[local_args.index("-protocol_whitelist") + 1], "file")
             self.assertFalse(any(protocol in local_args for protocol in ("http", "https", "tcp", "tls")))
             with self.assertRaisesRegex(host.DownloadError, "existing local regular file"):
                 host.local_only_ffmpeg_args([
@@ -1663,10 +2018,22 @@ class HostTests(unittest.TestCase):
             )
             target = root / "video.mp4"
             progress = host.Progress(lambda _event: None, "job", target.name)
-            result = host.run_ffmpeg([sys.executable, str(script), str(target)], target, threading.Event(), progress)
+            real_popen = host.subprocess.Popen
+            observed_spawn = {}
+
+            def spawn(*args, **kwargs):
+                observed_spawn.update(kwargs)
+                return real_popen(*args, **kwargs)
+
+            with mock.patch.object(host.subprocess, "Popen", side_effect=spawn):
+                result = host.run_ffmpeg([sys.executable, str(script), str(target)], target, threading.Event(), progress)
             self.assertEqual(result.read_bytes(), b"finished")
             self.assertEqual(result.stat().st_mode & 0o777, 0o600)
             self.assertEqual(list(root.glob(".*.part.mp4")), [])
+            self.assertIs(observed_spawn["stdin"], host.subprocess.DEVNULL)
+            self.assertTrue(observed_spawn["start_new_session"])
+            limited = host.resource_limited_ffmpeg_args(local_args)
+            self.assertEqual(limited[limited.index("-threads") + 1], str(host.FFMPEG_MAX_THREADS))
 
     def test_ffmpeg_audio_progress_uses_media_time_not_encoded_bitrate(self):
         events = []

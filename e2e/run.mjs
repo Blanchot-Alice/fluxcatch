@@ -8,13 +8,15 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
-import { fileURLToPath } from "node:url";
-import { publicDisplayUrl } from "../extension/lib/candidate-public.js";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
-const EXTENSION_DIR = path.join(ROOT, "extension");
+const EXTENSION_DIR = process.env.FLUXCATCH_EXTENSION_DIR
+  ? path.resolve(process.env.FLUXCATCH_EXTENSION_DIR)
+  : path.join(ROOT, "extension");
 const MANIFEST_PATH = path.join(EXTENSION_DIR, "manifest.json");
+const { publicDisplayUrl } = await import(pathToFileURL(path.join(EXTENSION_DIR, "lib/candidate-public.js")).href);
 const ARTIFACT_PATH = path.join(HERE, "artifacts", "latest.json");
 const SCREENSHOT_DIR = path.join(HERE, "artifacts", "screenshots");
 const PHASE_B_ARTIFACT_DIR = path.join(HERE, "artifacts", "phase-b-matrix");
@@ -26,13 +28,6 @@ const BADGE_APPEAR_TIMEOUT_MS = 3_000;
 const HLS_DISPLAY_TITLE = "Volume of Distribution Interactive | Pharmacokinetics - Part 1";
 const HLS_INTERNAL_ASSET_TOKEN = "an_PHRM_PK1_2CM_v04_comp_v01_wm_cr_cc03";
 const UI_DIRECT_FILENAME = "FluxCatch arrayBuffer fixture.mp4";
-const LONG_TASK_STEM = "药代动力学课程_血药浓度时间曲线与双室模型_完整高清课程录像_第十二章_最终审核版本";
-const TASK_FILENAMES = Object.freeze({
-  completed: `${LONG_TASK_STEM}_已完成.mp4`,
-  cancelled: `${LONG_TASK_STEM}_用户取消.mp4`,
-  closeTerminal: `${LONG_TASK_STEM}_关闭前取消.mp4`,
-  running: `${LONG_TASK_STEM}_正在下载.mp4`
-});
 const HLS_RENDITIONS = [
   { slug: "q360-13b7ae81273bc61a0691de6bfa56425760148d79", bandwidth: 450000, width: 640, height: 360, codecs: "avc1.42E01E,mp4a.40.2" },
   { slug: "q480-8ba84504ee32e31dd44f9dd3462a250ae9438a37", bandwidth: 800000, width: 854, height: 480, codecs: "avc1.4D401E,mp4a.40.2" },
@@ -42,8 +37,15 @@ const HLS_RENDITIONS = [
 ];
 
 const manifest = JSON.parse(fs.readFileSync(MANIFEST_PATH, "utf8"));
+const defaultMessages = JSON.parse(fs.readFileSync(
+  path.join(EXTENSION_DIR, "_locales", manifest.default_locale, "messages.json"), "utf8"));
+const EXPECTED_MANIFEST_NAME = resolveManifestMessage(manifest.name, defaultMessages);
 const EXPECTED_EXTENSION_ID = extensionIdFromManifestKey(manifest.key);
 const E2E_SOURCE_COMMIT = resolveE2eSourceCommit();
+const EXPECTED_RUNTIME_COMMIT = process.env.FLUXCATCH_EXPECTED_BUILD_COMMIT || "development";
+const PACKAGED_EXTENSION_RUN = EXPECTED_RUNTIME_COMMIT !== "development";
+const E2E_WINDOW_SIZE = parseE2eWindowSize(process.env.FLUXCATCH_E2E_WINDOW_SIZE || "1280x900");
+const EXPECT_RESTRICTED_ACTION_POPUP = process.env.FLUXCATCH_EXPECT_RESTRICTED_POPUP === "1";
 const runId = `${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
 const report = {
   schemaVersion: 3,
@@ -53,7 +55,7 @@ const report = {
   chrome: {},
   extension: {
     expectedId: EXPECTED_EXTENSION_ID,
-    expectedManifest: { name: manifest.name, version: manifest.version }
+    expectedManifest: { name: EXPECTED_MANIFEST_NAME, version: manifest.version }
   },
   cases: [],
   ui: [],
@@ -126,7 +128,7 @@ try {
   })()`);
   assert.deepEqual(runtimeManifest, {
     id: EXPECTED_EXTENSION_ID,
-    name: manifest.name,
+    name: EXPECTED_MANIFEST_NAME,
     version: manifest.version
   }, "runtime manifest differs from the checked-in manifest");
   report.extension.runtimeManifest = runtimeManifest;
@@ -135,12 +137,20 @@ try {
   assert.equal(buildInfo.diagnostics?.extension?.version, manifest.version, "runtime build version differs from manifest");
   assert.equal(buildInfo.diagnostics?.extension?.id, EXPECTED_EXTENSION_ID, "runtime build identity has the wrong extension ID");
   assert.equal(buildInfo.diagnostics?.extension?.channel, "github", "runtime build channel mismatch");
-  assert.equal(buildInfo.diagnostics?.extension?.commit, "development", "unpacked source must retain its non-release sentinel");
+  assert.equal(buildInfo.diagnostics?.extension?.commit, EXPECTED_RUNTIME_COMMIT,
+    PACKAGED_EXTENSION_RUN ? "packaged extension commit differs from the tested candidate" : "unpacked source must retain its non-release sentinel");
+  if (PACKAGED_EXTENSION_RUN) {
+    assert.match(buildInfo.diagnostics?.extension?.buildTimestamp || "", /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/,
+      "packaged extension lacks its reproducible source timestamp");
+  } else {
+    assert.equal(buildInfo.diagnostics?.extension?.buildTimestamp, null,
+      "unpacked source must not claim a packaged source timestamp");
+  }
   assert.equal(buildInfo.diagnostics?.capabilities?.externalToolNetwork, false, "stable external-tool gate must stay closed");
   assert.equal(buildInfo.diagnostics?.capabilities?.remoteThumbnails, false, "stable remote thumbnail gate must stay closed");
   report.extension.buildIdentity = {
     ...buildInfo.diagnostics.extension,
-    commit: E2E_SOURCE_COMMIT
+    commit: PACKAGED_EXTENSION_RUN ? buildInfo.diagnostics.extension.commit : E2E_SOURCE_COMMIT
   };
   report.extension.capabilityProfile = buildInfo.diagnostics.capabilities;
 
@@ -189,6 +199,7 @@ try {
   await browser.send("Browser.setDownloadBehavior", { behavior: "allow", downloadPath: uiDownloadDir, eventsEnabled: true });
   const uiFixture = await prepareUiFixtureTab();
   try {
+    report.extension.toolbarPopupIntrinsic = await auditToolbarPopupIntrinsicSize(launched.httpOrigin);
     await auditNewExtensionPage("popup", "popup/popup.html", 372, 560, `(async () => {
       const deadline = Date.now() + ${CASE_TIMEOUT_MS};
       let mediaCard;
@@ -240,20 +251,9 @@ try {
       };
       await new Promise((resolve) => setTimeout(resolve, 550));
       button = document.querySelector(".media-download");
-      button?.click();
-      let quickDownloadFinished = false;
-      while (Date.now() < deadline) {
-        const response = await chrome.runtime.sendMessage({ type: "GET_JOBS" });
-        const job = response?.jobs?.find((item) => item.method === "browser"
-          && item.filename === ${JSON.stringify(UI_DIRECT_FILENAME)});
-        if (job?.status === "failed") throw new Error(job.error || job.message || "Side Panel download failed");
-        if (job?.status === "completed") {
-          quickDownloadFinished = true;
-          break;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      }
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      const quickDownloadLabel = button?.textContent;
+      const quickDownloadDescribedBy = button?.getAttribute("aria-describedby");
+      const jobsResponse = await chrome.runtime.sendMessage({ type: "GET_JOBS" });
       return {
         title: document.title,
         brand: document.querySelector(".brand-copy strong")?.textContent,
@@ -262,7 +262,10 @@ try {
         mediaHeading: document.querySelector("#mediaHeading")?.textContent,
         jobsHeading: document.querySelector("#jobsHeading")?.textContent,
         quickDownloadButtons: document.querySelectorAll(".media-download").length,
-        quickDownloadFinished,
+        quickDownloadLabel,
+        quickDownloadDescribedBy,
+        quickDownloadCreatedJob: Boolean(jobsResponse?.jobs?.find((item) =>
+          item.filename === ${JSON.stringify(UI_DIRECT_FILENAME)})),
         thumbnailCount: document.querySelectorAll(".media-thumbnail").length,
         fallbackCount: document.querySelectorAll(".media-row .kind-icon").length,
         globalErrorHidden: document.querySelector("#globalError")?.hidden,
@@ -272,13 +275,11 @@ try {
         overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth
       };
     })()`, launched.httpOrigin);
-    await verifyUiDirectDownload(uiDownloadDir);
+    await auditGenericNativeBoundary(uiFixture, uiDownloadDir);
     await auditPopupManifestLoading(launched.httpOrigin);
   } finally {
     try { await control(`async () => { await chrome.tabs.remove(${JSON.stringify(uiFixture.tabId)}); return true; }`); } catch { /* Best-effort fixture cleanup. */ }
   }
-
-  await auditPopupTaskLifecycle(uiDownloadDir);
 
   const cases = [
     {
@@ -316,7 +317,7 @@ try {
   assert.ok(report.ui.every((item) => item.status === "passed"), "one or more UI page checks failed");
   assert.equal(report.cases.length, cases.length, "not every E2E case ran");
   assert.ok(report.cases.every((item) => item.status === "passed"), "one or more E2E cases failed");
-  assert.equal(report.flows.length, 3, "not every popup interaction flow ran");
+  assert.equal(report.flows.length, 3, "not every interaction flow ran");
   assert.ok(report.flows.every((item) => item.status === "passed"), "one or more E2E interaction flows failed");
   assert.equal(report.visualMatrix.length, 13, "Phase B visual matrix is incomplete");
   assert.ok(report.visualMatrix.every((item) => item.status === "passed"), "one or more Phase B visual states failed");
@@ -826,7 +827,7 @@ async function auditPhaseBOptionsMatrix(devtoolsOrigin) {
     }, CASE_TIMEOUT_MS, "private-network confirmation dialog");
     assert.equal(warning.checked, false, "private-network setting changed before confirmation");
     assert.equal(warning.active, "privateNetworkCancelButton", "private-network dialog did not place focus on a safe action");
-    assert.match(warning.text, /metadata.*link-local.*multicast.*reserved/i);
+    assert.match(warning.text, /云元数据服务.*链路本地.*多播.*未指定.*保留地址/);
     await evaluate(client, `(() => {
       globalThis.__phaseBPrivateDialogClicks = 0;
       globalThis.__phaseBPrivateDialogFocus = [];
@@ -873,10 +874,11 @@ async function auditPhaseBOptionsMatrix(devtoolsOrigin) {
     })()`);
     assert.match(missingMatrix.native, /未安装|未注册/);
     assert.match(missingMatrix.permission, /已授权.*未安装|已授权.*未注册/);
-    assert.match(missingMatrix.permission, /bash native-host\/install-macos\.sh/);
+    assert.match(missingMatrix.permission, /\.\/scripts\/native-install-wrapper\.sh/);
     assert.equal(missingMatrix.action, "重新检查");
     assert.equal(missingMatrix.guideOpen, true, "missing native host did not open its installation guide");
-    assert.match(missingMatrix.guideText, /bash native-host\/install-macos\.sh/);
+    assert.match(missingMatrix.guideText, /\.\/scripts\/native-install-wrapper\.sh/);
+    assert.match(missingMatrix.guideText, /\.\/install-macos\.sh/);
     assert.doesNotMatch(JSON.stringify(missingMatrix), /TypeError|connectNative is not a function/);
     assert.equal(missingMatrix.matrixVisible, true, "missing-host capability matrix is outside its evidence screenshot");
     assert.ok(missingMatrix.states.every((state) => ["ready", "gated", "missing", "mismatch", "unknown"].includes(state)),
@@ -919,7 +921,7 @@ async function auditPhaseBOptionsMatrix(devtoolsOrigin) {
       renderHostStatus({
         connected: true,
         compatible: true,
-        version: "0.2.4",
+        version: "0.2.5",
         protocolVersion: 1,
         ffmpeg: true,
         capabilities: {
@@ -1114,6 +1116,179 @@ async function openExtensionTarget(relativePath, devtoolsOrigin, label) {
   return { targetId, client };
 }
 
+async function auditToolbarPopupIntrinsicSize(devtoolsOrigin) {
+  const { windowId } = await browser.send("Browser.getWindowForTarget", { targetId: controlTargetId });
+  const { bounds } = await browser.send("Browser.getWindowBounds", { windowId });
+  const mode = EXPECT_RESTRICTED_ACTION_POPUP ? "restricted" : "roomy";
+  const popup = await openRealToolbarPopup(devtoolsOrigin, mode);
+  try {
+    await poll(async () => await evaluate(popup.client, `document.readyState === "complete"`),
+      CASE_TIMEOUT_MS, `${mode} Chrome action popup DOM ready`);
+    await poll(async () => await evaluate(popup.client, `Boolean(document.querySelector(".media-card"))`),
+      CASE_TIMEOUT_MS, `${mode} Chrome action popup media card`);
+    const geometry = await popupIntrinsicGeometry(popup.client);
+    assertToolbarPopupGeometry(geometry);
+    if (EXPECT_RESTRICTED_ACTION_POPUP) {
+      assert.ok(geometry.viewport.height < 560,
+        `restricted Chrome screen did not constrain popup height: ${JSON.stringify(geometry.viewport)}`);
+    } else {
+      assert.equal(geometry.viewport.height, 560,
+        `roomy Chrome screen did not expose the full popup height: ${JSON.stringify(geometry.viewport)}`);
+    }
+    const screenshot = await popup.client.send("Page.captureScreenshot", {
+      format: "png",
+      captureBeyondViewport: false
+    }, CASE_TIMEOUT_MS * 2);
+    fs.mkdirSync(SCREENSHOT_DIR, { recursive: true });
+    const screenshotPath = path.join(SCREENSHOT_DIR, `popup-action-${mode}.png`);
+    fs.writeFileSync(screenshotPath, Buffer.from(screenshot.data, "base64"));
+    return {
+      mode: "chrome.action.openPopup",
+      hostViewportVerified: true,
+      deviceMetricsOverrideApplied: false,
+      heightMode: mode,
+      requestedWindowSize: E2E_WINDOW_SIZE,
+      measuredWindowBounds: bounds,
+      geometry,
+      screenshot: path.relative(HERE, screenshotPath)
+    };
+  } finally {
+    await closeExtensionTarget(popup);
+  }
+}
+
+async function openRealToolbarPopup(devtoolsOrigin, label) {
+  const popupUrl = `chrome-extension://${EXPECTED_EXTENSION_ID}/popup/popup.html`;
+  const baselineTargetIds = new Set((await listDevToolsTargets(devtoolsOrigin)).map((target) => target.id));
+  const opened = await control(`async () => {
+    if (typeof chrome.action?.openPopup !== "function") return { supported: false };
+    const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    await chrome.action.openPopup(activeTab?.windowId == null ? undefined : { windowId: activeTab.windowId });
+    return { supported: true, windowId: activeTab?.windowId ?? null };
+  }`);
+  assert.equal(opened?.supported, true,
+    "this E2E Chrome build does not expose chrome.action.openPopup for real popup sizing");
+  const target = await waitForTarget(
+    devtoolsOrigin,
+    (candidate) => candidate.url === popupUrl && !baselineTargetIds.has(candidate.id),
+    CASE_TIMEOUT_MS,
+    `${label} real Chrome action popup target`
+  );
+  const client = await CdpClient.connect(target.webSocketDebuggerUrl);
+  await client.send("Runtime.enable");
+  await client.send("Page.enable");
+  return { targetId: target.id, client };
+}
+
+async function popupIntrinsicGeometry(client) {
+  return evaluate(client, `(() => {
+    const rect = (selector) => {
+      const value = document.querySelector(selector)?.getBoundingClientRect();
+      return value ? {
+        left: value.left, top: value.top, right: value.right, bottom: value.bottom,
+        width: value.width, height: value.height
+      } : null;
+    };
+    const popupSheet = [...document.styleSheets].find((sheet) => sheet.href?.endsWith("/popup/popup.css"));
+    const bodyRule = popupSheet ? [...popupSheet.cssRules].find((rule) => rule.selectorText === "body") : null;
+    const htmlRule = popupSheet ? [...popupSheet.cssRules].find((rule) => rule.selectorText === "html") : null;
+    const body = document.body.getBoundingClientRect();
+    const overlaps = (left, right) => Boolean(left && right
+      && left.left < right.right && left.right > right.left
+      && left.top < right.bottom && left.bottom > right.top);
+    const brand = rect(".brand");
+    const toolbar = rect(".toolbar");
+    const topbar = rect(".topbar");
+    const controls = rect(".control-row");
+    const content = rect("main.body");
+    const footer = rect(".foot-actions");
+    const firstCard = rect(".media-card");
+    const footerButtons = [...document.querySelectorAll(".foot-actions .foot-btn")].map((node) => {
+      const value = node.getBoundingClientRect();
+      return { left: value.left, top: value.top, right: value.right, bottom: value.bottom, width: value.width, height: value.height };
+    });
+    return {
+      viewport: {
+        width: window.innerWidth,
+        height: window.innerHeight,
+        clientWidth: document.documentElement.clientWidth,
+        clientHeight: document.documentElement.clientHeight
+      },
+      body: {
+        left: body.left, top: body.top, right: body.right, bottom: body.bottom,
+        width: body.width, height: body.height,
+        scrollWidth: document.body.scrollWidth, scrollHeight: document.body.scrollHeight
+      },
+      declaredBodySize: {
+        width: bodyRule?.style.width || "",
+        height: bodyRule?.style.height || "",
+        maxHeight: bodyRule?.style.maxHeight || "",
+        cssText: bodyRule?.style.cssText || ""
+      },
+      declaredRootSize: {
+        width: htmlRule?.style.width || "",
+        height: htmlRule?.style.height || "",
+        overflow: htmlRule?.style.overflow || "",
+        cssText: htmlRule?.style.cssText || ""
+      },
+      layout: {
+        topbar, brand, toolbar, controls, content, footer, firstCard, footerButtons,
+        brandToolbarOverlap: overlaps(brand, toolbar),
+        topbarControlsOverlap: overlaps(topbar, controls),
+        controlsContentOverlap: overlaps(controls, content),
+        contentFooterOverlap: overlaps(content, footer),
+        cardTopbarOverlap: overlaps(firstCard, topbar),
+        cardControlsOverlap: overlaps(firstCard, controls),
+        cardFooterOverlap: overlaps(firstCard, footer),
+        footerButtonOverlap: footerButtons.some((left, index) =>
+          footerButtons.slice(index + 1).some((right) => overlaps(left, right)))
+      },
+      horizontalOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      verticalOverflow: document.documentElement.scrollHeight - document.documentElement.clientHeight
+    };
+  })()`);
+}
+
+function assertToolbarPopupGeometry(geometry) {
+  assert.equal(geometry.declaredRootSize.width, "372px", "popup root lost its intrinsic width request");
+  assert.equal(geometry.declaredRootSize.height, "560px", "popup root lost its intrinsic height request");
+  assert.equal(geometry.declaredRootSize.overflow, "hidden", "popup root no longer contains a constrained host viewport");
+  assert.equal(geometry.declaredBodySize.width, "372px", "popup body lost its fixed intrinsic width");
+  assert.equal(geometry.declaredBodySize.height, "min(560px, 100dvh)",
+    "popup body lost its adaptive 560px height ceiling");
+  assert.equal(geometry.declaredBodySize.maxHeight, "100dvh", "popup body lost its viewport height guard");
+  assert.doesNotMatch(geometry.declaredBodySize.width, /v[wh]/i,
+    "popup width depends on the host viewport during Chrome's intrinsic layout pass");
+  assert.equal(geometry.body.width, 372, "popup body does not render at its declared intrinsic width");
+  assert.equal(geometry.viewport.width, 372, "real Chrome action popup host did not adopt the 372px intrinsic width");
+  assert.equal(geometry.viewport.clientWidth, 372, "real Chrome action popup client width is not 372px");
+  assert.equal(geometry.body.height, geometry.viewport.height,
+    "popup body height does not adapt to the real Chrome action viewport");
+  assert.equal(geometry.viewport.clientHeight, geometry.viewport.height,
+    "real Chrome action popup client height differs from its viewport height");
+  assert.ok(geometry.body.height <= 560, `popup body exceeds its 560px ceiling: ${geometry.body.height}px`);
+  assert.equal(geometry.layout.brandToolbarOverlap, false, "popup brand overlaps the header toolbar");
+  assert.equal(geometry.layout.topbarControlsOverlap, false, "popup header overlaps the media/task controls");
+  assert.equal(geometry.layout.controlsContentOverlap, false, "popup controls overlap the scrollable content");
+  assert.equal(geometry.layout.contentFooterOverlap, false, "popup content overlaps the footer actions");
+  assert.equal(geometry.layout.cardTopbarOverlap, false, "popup media card overlaps the header");
+  assert.equal(geometry.layout.cardControlsOverlap, false, "popup media card overlaps the view controls");
+  assert.equal(geometry.layout.cardFooterOverlap, false, "popup media card overlaps the footer");
+  assert.equal(geometry.layout.footerButtonOverlap, false, "popup footer buttons overlap each other");
+  assert.ok(geometry.layout.footer.top >= 0 && geometry.layout.footer.bottom <= geometry.viewport.height + 1,
+    `popup footer is outside the visible host viewport: ${JSON.stringify({ footer: geometry.layout.footer, viewport: geometry.viewport })}`);
+  assert.ok(geometry.layout.firstCard && geometry.layout.firstCard.top >= geometry.layout.controls.bottom,
+    "popup did not render a separated media card below the controls");
+  assert.ok(geometry.horizontalOverflow <= 1,
+    `real Chrome action popup has ${geometry.horizontalOverflow}px horizontal overflow`);
+}
+
+async function listDevToolsTargets(devtoolsOrigin) {
+  const response = await fetch(`${devtoolsOrigin}/json/list`, { cache: "no-store" });
+  if (!response.ok) throw new Error(`DevTools target list returned HTTP ${response.status}`);
+  return response.json();
+}
+
 async function closeExtensionTarget({ targetId, client }) {
   client?.close();
   if (targetId) {
@@ -1269,7 +1444,7 @@ async function auditHlsDownloadDialog(tabId, expectedUrl, expectedTitle) {
     assert.doesNotMatch(result.filenameBefore, /^[a-f0-9]{20,}\./i, "dialog filename fell back to an opaque asset hash");
     assert.doesNotMatch(result.filenameBefore, /an_PHRM|comp_v\d+|wm_cr|cc\d+/i,
       "dialog filename exposes an internal asset-management token");
-    assert.ok(result.formatOptions.some((option) => option.value === "mp3" && /(仅音频|需高速下载功能)/.test(option.text)),
+    assert.ok(result.formatOptions.some((option) => option.value === "mp3" && /(仅音频|需本地下载引擎)/.test(option.text)),
       "MP3 is not a first-class output format");
     assert.equal(result.filenameAfter, `${filesystemSafeTitle}.mp3`, "choosing MP3 did not update the filename extension");
     assert.equal(result.hasExtractCheckbox, false, "the obsolete extract-audio checkbox is still present");
@@ -1345,263 +1520,24 @@ async function auditHlsDownloadDialog(tabId, expectedUrl, expectedTitle) {
   }
 }
 
-async function auditPopupTaskLifecycle(downloadDir) {
-  const item = { name: "popup-task-lifecycle", status: "running", viewport: { width: 372, height: 560 } };
-  report.flows.push(item);
-  const taskRun = `${runId}-tasks`;
-  const encodedRun = encodeURIComponent(taskRun);
-  const pageUrl = `${serverOrigin}/cases/tasks.html?run=${encodedRun}`;
-  const urls = {
-    completed: `${serverOrigin}/media/task.mp4?run=${encodedRun}&job=completed`,
-    cancelled: `${serverOrigin}/media/task.mp4?run=${encodedRun}&job=cancelled`,
-    closeTerminal: `${serverOrigin}/media/task.mp4?run=${encodedRun}&job=close-terminal`,
-    running: `${serverOrigin}/media/task.mp4?run=${encodedRun}&job=running`
-  };
-  const filenames = TASK_FILENAMES;
-  let tabId;
-  let popup;
-  try {
-    const created = await control(`async () => {
-      const tab = await chrome.tabs.create({ url: "about:blank", active: true });
-      const cleared = await chrome.runtime.sendMessage({ type: "CLEAR_TAB", tabId: tab.id });
-      await chrome.tabs.update(tab.id, { url: ${JSON.stringify(pageUrl)}, active: true });
-      return { tabId: tab.id, cleared };
-    }`);
-    tabId = created.tabId;
-    assert.equal(created.cleared?.ok, true, "task fixture preflight CLEAR_TAB failed");
-    assert.deepEqual(created.cleared?.jobs || [], [], "task fixture inherited stale terminal jobs");
-    await waitForTabComplete(tabId, pageUrl, CASE_TIMEOUT_MS);
-
-    const detected = await poll(async () => {
-      const response = await control(`async () => chrome.runtime.sendMessage({ type: "GET_TAB_MEDIA", tabId: ${JSON.stringify(tabId)} })`);
-      if (!response?.ok) throw new Error(response?.error || "GET_TAB_MEDIA failed for task lifecycle fixture");
-      const byFilename = Object.fromEntries((response.items || []).map((candidate) => [candidate.suggestedFilename, candidate]));
-      return Object.values(filenames).every((filename) => byFilename[filename]) ? byFilename : null;
-    }, CASE_TIMEOUT_MS, "four task lifecycle media candidates");
-
-    const start = async (name) => {
-      const candidate = detected[filenames[name]];
-      const response = await control(`async () => chrome.runtime.sendMessage({
-        type: "DOWNLOAD",
-        tabId: ${JSON.stringify(tabId)},
-        candidate: ${JSON.stringify({ id: candidate.id, kind: candidate.kind, generation: candidate.generation })},
-        options: { filename: ${JSON.stringify(filenames[name])}, saveAs: false }
-      })`);
-      assert.equal(response?.ok, true, `${name} task did not start: ${response?.error || "unknown error"}`);
-      assert.equal(response.method, "browser", `${name} task unexpectedly used the native host`);
-      const started = await control(`async () => Promise.all([
-        chrome.runtime.sendMessage({ type: "GET_JOBS" }),
-        chrome.downloads.search({ id: ${JSON.stringify(response.downloadId)} })
-      ])`);
-      const startedJob = started?.[0]?.jobs?.find((job) => job.jobId === response.jobId);
-      assert.equal(startedJob?.filename, filenames[name],
-        `${name} filename changed while starting: ${JSON.stringify({ job: startedJob, browser: started?.[1] })}`);
-      return response.jobId;
-    };
-
-    const completedId = await start("completed");
-    const completedJob = await pollJob(completedId, (job) => job.status === "completed", "long-name completed task");
-    const completedOutput = await poll(async () => walk(downloadDir, 5)
-      .find((value) => path.basename(value).normalize("NFC") === filenames.completed.normalize("NFC")) || null,
-    CASE_TIMEOUT_MS, "long-name completed file on disk");
-    assert.equal(path.basename(completedOutput).normalize("NFC"), completedJob.filename.normalize("NFC"),
-      "the completed task label and downloaded file basename differ");
-
-    const cancelledId = await start("cancelled");
-    await pollJob(cancelledId, (job) => !isTerminalJobStatus(job.status), "cancellable browser task");
-    const cancelled = await control(`async () => chrome.runtime.sendMessage({ type: "CANCEL_JOB", jobId: ${JSON.stringify(cancelledId)} })`);
-    assert.equal(cancelled?.ok, true, "CANCEL_JOB failed for the first terminal task");
-    await pollJob(cancelledId, (job) => job.status === "cancelled", "cancelled task terminal state");
-
-    const closeTerminalId = await start("closeTerminal");
-    await pollJob(closeTerminalId, (job) => !isTerminalJobStatus(job.status), "first active task");
-    const runningId = await start("running");
-    await pollJob(runningId, (job) => !isTerminalJobStatus(job.status), "second active task");
-
-    popup = await openPopupForFlow(tabId, "task lifecycle popup");
-    const initial = await popupTaskSnapshot(popup.client, 4);
-    assertTaskLayout(initial, 4, "initial task list");
-    assert.equal(initial.jobCount, "4", "task badge must count visible terminal and active cards");
-    assert.ok(initial.stateTexts.some((value) => /完成/.test(value)), "completed state is missing from the task list");
-    assert.ok(initial.stateTexts.some((value) => /取消/.test(value)), "cancelled state is missing from the task list");
-    for (const filename of Object.values(filenames)) {
-      assert.ok(initial.filenames.includes(filename),
-        `long filename did not reach the popup intact: ${filename}; rendered: ${JSON.stringify(initial.filenames)}`);
-    }
-    item.initial = initial;
-    item.initialScreenshot = await captureFlowScreenshot(popup.client, "popup-task-lifecycle-before-clear.png");
-
-    await evaluate(popup.client, `(async () => {
-      document.querySelector("#clearButton")?.click();
-      const deadline = Date.now() + ${CASE_TIMEOUT_MS};
-      while ((document.querySelectorAll(".job-card").length !== 2 || document.querySelector("#mediaCount")?.textContent !== "0") && Date.now() < deadline) {
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      }
-      return true;
-    })()`);
-    const afterClear = await popupTaskSnapshot(popup.client, 2);
-    assertTaskLayout(afterClear, 2, "task list after clearing detection results");
-    assert.equal(afterClear.mediaCount, "0", "Clear detection results did not empty the active tab's media");
-    assert.equal(afterClear.jobCount, "2", "Clear detection results must retain and count both active tasks");
-    assert.equal(afterClear.stateTexts.some((value) => /完成|失败|取消/.test(value)), false,
-      "Clear detection results left a terminal task card behind");
-    const backgroundAfterClear = await control(`async () => Promise.all([
-      chrome.runtime.sendMessage({ type: "GET_TAB_MEDIA", tabId: ${JSON.stringify(tabId)} }),
-      chrome.runtime.sendMessage({ type: "GET_JOBS" })
-    ])`);
-    assert.equal(backgroundAfterClear[0]?.items?.length, 0, "CLEAR_TAB did not clear background media state");
-    assert.deepEqual((backgroundAfterClear[1]?.jobs || []).map((job) => job.jobId).sort(), [closeTerminalId, runningId].sort(),
-      "CLEAR_TAB removed an active job or retained a terminal job");
-    item.afterClear = afterClear;
-
-    const cancelBeforeClose = await control(`async () => chrome.runtime.sendMessage({ type: "CANCEL_JOB", jobId: ${JSON.stringify(closeTerminalId)} })`);
-    assert.equal(cancelBeforeClose?.ok, true, "CANCEL_JOB failed before popup-close cleanup");
-    await pollJob(closeTerminalId, (job) => job.status === "cancelled", "terminal task created before popup close");
-    const beforeClose = await popupTaskSnapshot(popup.client, 2);
-    assert.ok(beforeClose.stateTexts.some((value) => /取消/.test(value)), "popup did not render the terminal task created before close");
-
-    await closePopupForFlow(popup);
-    popup = null;
-    const jobsAfterClose = await poll(async () => {
-      const response = await control(`async () => chrome.runtime.sendMessage({ type: "GET_JOBS" })`);
-      if (!response?.ok) throw new Error(response?.error || "GET_JOBS failed after popup close");
-      return response.jobs?.length === 1 && response.jobs[0].jobId === runningId ? response.jobs : null;
-    }, CASE_TIMEOUT_MS, "last popup close to prune terminal jobs while preserving active jobs");
-    assert.equal(isTerminalJobStatus(jobsAfterClose[0].status), false, "popup close retained a terminal job instead of the active job");
-
-    popup = await openPopupForFlow(tabId, "reopened task lifecycle popup");
-    const reopened = await popupTaskSnapshot(popup.client, 1);
-    assertTaskLayout(reopened, 1, "reopened task list");
-    assert.equal(reopened.jobCount, "1", "reopened popup task badge does not match the one preserved active job");
-    assert.deepEqual(reopened.filenames, [filenames.running], "reopened popup restored a terminal task or lost the active task");
-    assert.equal(reopened.stateTexts.some((value) => /完成|失败|取消/.test(value)), false,
-      "reopened popup displayed a terminal task from the previous popup session");
-    item.reopened = reopened;
-    item.reopenedScreenshot = await captureFlowScreenshot(popup.client, "popup-task-lifecycle-reopened.png");
-
-    const finalCancel = await control(`async () => chrome.runtime.sendMessage({ type: "CANCEL_JOB", jobId: ${JSON.stringify(runningId)} })`);
-    assert.equal(finalCancel?.ok, true, "final task cleanup cancellation failed");
-    await pollJob(runningId, (job) => job.status === "cancelled", "final task cleanup terminal state");
-    await closePopupForFlow(popup);
-    popup = null;
-    await poll(async () => {
-      const response = await control(`async () => chrome.runtime.sendMessage({ type: "GET_JOBS" })`);
-      return response?.ok && response.jobs?.length === 0 ? true : null;
-    }, CASE_TIMEOUT_MS, "final popup disconnect task cleanup");
-    item.status = "passed";
-  } catch (error) {
-    item.status = "failed";
-    item.error = serializeError(error);
-    throw error;
-  } finally {
-    if (popup) await closePopupForFlow(popup).catch(() => {});
-    if (Number.isInteger(tabId)) {
-      try { await control(`async () => { await chrome.tabs.remove(${JSON.stringify(tabId)}); return true; }`); } catch { /* Best-effort task fixture cleanup. */ }
-    }
-  }
-}
-
-async function openPopupForFlow(tabId, label) {
-  await control(`async () => { await chrome.tabs.update(${JSON.stringify(tabId)}, { active: true }); return true; }`);
-  const { targetId } = await browser.send("Target.createTarget", {
-    url: `chrome-extension://${EXPECTED_EXTENSION_ID}/popup/popup.html`,
-    background: true
-  });
-  const target = await waitForTarget(
-    report.chrome.devtools,
-    (candidate) => candidate.id === targetId && candidate.type === "page",
-    CASE_TIMEOUT_MS,
-    label
-  );
-  const client = await CdpClient.connect(target.webSocketDebuggerUrl);
-  await client.send("Runtime.enable");
-  await client.send("Page.enable");
-  await client.send("Emulation.setDeviceMetricsOverride", {
-    width: 372,
-    height: 560,
-    deviceScaleFactor: 1,
-    mobile: false
-  });
-  await poll(async () => await evaluate(client, `document.readyState === "complete"`), CASE_TIMEOUT_MS, `${label} DOM ready`);
-  return { targetId, client };
-}
-
-async function closePopupForFlow(popup) {
-  popup.client?.close();
-  if (popup.targetId) await browser.send("Target.closeTarget", { targetId: popup.targetId });
-}
-
-async function popupTaskSnapshot(client, expectedCards) {
-  return poll(async () => {
-    const result = await evaluate(client, `(() => {
-      document.querySelector("#jobsTab")?.click();
-      const cards = [...document.querySelectorAll(".job-card")];
-      const states = cards.map((card) => {
-        const node = card.querySelector(".job-line .job-state");
-        const cardRect = card.getBoundingClientRect();
-        const rect = node?.getBoundingClientRect();
-        return {
-          text: node?.textContent?.trim() || "",
-          width: rect?.width || 0,
-          clipped: Boolean(node && node.scrollWidth > node.clientWidth + 1),
-          insideCard: Boolean(rect && rect.left >= cardRect.left - 1 && rect.right <= cardRect.right + 1)
-        };
-      });
-      return {
-        cardCount: cards.length,
-        jobCount: document.querySelector("#jobCount")?.textContent?.trim() || "",
-        mediaCount: document.querySelector("#mediaCount")?.textContent?.trim() || "",
-        filenames: cards.map((card) => card.querySelector(".job-line strong")?.textContent?.trim() || ""),
-        stateTexts: states.map((state) => state.text),
-        states,
-        cancelButtons: cards.filter((card) => card.querySelector(".cancel-job")).length,
-        overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
-        viewportWidth: document.documentElement.clientWidth,
-        cardsInsideViewport: cards.every((card) => {
-          const rect = card.getBoundingClientRect();
-          return rect.left >= -1 && rect.right <= document.documentElement.clientWidth + 1;
-        })
-      };
-    })()`);
-    return result.cardCount === expectedCards ? result : null;
-  }, CASE_TIMEOUT_MS, `popup to render ${expectedCards} task cards`);
-}
-
-function assertTaskLayout(snapshot, expectedCards, label) {
-  assert.equal(snapshot.cardCount, expectedCards, `${label} rendered the wrong number of cards`);
-  assert.ok(Number(snapshot.overflow) <= 1, `${label} has horizontal overflow: ${snapshot.overflow}px`);
-  assert.equal(snapshot.cardsInsideViewport, true, `${label} has a task card outside the 372px viewport`);
-  assert.ok(snapshot.states.every((state) => state.width > 0 && !state.clipped && state.insideCard),
-    `${label} clipped or displaced a task state: ${JSON.stringify(snapshot.states)}`);
-}
-
-async function pollJob(jobId, predicate, label) {
-  return poll(async () => {
-    const response = await control(`async () => chrome.runtime.sendMessage({ type: "GET_JOBS" })`);
-    if (!response?.ok) throw new Error(response?.error || "GET_JOBS failed");
-    const job = response.jobs?.find((candidate) => candidate.jobId === jobId);
-    return job && predicate(job) ? job : null;
-  }, CASE_TIMEOUT_MS, label);
-}
-
-function isTerminalJobStatus(status) {
-  return ["completed", "failed", "cancelled"].includes(status);
-}
-
-async function captureFlowScreenshot(client, filename) {
-  const screenshot = await client.send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false });
-  fs.mkdirSync(SCREENSHOT_DIR, { recursive: true });
-  const screenshotPath = path.join(SCREENSHOT_DIR, filename);
-  fs.writeFileSync(screenshotPath, Buffer.from(screenshot.data, "base64"));
-  return path.relative(HERE, screenshotPath);
-}
-
 async function auditPopupManifestLoading(devtoolsOrigin) {
   const item = { name: "popup-manifest-loading", status: "running", viewport: { width: 372, height: 560 } };
   report.flows.push(item);
   const fixtureId = `${runId}-manifest-loading`;
   const fixture = hlsFixtureUrls(fixtureId, { delayMs: 1200 });
-  const pageUrl = `${serverOrigin}${hlsFixturePagePath(fixtureId, { delayMs: 1200 })}`;
+  // Keep this interaction fixture to one observed master. The broader HLS
+  // detection fixture deliberately observes rendition playlists too, which
+  // starts the worker's background alias-inspection queue. Measuring the
+  // popup request while that queue is still draining makes a legitimate
+  // automatic probe look like a duplicate click. This flow is specifically
+  // responsible for proving that two synchronous clicks collapse to one
+  // user-initiated master request, so isolate that single causal request.
+  const pageQuery = new URLSearchParams({
+    run: fixtureId,
+    master: fixture.master,
+    caption: fixture.caption
+  });
+  const pageUrl = `${serverOrigin}/cases/hls.html?${pageQuery}`;
   const requestKey = fixtureRequestKey(new URL(fixture.master));
   let tabId;
   let popup;
@@ -1701,49 +1637,55 @@ async function prepareUiFixtureTab() {
   const tab = await control(`async () => chrome.tabs.create({ url: ${JSON.stringify(pageUrl)}, active: true })`);
   assert.ok(Number.isInteger(tab?.id), "UI fixture did not create an active tab");
   await waitForTabComplete(tab.id, pageUrl, CASE_TIMEOUT_MS);
-  await poll(async () => {
+  const candidate = await poll(async () => {
     const response = await control(`async () => chrome.runtime.sendMessage({ type: "GET_TAB_MEDIA", tabId: ${JSON.stringify(tab.id)} })`);
     if (!response?.ok) throw new Error(response?.error || "GET_TAB_MEDIA failed for UI fixture");
-    return response.items?.some((item) => item.kind === "video"
+    return response.items?.find((item) => item.kind === "video"
       && item.displayUrl === expectedUrl
       && item.thumbnailUrl === expectedThumbnailUrl
-      && item.thumbnailSource === "poster") ? true : null;
+      && item.thumbnailSource === "poster") || null;
   }, CASE_TIMEOUT_MS, "direct candidate for Side Panel quick download");
-  return { tabId: tab.id, expectedThumbnailUrl };
+  return {
+    tabId: tab.id,
+    expectedThumbnailUrl,
+    candidate: { id: candidate.id, kind: candidate.kind, generation: candidate.generation }
+  };
 }
 
-async function verifyUiDirectDownload(downloadDir) {
-  let lastJobs = [];
-  let job;
+async function auditGenericNativeBoundary(uiFixture, downloadDir) {
+  const item = { name: "generic-native-preflight", status: "running" };
+  report.flows.push(item);
   try {
-    job = await poll(async () => {
-      const response = await control(`async () => chrome.runtime.sendMessage({ type: "GET_JOBS" })`);
-      if (!response?.ok) throw new Error(response?.error || "GET_JOBS failed after Side Panel download");
-      lastJobs = response.jobs || [];
-      const candidate = lastJobs.find((item) => item.method === "browser" && item.filename === UI_DIRECT_FILENAME);
-      if (candidate?.status === "failed") throw new Error(candidate.error || candidate.message || "browser download failed");
-      return candidate?.status === "completed" ? candidate : null;
-    }, CASE_TIMEOUT_MS, "Side Panel browser download completion");
+    const result = await control(`async () => {
+      const before = await chrome.runtime.sendMessage({ type: "GET_JOBS" });
+      const response = await chrome.runtime.sendMessage({
+        type: "DOWNLOAD",
+        tabId: ${JSON.stringify(uiFixture.tabId)},
+        candidate: ${JSON.stringify(uiFixture.candidate)},
+        options: { outputContainer: "original", outputFormat: "original", convert: false, extractAudio: false }
+      });
+      const after = await chrome.runtime.sendMessage({ type: "GET_JOBS" });
+      return { before, response, after };
+    }`);
+    assert.equal(result.before?.ok, true, "GET_JOBS failed before native-boundary assertion");
+    assert.equal(result.response?.ok, false, "generic observed media bypassed the native policy broker");
+    assert.match(result.response?.error || "", /授权|本地引擎|高速下载/,
+      "generic observed media did not report the native authorization boundary");
+    assert.equal(result.after?.ok, true, "GET_JOBS failed after native-boundary assertion");
+    assert.deepEqual(result.after.jobs, result.before.jobs, "failed native preflight mutated the task list");
+    assert.equal(walk(downloadDir, 5).some((value) => path.basename(value) === UI_DIRECT_FILENAME), false,
+      "failed native preflight wrote a browser download");
+    item.result = {
+      response: { ok: result.response.ok, error: result.response.error },
+      jobsUnchanged: true,
+      wroteBrowserFile: false
+    };
+    item.status = "passed";
   } catch (error) {
-    throw new Error(`${error.message}; last jobs: ${JSON.stringify(lastJobs)}`, { cause: error });
+    item.status = "failed";
+    item.error = serializeError(error);
+    throw error;
   }
-  const output = await poll(async () => walk(downloadDir, 5)
-    .find((value) => path.basename(value) === UI_DIRECT_FILENAME) || null,
-  CASE_TIMEOUT_MS, `downloaded ${UI_DIRECT_FILENAME} file`);
-  const body = fs.readFileSync(output);
-  const expected = Buffer.alloc(640 * 1024, 0x2a);
-  const sha256 = crypto.createHash("sha256").update(body).digest("hex");
-  const expectedSha256 = crypto.createHash("sha256").update(expected).digest("hex");
-  assert.equal(body.byteLength, expected.byteLength, "browser download byte length mismatch");
-  assert.equal(sha256, expectedSha256, "browser download SHA-256 mismatch");
-  assert.equal(path.basename(output), job.filename, "browser task label and downloaded file basename differ");
-  report.directDownload = {
-    status: "passed",
-    method: job.method,
-    filename: job.filename,
-    bytes: body.byteLength,
-    sha256
-  };
 }
 
 async function auditExistingExtensionPage(name, client, width, height, expression) {
@@ -1803,7 +1745,7 @@ async function auditExtensionPage(name, client, width, height, expression, close
       assert.equal(result.saveButton, "保存设置");
       assert.equal(result.labelledFields, true, "options contains an unlabelled field");
       assert.equal(result.nativePermissionGranted, false, "fresh E2E profile unexpectedly has nativeMessaging permission");
-      assert.equal(result.nativePermissionButton, "开启高速下载功能");
+      assert.equal(result.nativePermissionButton, "开启本地下载引擎");
       assert.match(result.nativePermissionStatus || "", /需要开启/);
       assert.match(result.nativeConnection || "", /尚未授权/);
       assert.equal(result.nativeInstallGuideOpen, false, "ungranted native access should not show the host installation failure guide");
@@ -1813,7 +1755,9 @@ async function auditExtensionPage(name, client, width, height, expression, close
       for (const feature of ["directMedia", "staticHls", "staticDash", "bilibiliDashPair"]) {
         assert.deepEqual(capabilityMap[feature], { feature, enabled: "true", status: "可用" });
       }
-      for (const feature of ["liveHls", "encryptedHls", "separateAudioHls", "externalToolNetwork", "remoteThumbnails"]) {
+      assert.deepEqual(capabilityMap.separateAudioHls,
+        { feature: "separateAudioHls", enabled: "true", status: "可用" });
+      for (const feature of ["liveHls", "encryptedHls", "externalToolNetwork", "remoteThumbnails"]) {
         assert.deepEqual(capabilityMap[feature], { feature, enabled: "false", status: "未启用" });
       }
     } else if (name === "popup") {
@@ -1822,7 +1766,7 @@ async function auditExtensionPage(name, client, width, height, expression, close
       assert.equal(result.jobsVisible, true, "popup jobs tab did not activate");
       assert.equal(result.mediaVisible, true, "popup media tab did not reactivate");
       assert.deepEqual(result.tabs.map((tab) => tab.controls), ["mediaView", "jobsView"]);
-      assert.ok(["高速下载功能已就绪", "高速下载功能暂未就绪"].includes(result.hostTitle));
+      assert.ok(["本地下载引擎已就绪", "本地下载引擎暂未就绪"].includes(result.hostTitle));
       assert.doesNotMatch(`${result.hostTitle} ${result.hostDetail}`, /FFmpeg|DASH\s*(?:静态规划|原生)|本地高速引擎|v\d+\.\d+/i,
         "popup exposes internal acceleration implementation details");
       assert.equal(result.thumbnailCount, 0, "stable popup must not render a remotely fetched thumbnail");
@@ -1834,11 +1778,13 @@ async function auditExtensionPage(name, client, width, height, expression, close
       assert.equal(result.brand, "FluxCatch");
       assert.equal(result.mediaHeading, "当前页面媒体");
       assert.equal(result.jobsHeading, "下载任务");
-      assert.ok(["高速下载功能已就绪", "高速下载功能暂未就绪"].includes(result.hostTitle));
+      assert.ok(["本地下载引擎已就绪", "本地下载引擎暂未就绪"].includes(result.hostTitle));
       assert.doesNotMatch(`${result.hostTitle} ${result.hostDetail}`, /FFmpeg|DASH\s*(?:静态规划|原生)|本地高速引擎|v\d+\.\d+/i,
         "Side Panel exposes internal acceleration implementation details");
       assert.ok(result.quickDownloadButtons >= 1, "Side Panel did not render a quick-download action for the detected media");
-      assert.equal(result.quickDownloadFinished, true, "Side Panel quick-download action did not settle");
+      assert.equal(result.quickDownloadLabel, "检查并下载", "generic direct media did not expose the native preflight action");
+      assert.equal(result.quickDownloadDescribedBy, "localEngineBoundary", "native preflight action lacks its permission boundary description");
+      assert.equal(result.quickDownloadCreatedJob, false, "generic direct preflight created a job without native authorization");
       assert.equal(result.thumbnailCount, 0, "stable Side Panel must not render a remotely fetched thumbnail");
       assert.ok(result.fallbackCount >= 1, "Side Panel did not retain the media-type fallback tile");
       assert.equal(result.globalErrorHidden, true, "Side Panel reported an error during quick download");
@@ -1858,7 +1804,7 @@ async function auditExtensionPage(name, client, width, height, expression, close
       });
     } else if (name === "sidepanel") {
       await captureMatrixState(client, "sidepanel-420x820", 420, 820, {
-        deterministicFixture: "direct media and completed browser download",
+        deterministicFixture: "generic direct media awaiting explicit native authorization",
         sharedStyles: true
       });
     }
@@ -1934,12 +1880,6 @@ function startFixtureServer() {
       if (url.pathname === "/cases/direct.html") {
         return send(response, 200, "text/html; charset=utf-8", fixturePage(`/media/direct.mp4${url.search}`, "arrayBuffer", `/media/poster.png${url.search}`), common);
       }
-      if (url.pathname === "/cases/tasks.html") {
-        const run = encodeURIComponent(url.searchParams.get("run") || "fixture");
-        const resources = ["completed", "cancelled", "close-terminal", "running"]
-          .map((job) => `/media/task.mp4?run=${run}&job=${encodeURIComponent(job)}`);
-        return send(response, 200, "text/html; charset=utf-8", taskFixturePage(resources, `/media/poster.png?run=${run}`), common);
-      }
       if (url.pathname === "/cases/hls.html") {
         const fixture = hlsFixtureUrls(url.searchParams.get("run") || "fixture");
         return send(response, 200, "text/html; charset=utf-8", hlsFixturePage(
@@ -1957,13 +1897,6 @@ function startFixtureServer() {
         ...common,
         "content-disposition": attachmentFilename(UI_DIRECT_FILENAME)
       });
-      if (url.pathname === "/media/task.mp4") {
-        const job = url.searchParams.get("job") || "";
-        const filename = TASK_FILENAMES[job === "close-terminal" ? "closeTerminal" : job];
-        const headers = filename ? { ...common, "content-disposition": attachmentFilename(filename) } : common;
-        if (job === "completed") return send(response, 200, "video/mp4", directBody, headers);
-        return sendSlow(response, "video/mp4", 16 * 1024 * 1024, headers);
-      }
       if (/^\/embed\/medias\/[^/]+\.m3u8$/i.test(url.pathname)) {
         const fixture = hlsFixtureUrls(url.searchParams.get("run") || "fixture");
         const hlsMaster = ["#EXTM3U", "#EXT-X-VERSION:3"];
@@ -2108,30 +2041,6 @@ function fixturePage(resourcePath, reader, posterPath) {
 </script>`;
 }
 
-function taskFixturePage(resourcePaths, posterPath) {
-  const resultKey = JSON.stringify(FIXTURE_RESULT_KEY);
-  return `<!doctype html>
-<meta charset="utf-8">
-<title>FluxCatch task lifecycle fixture</title>
-<meta property="og:image" content=${JSON.stringify(posterPath)}>
-<video poster=${JSON.stringify(posterPath)} hidden></video>
-<script>
-(async () => {
-  try {
-    const results = await Promise.all(${JSON.stringify(resourcePaths)}.map(async (resource) => {
-      const response = await fetch(new URL(resource, location.href), { cache: "no-store" });
-      if (!response.ok) throw new Error("HTTP " + response.status + " for " + response.url);
-      await response.body?.cancel();
-      return { url: response.url, status: response.status };
-    }));
-    globalThis[${resultKey}] = { done: true, ok: true, results };
-  } catch (error) {
-    globalThis[${resultKey}] = { done: true, ok: false, error: String(error && error.message || error) };
-  }
-})();
-</script>`;
-}
-
 function send(response, status, contentType, body, extraHeaders) {
   const data = Buffer.isBuffer(body) ? body : Buffer.from(String(body));
   response.writeHead(status, {
@@ -2144,34 +2053,6 @@ function send(response, status, contentType, body, extraHeaders) {
 
 function attachmentFilename(filename) {
   return `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`;
-}
-
-function sendSlow(response, contentType, totalBytes, extraHeaders) {
-  response.writeHead(200, {
-    ...extraHeaders,
-    "content-type": contentType,
-    "content-length": String(totalBytes)
-  });
-  response.flushHeaders?.();
-  const chunk = Buffer.alloc(64 * 1024, 0x35);
-  let sent = 0;
-  const timer = setInterval(() => {
-    if (response.destroyed || response.writableEnded) {
-      clearInterval(timer);
-      return;
-    }
-    const remaining = totalBytes - sent;
-    if (remaining <= 0) {
-      clearInterval(timer);
-      response.end();
-      return;
-    }
-    const body = remaining >= chunk.byteLength ? chunk : chunk.subarray(0, remaining);
-    response.write(body);
-    sent += body.byteLength;
-  }, 125);
-  response.once("close", () => clearInterval(timer));
-  response.once("error", () => clearInterval(timer));
 }
 
 function discoverChromeForTesting() {
@@ -2223,6 +2104,8 @@ function walk(root, maxDepth) {
 function launchChrome(executable, profile) {
   const args = [
     "--headless=new",
+    `--screen-info={${E2E_WINDOW_SIZE.width}x${E2E_WINDOW_SIZE.height}}`,
+    `--window-size=${E2E_WINDOW_SIZE.width},${E2E_WINDOW_SIZE.height}`,
     "--remote-debugging-port=0",
     "--remote-allow-origins=*",
     `--user-data-dir=${profile}`,
@@ -2405,6 +2288,25 @@ function resolveE2eSourceCommit() {
     throw new Error(`failed to identify the E2E commit: ${(revision.stderr || "").trim() || commit || `exit ${revision.status}`}`);
   }
   return commit;
+}
+
+function resolveManifestMessage(value, messages) {
+  const match = String(value || "").match(/^__MSG_([A-Za-z0-9_]+)__$/);
+  if (!match) return String(value || "");
+  const message = messages?.[match[1]]?.message;
+  if (typeof message !== "string" || !message.trim()) {
+    throw new Error(`missing manifest locale message: ${value}`);
+  }
+  return message.trim();
+}
+
+function parseE2eWindowSize(value) {
+  const match = String(value || "").match(/^(\d{3,4})[x,](\d{3,4})$/i);
+  assert.ok(match, `FLUXCATCH_E2E_WINDOW_SIZE must look like 1280x900, got ${JSON.stringify(value)}`);
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  assert.ok(width >= 800 && height >= 400, "E2E Chrome window is too small for stable extension setup");
+  return { width, height };
 }
 
 function extensionIdFromManifestKey(key) {

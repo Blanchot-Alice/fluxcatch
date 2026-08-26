@@ -2,6 +2,7 @@ import { BUILD_PROFILE, HOST_MISMATCH_MESSAGE } from "../lib/build-profile.js";
 import { insertTemplateToken, normalizeFormState, notificationStatusText, reconcileSaveCompletion, resolveNotificationLoadState, statesEqual, validateSettings } from "./form-state.js";
 import { waitForNativeRecovery } from "./native-recovery.js";
 import { isActionPending, restoreFocus, runKeyedAction, withPendingAction } from "../ui/interactions.js";
+import { bindUiCustomization } from "../ui/customization.js";
 
 const form = document.querySelector("#settingsForm");
 const saveButton = form.querySelector(".save-btn");
@@ -20,6 +21,9 @@ const privateNetworkDialog = document.querySelector("#privateNetworkDialog");
 const privateNetworkCancelButton = document.querySelector("#privateNetworkCancelButton");
 const copyDiagnosticsButton = document.querySelector("#copyDiagnosticsButton");
 const templateInput = form.elements.namedItem("filenameTemplate");
+const optionsLoadState = document.querySelector("#optionsLoadState");
+const optionsLoadMessage = document.querySelector("#optionsLoadMessage");
+const retrySettingsButton = document.querySelector("#retrySettingsButton");
 
 const CAPABILITY_LABELS = Object.freeze({
   directMedia: "普通视频与音频文件",
@@ -36,8 +40,7 @@ const CAPABILITY_LABELS = Object.freeze({
 const LAB_FEATURES = Object.freeze([
   "externalToolNetwork",
   "liveHls",
-  "encryptedHls",
-  "separateAudioHls"
+  "encryptedHls"
 ]);
 
 const PRESETS = Object.freeze([
@@ -59,6 +62,7 @@ let templateSelection = { start: 0, end: 0 };
 document.addEventListener("DOMContentLoaded", initialize, { once: true });
 
 function initialize() {
+  void bindUiCustomization();
   renderCapabilities();
   renderLabStates();
   bindFormInteractions();
@@ -72,12 +76,13 @@ function bindFormInteractions() {
   discardButton.addEventListener("click", discardChanges);
   nativePermissionButton.addEventListener("click", () => void requestNativeAccess());
   copyDiagnosticsButton.addEventListener("click", () => void copyDiagnostics());
+  retrySettingsButton.addEventListener("click", () => void load());
   notificationInput.addEventListener("change", () => void changeNotificationPermission());
   privateNetworkInput.addEventListener("change", handlePrivateNetworkChange);
   privateNetworkDialog.addEventListener("close", finishPrivateNetworkConfirmation);
   window.addEventListener("beforeunload", handleBeforeUnload);
-  chrome.permissions.onAdded?.addListener(handleNativePermissionChange);
-  chrome.permissions.onRemoved?.addListener(handleNativePermissionChange);
+  chrome.permissions?.onAdded?.addListener(handleNativePermissionChange);
+  chrome.permissions?.onRemoved?.addListener(handleNativePermissionChange);
 
   for (const button of document.querySelectorAll(".preset-button")) {
     button.addEventListener("click", () => applyPreset(button));
@@ -99,6 +104,9 @@ function handleNativePermissionChange(permissions) {
 
 async function load() {
   ready = false;
+  setOptionsLoadState("loading", "正在加载设置…");
+  form.inert = true;
+  form.setAttribute("aria-busy", "true");
   syncDirtyState();
   try {
     const response = await chrome.runtime.sendMessage({ type: "GET_SETTINGS" });
@@ -121,14 +129,21 @@ async function load() {
     writeFormState(loaded);
     baseline = normalizeFormState(loaded);
     ready = true;
+    form.inert = false;
+    form.removeAttribute("aria-busy");
+    setOptionsLoadState("ready", "设置已加载");
     clearValidation();
     syncDirtyState();
     renderNotificationStatus();
     await Promise.allSettled([refreshNativeAccess(), refreshDiagnostics()]);
   } catch (error) {
     ready = false;
-    setStatus(error?.message || "读取设置失败", "error", 5000);
-    nativePermissionStatus.textContent = "暂时未能检查高速下载功能";
+    form.inert = true;
+    form.setAttribute("aria-busy", "false");
+    const message = error?.message || "读取设置失败";
+    setOptionsLoadState("error", `${message}。请重新读取。`);
+    setStatus(message, "error", 5000);
+    nativePermissionStatus.textContent = "暂时未能检查本地下载引擎";
     renderHostStatus({ connected: false }, { permissionGranted: false, failed: true });
     syncDirtyState();
   }
@@ -200,10 +215,19 @@ function handleFormMutation(event) {
 function syncDirtyState() {
   dirty = Boolean(ready && baseline && !statesEqual(collectRawState(), baseline));
   form.dataset.dirty = String(dirty);
-  dirtyStatus.textContent = dirty ? "有未保存的更改" : "所有更改均已保存";
+  dirtyStatus.textContent = !ready ? "设置尚未就绪" : dirty ? "有未保存的更改" : "所有更改均已保存";
   const pending = isActionPending("options-save");
   saveButton.disabled = !ready || !dirty || pending;
   discardButton.disabled = !ready || !dirty || pending;
+}
+
+function setOptionsLoadState(type, message) {
+  optionsLoadMessage.textContent = message;
+  optionsLoadState.dataset.state = type;
+  optionsLoadState.hidden = type === "ready";
+  optionsLoadState.querySelector(".spinner").hidden = type !== "loading";
+  retrySettingsButton.hidden = type !== "error";
+  retrySettingsButton.disabled = type === "loading";
 }
 
 function handleBeforeUnload(event) {
@@ -511,7 +535,7 @@ async function requestNativeAccess() {
     // this button's gesture, before awaiting any unrelated work.
     permissionRequest = chrome.permissions.request({ permissions: ["nativeMessaging"] });
   } catch (error) {
-    nativePermissionStatus.textContent = error?.message || "高速下载功能授权失败";
+    nativePermissionStatus.textContent = error?.message || "本地下载引擎授权失败";
     return;
   }
 
@@ -523,8 +547,8 @@ async function requestNativeAccess() {
       if (!granted) {
         permissionDenied = true;
         renderHostStatus({ connected: false, needsPermission: true }, { permissionGranted: false });
-        nativePermissionStatus.textContent = "暂未开启；普通文件仍可直接下载";
-        throw new Error("暂未开启高速下载功能");
+        nativePermissionStatus.textContent = "暂未开启；检测与预览仍可用，多数保存需本地下载引擎";
+        throw new Error("暂未开启本地下载引擎");
       }
       nativePermissionStatus.textContent = "正在连接并检查本地工具…";
       const host = await pingNativeHost();
@@ -533,14 +557,14 @@ async function requestNativeAccess() {
       if (recovery.recoveryBlocked) {
         throw nativeAccessFlowFailure(
           "native_recovery_blocked",
-          "Chrome 自动重试后仍未加载连接接口"
+          "Chrome 的连接接口长期未恢复，请完全退出并重新启动 Chrome"
         );
       }
       if (recovery.hostStatus?.needsPermission) {
-        renderNativePermissionRequired("高速下载功能授权已撤销；普通文件仍可直接下载");
+        renderNativePermissionRequired("本地下载引擎授权已撤销；检测与预览仍可用，多数保存需重新授权");
         throw nativeAccessFlowFailure(
           "native_permission_removed",
-          "高速下载功能授权已撤销"
+          "本地下载引擎授权已撤销"
         );
       }
       if (!recovery.diagnosticsRefreshed) await refreshDiagnostics();
@@ -549,10 +573,10 @@ async function requestNativeAccess() {
       // the successful action state must be gated on the live permission.
       nativePermissionGranted = await chrome.permissions.contains({ permissions: ["nativeMessaging"] });
       if (!nativePermissionGranted) {
-        renderNativePermissionRequired("高速下载功能授权已撤销；普通文件仍可直接下载");
+        renderNativePermissionRequired("本地下载引擎授权已撤销；检测与预览仍可用，多数保存需重新授权");
         throw nativeAccessFlowFailure(
           "native_permission_removed",
-          "高速下载功能授权已撤销"
+          "本地下载引擎授权已撤销"
         );
       }
     }, {
@@ -564,7 +588,7 @@ async function requestNativeAccess() {
     });
   } catch (error) {
     if (permissionDenied) {
-      renderNativePermissionRequired("暂未开启；普通文件仍可直接下载");
+      renderNativePermissionRequired("暂未开启；检测与预览仍可用，多数保存需本地下载引擎");
     } else if (error?.preserveNativeStatus !== true) {
       renderHostStatus({ connected: false }, { permissionGranted: granted, failed: true });
       nativePermissionStatus.textContent = error?.message || "检查失败，请确认配套程序已安装后重试";
@@ -574,13 +598,13 @@ async function requestNativeAccess() {
       nativePermissionGranted = await chrome.permissions.contains({ permissions: ["nativeMessaging"] });
       if (!nativePermissionGranted) {
         renderNativePermissionRequired(permissionDenied
-          ? "暂未开启；普通文件仍可直接下载"
-          : "高速下载功能授权已撤销；普通文件仍可直接下载");
+          ? "暂未开启；检测与预览仍可用，多数保存需本地下载引擎"
+          : "本地下载引擎授权已撤销；检测与预览仍可用，多数保存需重新授权");
       }
     } catch (error) {
-      nativePermissionStatus.textContent = error?.message || "暂时未能确认高速下载功能授权状态";
+      nativePermissionStatus.textContent = error?.message || "暂时未能确认本地下载引擎授权状态";
     }
-    nativePermissionButton.textContent = nativePermissionGranted ? "重新检查" : "开启高速下载功能";
+    nativePermissionButton.textContent = nativePermissionGranted ? "重新检查" : "开启本地下载引擎";
   }
 }
 
@@ -596,9 +620,9 @@ function renderNativePermissionRequired(message) {
 
 async function refreshNativeAccess() {
   nativePermissionGranted = await chrome.permissions.contains({ permissions: ["nativeMessaging"] });
-  nativePermissionButton.textContent = nativePermissionGranted ? "重新检查" : "开启高速下载功能";
+  nativePermissionButton.textContent = nativePermissionGranted ? "重新检查" : "开启本地下载引擎";
   if (!nativePermissionGranted) {
-    nativePermissionStatus.textContent = "加速大文件、合并视频片段或转换格式时需要开启";
+    nativePermissionStatus.textContent = "检测与预览仍可用；多数媒体保存需要开启，仅可信 Instagram/X 固定来源例外";
     renderHostStatus({ connected: false, needsPermission: true }, { permissionGranted: false });
     return;
   }
@@ -609,12 +633,12 @@ async function refreshNativeAccess() {
     await recoverNativeApi(host);
   } catch (error) {
     renderHostStatus({ connected: false }, { permissionGranted: true, failed: true });
-    nativePermissionStatus.textContent = error?.message || "暂时未能连接高速下载功能";
+    nativePermissionStatus.textContent = error?.message || "暂时未能连接本地下载引擎";
   } finally {
     try {
       nativePermissionGranted = await chrome.permissions.contains({ permissions: ["nativeMessaging"] });
       if (!nativePermissionGranted) {
-        renderNativePermissionRequired("高速下载功能尚未授权；普通文件仍可直接下载");
+        renderNativePermissionRequired("本地下载引擎尚未授权；检测与预览仍可用，多数保存需先授权");
       }
     } catch {
       // Keep the last truthful host result when Chrome cannot answer the
@@ -634,7 +658,7 @@ async function recoverNativeApi(host) {
       failureDurationMs: 0
     });
   } finally {
-    nativePermissionButton.textContent = nativePermissionGranted ? "重新检查" : "开启高速下载功能";
+    nativePermissionButton.textContent = nativePermissionGranted ? "重新检查" : "开启本地下载引擎";
   }
 }
 
@@ -642,7 +666,7 @@ async function completeNativeApiRecovery(host) {
   let response = await requestNativeApiRecovery();
   let recoveredHost = response.hostStatus || host;
   if (recoveredHost.needsPermission) {
-    renderNativePermissionRequired("高速下载功能授权已撤销；普通文件仍可直接下载");
+    renderNativePermissionRequired("本地下载引擎授权已撤销；检测与预览仍可用，多数保存需重新授权");
     return { recoveryBlocked: false, diagnosticsRefreshed: false, hostStatus: recoveredHost };
   }
   renderHostStatus(recoveredHost, { permissionGranted: true });
@@ -661,10 +685,10 @@ async function completeNativeApiRecovery(host) {
       renderHostStatus(recoveredHost, { permissionGranted: false });
       return { recoveryBlocked: false, diagnosticsRefreshed: false, hostStatus: recoveredHost };
     }
-    nativePermissionStatus.textContent = "正在自动重试高速下载功能…";
+    nativePermissionStatus.textContent = "正在自动重试本地下载引擎…";
     recoveredHost = await pingNativeHost();
     if (recoveredHost.needsPermission) {
-      renderNativePermissionRequired("高速下载功能授权已撤销；普通文件仍可直接下载");
+      renderNativePermissionRequired("本地下载引擎授权已撤销；检测与预览仍可用，多数保存需重新授权");
       return { recoveryBlocked: false, diagnosticsRefreshed: false, hostStatus: recoveredHost };
     }
     renderHostStatus(recoveredHost, { permissionGranted: true });
@@ -672,7 +696,7 @@ async function completeNativeApiRecovery(host) {
       response = await requestNativeApiRecovery();
       recoveredHost = response.hostStatus || recoveredHost;
       if (recoveredHost.needsPermission) {
-        renderNativePermissionRequired("高速下载功能授权已撤销；普通文件仍可直接下载");
+        renderNativePermissionRequired("本地下载引擎授权已撤销；检测与预览仍可用，多数保存需重新授权");
         return { recoveryBlocked: false, diagnosticsRefreshed: false, hostStatus: recoveredHost };
       }
       renderHostStatus(recoveredHost, { permissionGranted: true });
@@ -682,7 +706,7 @@ async function completeNativeApiRecovery(host) {
     }
   }
   if (response.recoveryBlocked) {
-    nativePermissionStatus.textContent = "Chrome 自动重试后仍未加载连接接口。请打开 chrome://extensions，手动重新加载 FluxCatch，再返回此页检查。";
+    nativePermissionStatus.textContent = "Chrome 的连接接口长期未恢复。请完全退出并重新启动 Chrome，再返回此页点击“重新检查”。";
   }
   const recoveryBlocked = response.recoveryBlocked === true;
   const diagnosticsRefreshed = !recoveryBlocked && recoveredHost.connected === true;
@@ -692,14 +716,14 @@ async function completeNativeApiRecovery(host) {
 
 async function requestNativeApiRecovery() {
   const response = await chrome.runtime.sendMessage({ type: "RECOVER_NATIVE_API" });
-  if (!response?.ok) throw new Error(response?.error || "暂时未能恢复高速下载功能");
+  if (!response?.ok) throw new Error(response?.error || "暂时未能恢复本地下载引擎");
   return response;
 }
 
 function pingNativeHost() {
   return runKeyedAction("native-ping", async () => {
     const response = await chrome.runtime.sendMessage({ type: "PING_HOST" });
-    if (!response?.ok) throw new Error(response?.error || "暂时未能检查高速下载功能");
+    if (!response?.ok) throw new Error(response?.error || "暂时未能检查本地下载引擎");
     return response.hostStatus || {};
   });
 }
@@ -711,13 +735,14 @@ export function renderHostStatus(host = {}, { permissionGranted = nativePermissi
   const failureReason = ["api_unavailable", "host_missing", "connection_failed"].includes(host.failureReason)
     ? host.failureReason
     : failed ? "connection_failed" : null;
+  const nativeRestartRequired = failureReason === "api_unavailable" && host.restartRequired === true;
   const ffmpeg = host.capabilities?.ffmpeg;
   const ytdlp = host.capabilities?.ytdlp;
   const ffmpegInstalled = Boolean(ffmpeg ? ffmpeg.available : host.ffmpeg);
   const ytdlpInstalled = ytdlp?.installed === true || ytdlp?.available === true;
   const ytdlpAvailable = ytdlp?.available === true;
   const externalGateOpen = BUILD_PROFILE.features.externalToolNetwork === true;
-  nativePermissionButton.textContent = permissionGranted && !host.needsPermission ? "重新检查" : "开启高速下载功能";
+  nativePermissionButton.textContent = permissionGranted && !host.needsPermission ? "重新检查" : "开启本地下载引擎";
   nativeInstallGuide.open = failureReason === "host_missing";
 
   if (!permissionGranted || host.needsPermission) {
@@ -728,11 +753,11 @@ export function renderHostStatus(host = {}, { permissionGranted = nativePermissi
     setRuntimeStatus("runtimeNativeStatus", "尚未授权", "warning");
     setRuntimeStatus("runtimeFfmpegStatus", "尚未检查", "warning");
   } else if (failureReason === "api_unavailable") {
-    setMatrixStatus("capabilityNativeConnection", "授权已生效 · 浏览器接口待恢复", "mismatch");
-    setMatrixStatus("capabilityNativeProtocol", "等待 Chrome 初始化连接接口", "unknown");
+    setMatrixStatus("capabilityNativeConnection", nativeRestartRequired ? "授权已生效 · 需要重启浏览器" : "授权已生效 · 浏览器接口待恢复", "mismatch");
+    setMatrixStatus("capabilityNativeProtocol", nativeRestartRequired ? "接口长期未恢复 · 请重启 Chrome" : "等待 Chrome 初始化连接接口", "unknown");
     setMatrixStatus("capabilityFfmpeg", "等待连接后检查", "unknown");
     setMatrixStatus("capabilityYtDlp", "等待连接后检查", "unknown");
-    setRuntimeStatus("runtimeNativeStatus", "正在初始化连接接口", "warning");
+    setRuntimeStatus("runtimeNativeStatus", nativeRestartRequired ? "需要重启浏览器" : "正在初始化连接接口", "warning");
     setRuntimeStatus("runtimeFfmpegStatus", "等待本地程序", "warning");
   } else if (!connected) {
     setMatrixStatus("capabilityNativeConnection", failureReason === "host_missing" ? "未安装或未注册" : "连接失败 · 请重试", "missing");
@@ -760,9 +785,11 @@ export function renderHostStatus(host = {}, { permissionGranted = nativePermissi
   nativePermissionStatus.textContent = !permissionGranted || host.needsPermission
     ? "加速大文件、合并视频片段或转换格式时需要开启"
     : failureReason === "api_unavailable"
-      ? "授权已生效，正在等待 Chrome 初始化；FluxCatch 将自动重试"
+      ? nativeRestartRequired
+        ? "Chrome 的连接接口长期未恢复。请完全退出并重新启动 Chrome，再返回此页点击“重新检查”。"
+        : "授权已生效，正在等待 Chrome 初始化；FluxCatch 将自动重试"
       : failureReason === "host_missing"
-        ? "已授权，但本地引擎未安装或未注册；请在终端运行 bash native-host/install-macos.sh 后重试"
+        ? "已授权，但本地下载引擎未安装或未注册；请在源码根目录运行 ./scripts/native-install-wrapper.sh 后重试"
         : failureReason === "connection_failed"
           ? "已授权，但本地引擎连接失败；请稍后重新检查，若持续失败请在 chrome://extensions 中查看错误"
     : mismatch

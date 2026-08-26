@@ -26,6 +26,8 @@
     </button>
   </header>
 
+  <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true" hidden></div>
+
   <main>
     <section class="page-context" aria-labelledby="pageTitle">
       <div class="page-mark" aria-hidden="true"><span></span></div>
@@ -33,17 +35,21 @@
         <h1 id="pageTitle">正在读取当前页面…</h1>
         <p id="pageUrl">请稍候</p>
       </div>
-      <button id="scanButton" class="quiet-button" type="button" aria-label="重新扫描当前页面">重新扫描</button>
+      <div class="context-actions">
+        <button id="scanButton" class="quiet-button" type="button" aria-label="重新扫描当前页面">重新扫描</button>
+        <button id="downloadSettingsButton" class="quiet-button" type="button">下载设置</button>
+      </div>
     </section>
 
     <section id="hostCard" class="host-card" aria-labelledby="hostTitle">
       <span id="hostDot" class="status-dot" aria-hidden="true"></span>
       <div class="host-copy" role="status" aria-live="polite" aria-atomic="true">
-        <h2 id="hostTitle">高速下载功能</h2>
+        <h2 id="hostTitle">本地下载引擎</h2>
         <p id="hostDetail">正在检查是否可用…</p>
       </div>
-      <button id="pingButton" class="text-button" type="button" aria-label="重新检查高速下载功能">重试</button>
+      <button id="pingButton" class="text-button" type="button" aria-label="重新检查本地下载引擎">重试</button>
     </section>
+    <p id="localEngineBoundary" class="action-boundary">标为“检查并下载”的媒体需要本地下载引擎；Chrome 权限只会在你点击该按钮后请求。</p>
 
     <div id="globalError" class="notice error-notice" role="alert" hidden>
       <div><strong>工作台暂时没有读到数据</strong><p id="errorText">请重试。</p></div>
@@ -65,8 +71,8 @@
       <ul id="mediaList" class="media-list" aria-live="polite" hidden></ul>
       <div id="mediaEmpty" class="empty-state" role="status" aria-live="polite" hidden>
         <div class="radar" aria-hidden="true"><i class="core"></i><span class="ring r1"></span><span class="ring r2"></span><span class="ring r3"></span></div>
-        <h3>少女祈祷中……</h3>
-        <p>播放视频后自动检测可下载的视频、音频与流媒体</p>
+        <h3>尚未检测到媒体</h3>
+        <p>播放视频后点击“重新扫描”；扫描不会刷新当前页面。</p>
       </div>
     </section>
 
@@ -86,12 +92,11 @@
       <div id="jobAnnouncer" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
       <div id="jobsEmpty" class="empty-state compact" role="status" aria-live="polite" hidden>
         <h3>暂无下载任务</h3>
-        <p>从扩展弹窗开始下载后，进度会持续保留在这里。</p>
+        <p>从弹窗或本工作台开始下载后，进度会持续保留在这里。</p>
       </div>
     </section>
   </main>
 
-  <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true" hidden></div>
   <script type="module" src="sidepanel.js"></script>
 </body>
 </html>
