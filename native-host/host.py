@@ -15,6 +15,7 @@ import contextvars
 import hashlib
 import hmac
 import http.client
+import ipaddress
 import json
 import math
 import os
@@ -488,6 +489,10 @@ _ACTIVE_REQUEST_HEADERS: contextvars.ContextVar[dict[str, str] | None] = context
     "fluxcatch_active_request_headers",
     default=None,
 )
+_ACTIVE_VIA_SYSTEM_PROXY: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "fluxcatch_active_via_system_proxy",
+    default=False,
+)
 
 
 class SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -540,6 +545,13 @@ def _create_pinned_connection(
     target = _ACTIVE_AUTHORIZED_TARGET.get()
     if target is None:
         raise OSError("No authorized network target is active")
+    if _ACTIVE_VIA_SYSTEM_PROXY.get():
+        # The dial terminates at the locally trusted system proxy (its address
+        # was already gated by _target_bypasses_proxy), and authorization plus
+        # DNS resolution ran before opener dispatch. Peer pinning cannot apply
+        # across the CONNECT tunnel; TLS still fully verifies the origin
+        # certificate chain against the authorized hostname.
+        return socket.create_connection(requested_address, timeout, source_address)
     requested_host = str(requested_address[0]).strip("[]").rstrip(".").lower()
     if requested_host != target.hostname or int(requested_address[1]) != target.port:
         raise OSError("HTTP connection target did not match the authorized network target")
@@ -582,12 +594,51 @@ class PinnedHTTPSHandler(urllib.request.HTTPSHandler):
         return self.do_open(PinnedHTTPSConnection, req, context=self._context)
 
 
-HTTP_OPENER = urllib.request.build_opener(
-    urllib.request.ProxyHandler({}),
+_PROXY_HANDLER_CHAIN: tuple[Any, ...] = (
     SafeRedirectHandler(),
     PinnedHTTPHandler(),
     PinnedHTTPSHandler(),
 )
+
+
+def _system_proxies() -> dict[str, str]:
+    """Best-effort HTTP(S) proxies from the OS network configuration."""
+    if os.environ.get("FLUXCATCH_DISABLE_SYSTEM_PROXY") == "1":
+        return {}
+    try:
+        discovered = urllib.request.getproxies()
+    except Exception:  # noqa: BLE001 - proxy discovery must never be fatal
+        return {}
+    return {scheme: url for scheme, url in discovered.items() if scheme in {"http", "https"}}
+
+
+def _target_bypasses_proxy(host: str | None) -> bool:
+    """Loopback, private and local targets always connect directly."""
+    if not host:
+        return True
+    lowered = host.strip("[]").lower()
+    if lowered == "localhost" or lowered.endswith(".local"):
+        return True
+    try:
+        address = ipaddress.ip_address(lowered)
+    except ValueError:
+        return False
+    return address.is_loopback or address.is_private or address.is_link_local
+
+
+HTTP_OPENER = urllib.request.build_opener(
+    urllib.request.ProxyHandler({}),
+    *_PROXY_HANDLER_CHAIN,
+)
+_SYSTEM_PROXY_OPENER: urllib.request.OpenerDirector | None
+_system_proxies_found = _system_proxies()
+if _system_proxies_found:
+    _SYSTEM_PROXY_OPENER = urllib.request.build_opener(
+        urllib.request.ProxyHandler(_system_proxies_found),
+        *_PROXY_HANDLER_CHAIN,
+    )
+else:
+    _SYSTEM_PROXY_OPENER = None
 
 
 def _response_peer_address(response: Any) -> str | None:
@@ -617,6 +668,11 @@ def _response_peer_address(response: Any) -> str | None:
 
 
 def _validate_connected_response(response: Any, policy: NetworkPolicy, target: Any) -> None:
+    if _ACTIVE_VIA_SYSTEM_PROXY.get():
+        # The system proxy terminates the TCP connection locally (CONNECT
+        # tunnel), so raw peer pinning cannot apply across it. TLS chain and
+        # hostname identity stay fully verified by the pinned TLS handler.
+        return
     peer = _response_peer_address(response)
     if peer is None:
         raise NetworkPolicyError(f"Could not verify the connected peer for {target.hostname}")
@@ -631,12 +687,18 @@ def request(url: str, headers: dict[str, str], *, method: str = "GET", timeout: 
     response = None
     target_token = None
     headers_token = None
+    proxy_token = None
     try:
         initial_target = policy.authorize(safe_url, purpose="HTTP request")
         target_token = _ACTIVE_AUTHORIZED_TARGET.set(initial_target)
         headers_token = _ACTIVE_REQUEST_HEADERS.set(dict(reusable_headers))
         req = urllib.request.Request(safe_url, headers=merged, method=method)
-        response = HTTP_OPENER.open(req, timeout=timeout)
+        use_system_proxy = _SYSTEM_PROXY_OPENER is not None and not _target_bypasses_proxy(
+            urllib.parse.urlsplit(safe_url).hostname
+        )
+        opener = _SYSTEM_PROXY_OPENER if use_system_proxy else HTTP_OPENER
+        proxy_token = _ACTIVE_VIA_SYSTEM_PROXY.set(use_system_proxy)
+        response = opener.open(req, timeout=timeout)
         final_url = valid_url(response.geturl())
         final_target = _ACTIVE_AUTHORIZED_TARGET.get()
         if final_target is None or final_target.url != final_url:
@@ -670,6 +732,8 @@ def request(url: str, headers: dict[str, str], *, method: str = "GET", timeout: 
             _ACTIVE_REQUEST_HEADERS.reset(headers_token)
         if target_token is not None:
             _ACTIVE_AUTHORIZED_TARGET.reset(target_token)
+        if proxy_token is not None:
+            _ACTIVE_VIA_SYSTEM_PROXY.reset(proxy_token)
 
 
 def authorize_network_urls(values: Iterable[str], *, purpose: str) -> None:
