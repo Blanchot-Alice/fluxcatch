@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.5 — Unreleased
+## 0.2.5 — 2026-08-27
 
 - Fixed Bilibili CDN probing when a server rejects `HEAD` but accepts a one-byte Range `GET`; HTTP error responses now retain connected-peer validation before the safe fallback runs.
 - Stopped Instagram `bytestart`/`byteend` MediaSource fragments from appearing as dozens of standalone MP4 downloads that QuickTime cannot open.
