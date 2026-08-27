@@ -19,7 +19,8 @@ test("checked-in build identity matches the manifest and identifies unpacked sou
   assert.equal(BUILD_IDENTITY.nativeProtocolVersion, NATIVE_PROTOCOL_VERSION);
   assert.equal(BUILD_IDENTITY.capabilityProfileVersion, CAPABILITY_PROFILE_VERSION);
   assert.equal(BUILD_PROFILE.channel, "github");
-  for (const feature of ["liveHls", "encryptedHls", "separateAudioHls", "externalToolNetwork", "remoteThumbnails"]) {
+  assert.equal(BUILD_PROFILE.features.separateAudioHls, true);
+  for (const feature of ["liveHls", "encryptedHls", "externalToolNetwork", "remoteThumbnails"]) {
     assert.equal(BUILD_PROFILE.features[feature], false);
   }
 });

@@ -4,10 +4,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>FluxCatch 设置</title>
+  <link rel="stylesheet" href="../ui/tokens.css">
+  <link rel="stylesheet" href="../ui/components.css">
   <link rel="stylesheet" href="options.css">
 </head>
 <body>
-  <main>
+  <a class="skip-link" href="#settingsForm">跳到设置内容</a>
+  <main class="options-page">
     <header class="opt-topbar">
       <div class="brand">
         <div class="mark" aria-hidden="true">
@@ -17,85 +20,332 @@
             <path d="M32 56 L64 88 L96 56 Z" class="c-primary"/>
           </svg>
         </div>
-        <div><h1>FluxCatch 设置</h1><p>选择下载方式、保存格式与提醒偏好</p></div>
+        <div>
+          <p class="eyebrow">LOCAL-FIRST MEDIA INSTRUMENT</p>
+          <h1 data-ui-copy="options-title">FluxCatch 设置</h1>
+          <p data-ui-copy="options-description">调整下载体验，并确认当前构建真正可用的能力。</p>
+        </div>
       </div>
+      <a class="designer-link secondary-btn" href="../designer/designer.html">界面编辑器</a>
     </header>
-    <form id="settingsForm">
-      <section class="opt-section">
-        <h2><span class="bar"></span>下载</h2>
-        <div class="opt-grid">
-          <div class="opt-field">
-            <label for="concurrentFragments">同时下载几个视频片段</label>
-            <input id="concurrentFragments" name="concurrentFragments" type="number" min="1" max="24" aria-describedby="concurrentFragmentsHelp">
-            <small id="concurrentFragmentsHelp" class="field-help">一个视频通常由许多小片段组成。这里设置一次同时下载几个片段；推荐 8。数值越大不一定越快，下载出错时可改为 4。</small>
-          </div>
-          <div class="opt-field">
-            <label for="concurrentRanges">大文件同时下载几部分</label>
-            <input id="concurrentRanges" name="concurrentRanges" type="number" min="1" max="24" aria-describedby="concurrentRangesHelp">
-            <small id="concurrentRangesHelp" class="field-help">开启“自动加速大文件”后，较大的 MP4、MP3 等文件会拆开下载。这里设置一次同时下载几部分；推荐 8。数值越大不一定越快，下载出错时可改为 4。</small>
-          </div>
-          <div class="opt-field">
-            <label for="outputContainer">下载文件保存格式</label>
-            <select id="outputContainer" name="outputContainer" aria-describedby="outputContainerHelp"><option value="mp4">MP4</option><option value="mkv">MKV</option><option value="webm">WebM</option></select>
-            <small id="outputContainerHelp" class="field-help">推荐 MP4，兼容性最好；合并流媒体或转换格式时生效。</small>
-          </div>
+
+    <div class="options-layout">
+      <nav class="section-nav" aria-label="设置章节">
+        <a href="#runtime">运行状态</a>
+        <a href="#basicDownloads">基础下载</a>
+        <a href="#performance">性能</a>
+        <a href="#detectionNaming">检测与命名</a>
+        <a href="#privacyNetwork">隐私与网络</a>
+        <a href="#localCapabilities">本地能力</a>
+        <a href="#notifications">通知</a>
+        <a href="#lab">实验室</a>
+      </nav>
+
+      <div class="settings-column">
+      <div id="optionsLoadState" class="page-state" role="status" aria-live="polite" aria-atomic="true">
+        <span class="spinner" aria-hidden="true"></span>
+        <span id="optionsLoadMessage">正在加载设置…</span>
+        <button id="retrySettingsButton" type="button" class="secondary-btn" hidden>重新读取</button>
+      </div>
+      <form id="settingsForm" novalidate aria-busy="true" inert>
+        <div id="errorSummary" class="error-summary" role="alert" aria-live="assertive" tabindex="-1" hidden>
+          <strong>部分设置需要修正</strong>
+          <p>请检查下面标出的字段，然后再次保存。</p>
+          <ul id="errorSummaryList"></ul>
         </div>
-        <label class="opt-check"><input id="saveAs" name="saveAs" type="checkbox"><span class="switch" aria-hidden="true"></span><span class="txt">每次下载前选择保存位置<small>开启后会弹出“另存为”窗口；关闭则保存到默认下载目录。</small></span></label>
-        <label class="opt-check"><input id="useNativeForDirect" name="useNativeForDirect" type="checkbox"><span class="switch" aria-hidden="true"></span><span class="txt">自动加速大文件<small>开启后，较大的 MP4、MP3 等文件会拆成多部分同时下载；关闭后由浏览器普通下载。</small></span></label>
-      </section>
-      <section class="opt-section">
-        <h2><span class="bar"></span>检测与命名</h2>
-        <div class="opt-grid">
-          <div class="opt-field"><label for="minimumKiB">最小媒体大小（KiB）</label><input id="minimumKiB" name="minimumKiB" type="number" min="0" max="102400"></div>
-          <div class="opt-field"><label for="filenameTemplate">文件名模板</label><input id="filenameTemplate" name="filenameTemplate" placeholder="{title} - {height}"></div>
-        </div>
-        <p class="hint">可用字段：<code>{title}</code> <code>{host}</code> <code>{kind}</code> <code>{height}</code> <code>{date}</code></p>
-        <div class="opt-field blocked-domains"><label for="blockedDomains">忽略域名（每行一个）</label><textarea id="blockedDomains" name="blockedDomains" rows="7" placeholder="ads.example.com"></textarea></div>
-        <label class="opt-check"><input id="allowPrivateNetworkMedia" name="allowPrivateNetworkMedia" type="checkbox"><span class="switch" aria-hidden="true"></span><span class="txt">允许本地网络媒体<small>默认关闭。仅在你明确要下载自己局域网设备上的媒体时开启；云服务元数据地址和保留网络始终禁止访问。</small></span></label>
-      </section>
-      <section class="opt-section">
-        <h2><span class="bar"></span>站点适配器（实验性）</h2>
-        <label class="opt-check"><input id="autoEnrichSiteQuality" name="autoEnrichSiteQuality" type="checkbox"><span class="switch" aria-hidden="true"></span><span class="txt">自动补全站点画质<small>默认关闭。开启后，FluxCatch 可在支持的站点使用你当前的登录会话，请求该站点自己的播放信息接口以补全可用画质；关闭时只在你打开扩展、侧栏或手动刷新后请求。</small></span></label>
-      </section>
-      <section class="opt-section">
-        <h2><span class="bar"></span>界面</h2>
-        <label class="opt-check"><input id="showNotifications" name="showNotifications" type="checkbox"><span class="switch" aria-hidden="true"></span><span class="txt">下载完成或失败时提醒我<small>开启后会收到系统通知，无需一直打开扩展。</small></span></label>
-        <div class="permission-row">
-          <div><strong>高速下载功能</strong><small id="nativePermissionStatus" role="status" aria-live="polite">正在检查是否可用…</small></div>
-          <button id="nativePermissionButton" type="button" class="secondary-btn">开启高速下载功能</button>
-        </div>
-        <details class="install-guide" id="nativeInstallGuide">
-          <summary>本地引擎（高速下载）安装方法</summary>
-          <ol>
-            <li>高速下载依赖本地引擎，随扩展仓库一起提供，装一次即可。</li>
-            <li>从源码使用时：在「终端」进入 FluxCatch 仓库目录，然后执行 <code>bash native-host/install-macos.sh</code>。</li>
-            <li>从 zip 包使用时：解压 native-host 包后，进入目录执行 <code>bash install-macos.sh</code>。</li>
-            <li>安装器会同时登记 Google Chrome 与 Chrome for Testing，无需手动选择。</li>
-            <li>完成后回到本页点击「开启高速下载功能」或扩展内的「重试」。</li>
-          </ol>
+
+        <details class="onboarding-guide">
+          <summary>首次使用：下载方式、站点补全与权限</summary>
+          <div>
+            <p><strong>保存路径：</strong>多数媒体保存通过本地下载引擎安全处理；只有严格匹配的 Instagram/X 固定来源可直接交给 Chrome 下载。</p>
+            <p><strong>B 站画质：</strong>默认开启同站媒体信息补全，使用当前页面的同站 Cookie，不上传到云服务，可在“隐私与网络”中关闭。</p>
+            <p><strong>权限：</strong>本地下载引擎、通知和局域网访问都只会在你点击相应操作后请求或确认。</p>
+          </div>
         </details>
-      </section>
-      <section class="opt-section" aria-labelledby="diagnosticsHeading">
-        <h2 id="diagnosticsHeading"><span class="bar"></span>版本与诊断</h2>
-        <dl class="diagnostic-grid">
-          <div><dt>扩展版本</dt><dd id="diagnosticExtensionVersion">正在读取…</dd></div>
-          <div><dt>扩展 ID</dt><dd id="diagnosticExtensionId">正在读取…</dd></div>
-          <div><dt>构建</dt><dd id="diagnosticBuild">正在读取…</dd></div>
-          <div><dt>配套程序版本</dt><dd id="diagnosticNativeVersion">正在读取…</dd></div>
-          <div><dt>兼容状态</dt><dd id="diagnosticProtocol">正在读取…</dd></div>
-        </dl>
-        <div class="capability-summary" aria-labelledby="capabilityHeading">
-          <h3 id="capabilityHeading">本版本支持范围</h3>
-          <ul id="capabilityList" class="capability-list"></ul>
+
+        <div class="settings-surface">
+          <section id="runtime" class="settings-section runtime-section" aria-labelledby="runtimeHeading">
+            <div class="section-heading">
+              <span class="section-index" aria-hidden="true">01</span>
+              <div>
+                <h2 id="runtimeHeading" data-ui-copy="runtime-title">运行身份与能力概览</h2>
+                <p data-ui-copy="runtime-description">先确认浏览器扩展、本地处理程序与当前能力配置是否一致。</p>
+              </div>
+            </div>
+
+            <div class="status-strip" role="list" aria-label="当前运行状态">
+              <div class="status-item" role="listitem">
+                <span class="status-dot ok" aria-hidden="true"></span>
+                <span><small>Chrome 例外通道</small><strong>仅可信 Instagram/X</strong></span>
+              </div>
+              <div class="status-item" role="listitem">
+                <span class="status-dot" aria-hidden="true"></span>
+                <span><small>本地下载引擎</small><strong id="runtimeNativeStatus">正在检查</strong></span>
+              </div>
+              <div class="status-item" role="listitem">
+                <span class="status-dot" aria-hidden="true"></span>
+                <span><small>FFmpeg 本地处理</small><strong id="runtimeFfmpegStatus">等待本地能力</strong></span>
+              </div>
+              <div class="status-item" role="listitem">
+                <span class="status-dot ok" aria-hidden="true"></span>
+                <span><small>网络范围</small><strong id="runtimeNetworkStatus">仅公共网络</strong></span>
+              </div>
+            </div>
+
+            <details class="runtime-details">
+              <summary>查看构建身份与能力明细</summary>
+              <div class="runtime-details-body">
+                <dl class="diagnostic-grid" aria-label="构建身份">
+                  <div><dt>扩展版本</dt><dd id="diagnosticExtensionVersion">正在读取…</dd></div>
+                  <div><dt>扩展 ID</dt><dd id="diagnosticExtensionId">正在读取…</dd></div>
+                  <div><dt>构建</dt><dd id="diagnosticBuild">正在读取…</dd></div>
+                  <div><dt>配套程序版本</dt><dd id="diagnosticNativeVersion">正在读取…</dd></div>
+                  <div><dt>协议与能力配置</dt><dd id="diagnosticProtocol">正在读取…</dd></div>
+                </dl>
+
+                <div class="capability-summary" aria-labelledby="capabilityHeading">
+                  <div class="subsection-heading">
+                    <h3 id="capabilityHeading">当前构建支持范围</h3>
+                    <span class="status-badge">以实际配置为准</span>
+                  </div>
+                  <ul id="capabilityList" class="capability-list" aria-live="polite"></ul>
+                </div>
+
+                <div class="diagnostic-actions">
+                  <p id="diagnosticCopyHelp">复制内容只包含版本、构建、协议和能力状态，不包含网页、媒体、请求凭据或本机路径。</p>
+                  <button id="copyDiagnosticsButton" type="button" class="secondary-btn" aria-describedby="diagnosticCopyHelp">复制诊断信息</button>
+                </div>
+              </div>
+            </details>
+          </section>
+
+          <fieldset id="basicDownloads" class="settings-section">
+            <legend>
+              <span class="section-index" aria-hidden="true">02</span>
+              <span><strong data-ui-copy="basic-title">基础下载</strong><small data-ui-copy="basic-description">普通用户最常用的保存方式。</small></span>
+            </legend>
+            <div class="section-content">
+              <div class="opt-field">
+                <label for="outputContainer">默认保存格式</label>
+                <select id="outputContainer" name="outputContainer" aria-describedby="outputContainerHelp outputContainerError">
+                  <option value="mp4">MP4</option>
+                  <option value="mkv">MKV</option>
+                  <option value="webm">WebM</option>
+                </select>
+                <p id="outputContainerHelp" class="field-help">推荐 MP4，兼容性最好；合并流媒体或转换格式时生效。</p>
+                <p id="outputContainerError" class="field-error" role="alert" hidden></p>
+              </div>
+
+              <div class="setting-rows">
+                <label class="opt-check">
+                  <input id="saveAs" name="saveAs" type="checkbox" aria-describedby="saveAsHelp">
+                  <span class="switch" aria-hidden="true"></span>
+                  <span class="txt">可信浏览器直链下载前选择位置<small id="saveAsHelp">只作用于由 Chrome 保存的固定 Instagram/X 直链；本地下载引擎始终保存到其下载目录。</small></span>
+                </label>
+                <label class="opt-check">
+                  <input id="useNativeForDirect" name="useNativeForDirect" type="checkbox" aria-describedby="useNativeForDirectHelp">
+                  <span class="switch" aria-hidden="true"></span>
+                  <span class="txt">可信直链也使用本地下载引擎<small id="useNativeForDirectHelp">开启后，原本可由 Chrome 保存的固定 Instagram/X 直链也走本地安全下载与多连接路径。</small></span>
+                </label>
+              </div>
+            </div>
+          </fieldset>
+
+          <fieldset id="performance" class="settings-section">
+            <legend>
+              <span class="section-index" aria-hidden="true">03</span>
+              <span><strong data-ui-copy="performance-title">性能</strong><small data-ui-copy="performance-description">先选择稳妥预设，需要时再调整具体并发。</small></span>
+            </legend>
+            <div class="section-content">
+              <div class="preset-group" role="group" aria-label="性能预设" aria-describedby="performancePresetHelp">
+                <button type="button" class="preset-button" data-preset="stable" data-fragments="4" data-ranges="4"><strong>稳定</strong><span>4</span></button>
+                <button type="button" class="preset-button is-current" data-preset="balanced" data-fragments="8" data-ranges="8"><strong>平衡</strong><span>8</span></button>
+                <button type="button" class="preset-button" data-preset="fast" data-fragments="12" data-ranges="12"><strong>高速</strong><span>12</span></button>
+              </div>
+              <p id="performancePresetHelp" class="field-help">更高的并发不一定更快；下载不稳定时优先选择“稳定”。</p>
+
+              <div class="opt-grid performance-fields">
+                <div class="opt-field">
+                  <label for="concurrentFragments">HLS 视频片段并发数</label>
+                  <input id="concurrentFragments" name="concurrentFragments" type="number" min="1" max="24" inputmode="numeric" aria-describedby="concurrentFragmentsHelp concurrentFragmentsError">
+                  <p id="concurrentFragmentsHelp" class="field-help">同时获取的视频片段数量，允许 1–24。</p>
+                  <p id="concurrentFragmentsError" class="field-error" role="alert" hidden></p>
+                </div>
+                <div class="opt-field">
+                  <label for="concurrentRanges">直接文件 Range 并发数</label>
+                  <input id="concurrentRanges" name="concurrentRanges" type="number" min="1" max="24" inputmode="numeric" aria-describedby="concurrentRangesHelp concurrentRangesError">
+                  <p id="concurrentRangesHelp" class="field-help">大文件分段同时获取的数量，允许 1–24。</p>
+                  <p id="concurrentRangesError" class="field-error" role="alert" hidden></p>
+                </div>
+              </div>
+
+              <details class="technical-disclosure">
+                <summary>并发设置如何影响下载？</summary>
+                <div>
+                  <p>HLS 并发用于清晰、静态 VOD 的片段下载；Range 并发只在源站返回有效 206 与 Content-Range 时使用。数值越高会增加连接数，但不会绕过源站限速，也不保证提高吞吐。</p>
+                </div>
+              </details>
+            </div>
+          </fieldset>
+
+          <fieldset id="detectionNaming" class="settings-section">
+            <legend>
+              <span class="section-index" aria-hidden="true">04</span>
+              <span><strong data-ui-copy="detection-title">检测与命名</strong><small data-ui-copy="detection-description">控制媒体筛选以及下载文件的可读名称。</small></span>
+            </legend>
+            <div class="section-content">
+              <div class="opt-grid">
+                <div class="opt-field">
+                  <label for="minimumKiB">最小媒体大小（KiB）</label>
+                  <input id="minimumKiB" name="minimumKiB" type="number" min="0" max="102400" inputmode="numeric" aria-describedby="minimumKiBHelp minimumKiBError">
+                  <p id="minimumKiBHelp" class="field-help">忽略小于此值的普通媒体响应；允许 0–102400 KiB。</p>
+                  <p id="minimumKiBError" class="field-error" role="alert" hidden></p>
+                </div>
+                <div class="opt-field template-field">
+                  <label for="filenameTemplate">文件名模板</label>
+                  <input id="filenameTemplate" name="filenameTemplate" maxlength="160" placeholder="{title} - {height}" aria-describedby="filenameTemplateHelp filenameTemplatePreview filenameTemplateError">
+                  <p id="filenameTemplateHelp" class="field-help">点击字段可在当前光标位置插入；未知字段不会保存。</p>
+                  <p id="filenameTemplateError" class="field-error" role="alert" hidden></p>
+                </div>
+              </div>
+
+              <div class="token-picker" role="group" aria-label="可插入的文件名字段">
+                <button type="button" class="token-chip" data-token="{title}">{title}</button>
+                <button type="button" class="token-chip" data-token="{host}">{host}</button>
+                <button type="button" class="token-chip" data-token="{kind}">{kind}</button>
+                <button type="button" class="token-chip" data-token="{height}">{height}</button>
+                <button type="button" class="token-chip" data-token="{date}">{date}</button>
+              </div>
+              <p id="filenameTemplatePreview" class="template-preview"><span>预览</span><strong>示例视频 - 1080.mp4</strong></p>
+
+              <div class="opt-field blocked-domains">
+                <label for="blockedDomains">忽略域名（每行一个）</label>
+                <textarea id="blockedDomains" name="blockedDomains" rows="6" spellcheck="false" placeholder="ads.example.com" aria-describedby="blockedDomainsHelp blockedDomainsError"></textarea>
+                <p id="blockedDomainsHelp" class="field-help">保存时会转为小写、移除协议和路径、去掉结尾句点并删除重复项。不接受通配符、IP 地址或凭据。</p>
+                <p id="blockedDomainsError" class="field-error" role="alert" hidden></p>
+              </div>
+            </div>
+          </fieldset>
+
+          <fieldset id="privacyNetwork" class="settings-section">
+            <legend>
+              <span class="section-index" aria-hidden="true">05</span>
+              <span><strong data-ui-copy="privacy-title">隐私与网络</strong><small data-ui-copy="privacy-description">固定站点接口，自动行为可随时关闭。</small></span>
+            </legend>
+            <div class="section-content setting-rows">
+              <label class="opt-check">
+                <input id="autoEnrichSiteQuality" name="autoEnrichSiteQuality" type="checkbox" aria-describedby="autoEnrichSiteQualityHelp">
+                <span class="switch" aria-hidden="true"></span>
+                <span class="txt">自动补全支持站点的画质<small id="autoEnrichSiteQualityHelp">默认开启。检测到 B 站可信媒体请求（播放或预加载）时，会使用同站 Cookie 自动补全画质候选；同页首次可信请求触发，重复 Range 请求会合并，成功结果缓存 45 秒，失败后至少冷却 5 秒才重试。关闭后不发起自动补全，可在弹窗或侧栏点“重新扫描”手动补全，角标可能延迟出现。接口由扩展固定，页面不能指定。</small></span>
+              </label>
+
+              <div class="private-network-panel">
+                <label class="opt-check warning-switch">
+                  <input id="allowPrivateNetworkMedia" name="allowPrivateNetworkMedia" type="checkbox" aria-describedby="privateNetworkHelp privateNetworkBoundary">
+                  <span class="switch" aria-hidden="true"></span>
+                  <span class="txt">允许访问局域网媒体<small id="privateNetworkHelp">仅在你明确要保存自己局域网设备上的媒体时开启；开启前会再次确认。</small></span>
+                </label>
+                <p id="privateNetworkBoundary" class="boundary-copy"><strong>始终禁止：</strong>云元数据服务、链路本地、多播、未指定与保留地址不会因该开关放行。</p>
+              </div>
+
+              <dl class="privacy-facts" aria-label="本地数据处理说明">
+                <div><dt>请求凭据</dt><dd>仅保存在内存中，并按来源限制</dd></div>
+                <div><dt>遥测与云服务</dt><dd>无</dd></div>
+              </dl>
+            </div>
+          </fieldset>
+
+          <fieldset id="localCapabilities" class="settings-section">
+            <legend>
+              <span class="section-index" aria-hidden="true">06</span>
+              <span><strong data-ui-copy="local-title">本地能力</strong><small data-ui-copy="local-description">安装状态与当前构建是否开放是两件不同的事。</small></span>
+            </legend>
+            <div class="section-content">
+              <dl class="local-capability-matrix" aria-label="本地工具状态">
+                <div><dt>本地下载程序连接</dt><dd id="capabilityNativeConnection" data-state="checking">正在检查</dd></div>
+                <div><dt>Native 协议兼容</dt><dd id="capabilityNativeProtocol" data-state="checking">等待连接</dd></div>
+                <div><dt>FFmpeg 安装与本地处理</dt><dd id="capabilityFfmpeg" data-state="checking">等待连接</dd></div>
+                <div><dt>yt-dlp 安装状态</dt><dd id="capabilityYtDlp" data-state="unknown">未检查</dd></div>
+                <div><dt>外部工具联网</dt><dd id="capabilityExternalNetwork" data-state="gated">当前构建未启用</dd></div>
+              </dl>
+
+              <div class="permission-row">
+                <div>
+                  <strong>本地下载引擎</strong>
+                  <small id="nativePermissionStatus" role="status" aria-live="polite">正在检查是否可用…</small>
+                </div>
+                <button id="nativePermissionButton" type="button" class="secondary-btn" aria-describedby="nativePermissionStatus">开启本地下载引擎</button>
+              </div>
+
+              <details class="install-guide" id="nativeInstallGuide">
+                <summary>本地下载引擎安装方法</summary>
+                <ol>
+                  <li>本地下载引擎随扩展仓库一起提供，安装一次即可。</li>
+                  <li>从源码使用时：在「终端」进入 FluxCatch 仓库根目录，然后执行 <code>./scripts/native-install-wrapper.sh</code>。</li>
+                  <li>从 zip 包使用时：解压 native-host 包后，进入目录执行 <code>./install-macos.sh</code>。</li>
+                  <li>安装器会同时登记 Google Chrome 与 Chrome for Testing，无需手动选择。</li>
+                  <li>完成后回到本页：尚未授权时点击「开启本地下载引擎」，已授权时点击「重新检查」。</li>
+                </ol>
+              </details>
+            </div>
+          </fieldset>
+
+          <fieldset id="notifications" class="settings-section">
+            <legend>
+              <span class="section-index" aria-hidden="true">07</span>
+              <span><strong data-ui-copy="notifications-title">通知</strong><small data-ui-copy="notifications-description">开启时立即申请权限；通知偏好仍由保存栏确认。</small></span>
+            </legend>
+            <div class="section-content setting-rows">
+              <label class="opt-check">
+                <input id="showNotifications" name="showNotifications" type="checkbox" aria-describedby="notificationsHelp notificationPermissionStatus">
+                <span class="switch" aria-hidden="true"></span>
+                <span class="txt">下载完成或失败时提醒我<small id="notificationsHelp">Chrome 会在开启时请求权限；关闭并保存后停止提醒，已有浏览器授权会保留。</small></span>
+              </label>
+              <p id="notificationPermissionStatus" class="inline-status" role="status" aria-live="polite"></p>
+            </div>
+          </fieldset>
+
+          <section id="lab" class="settings-section lab-section" aria-labelledby="labHeading">
+            <div class="section-heading">
+              <span class="section-index" aria-hidden="true">08</span>
+              <div><h2 id="labHeading" data-ui-copy="lab-title">实验室与当前限制</h2><p data-ui-copy="lab-description">以下项目仅说明路线状态，在当前构建中没有可操作开关。</p></div>
+            </div>
+            <ul class="roadmap-list" aria-label="当前未开放能力">
+              <li><span><strong>YouTube 适配器</strong><small>实验源保留，但稳定构建不发布候选或调用外部工具。</small></span><span class="roadmap-status">规划中</span></li>
+              <li><span><strong>HLS 直播录制</strong><small>当前仅支持清晰、静态 VOD。</small></span><span class="roadmap-status">未开放</span></li>
+              <li><span><strong>加密 HLS</strong><small>AES-128 与 SAMPLE-AES 保持 fail-closed。</small></span><span class="roadmap-status">未开放</span></li>
+            </ul>
+          </section>
         </div>
-        <div class="diagnostic-actions">
-          <p>复制内容只包含版本、构建、协议和能力状态，不包含网页、媒体、请求凭据或本机路径。</p>
-          <button id="copyDiagnosticsButton" type="button" class="secondary-btn">复制诊断信息</button>
+
+        <div class="opt-actions" id="saveBar" aria-label="保存设置">
+          <div class="save-copy">
+            <span class="unsaved-dot" aria-hidden="true"></span>
+            <span id="dirtyStatus">所有更改均已保存</span>
+            <span id="saveStatus" class="save-status" role="status" aria-live="polite" aria-atomic="true"></span>
+          </div>
+          <div class="save-buttons">
+            <button id="discardChangesButton" type="button" class="secondary-btn" disabled>放弃更改</button>
+            <button type="submit" class="save-btn" disabled>保存设置</button>
+          </div>
         </div>
-      </section>
-      <div class="opt-actions"><span id="saveStatus" class="save-status" role="status" aria-live="polite" aria-atomic="true"></span><button type="submit" class="save-btn">保存设置</button></div>
-    </form>
+      </form>
+      </div>
+    </div>
   </main>
+
+  <dialog id="privateNetworkDialog" class="confirmation-dialog" aria-labelledby="privateNetworkDialogTitle" aria-describedby="privateNetworkDialogDescription">
+    <form method="dialog">
+      <div class="dialog-icon warning" aria-hidden="true">!</div>
+      <h2 id="privateNetworkDialogTitle">允许访问局域网媒体？</h2>
+      <p id="privateNetworkDialogDescription">这会允许 FluxCatch 主动连接你局域网中的媒体设备。云元数据服务、链路本地、多播、未指定与保留地址仍然保持禁止。</p>
+      <div class="dialog-actions">
+        <button id="privateNetworkCancelButton" type="submit" value="cancel" class="secondary-btn">保持关闭</button>
+        <button id="privateNetworkConfirmButton" type="submit" value="confirm" class="warning-button">确认开启</button>
+      </div>
+    </form>
+  </dialog>
+
   <script type="module" src="options.js"></script>
 </body>
 </html>

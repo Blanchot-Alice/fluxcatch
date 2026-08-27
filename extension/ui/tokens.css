@@ -1,0 +1,159 @@
+/* FluxCatch shared design tokens — Monet morning-mist lily pond. */
+:root {
+  color-scheme: light;
+
+  --canvas:#F1F2F2;
+  --surface:#FCFCFB;
+  --surfaceSubtle:#E7EAE9;
+  --ink:#343B39;
+  --muted:#626E6A;
+  --border:#CCD2CF;
+  --control-border:#89948F;
+
+  --primary:#5E8F84;
+  --primary-strong:#466F66;
+  --primary-action:#466F66;
+  --primaryHover:#365A52;
+  --on-primary:#FFFFFF;
+  --accent:#C78FA0;
+  --accent-strong:#925365;
+  --lavender:#8E82AD;
+  --lavender-strong:#695D8B;
+  --success:#5E8F6E;
+  --success-strong:#447151;
+  --success-action:#447151;
+  --on-success:#FFFFFF;
+  --warning:#C69A5B;
+  --warning-strong:#7B5926;
+  --danger:#BC6A5C;
+  --danger-strong:#914D42;
+  --mist-blue:#7FA8BC;
+  --mist-strong:#486D80;
+  --rise-gold:#D9B87A;
+  --rise-pink:#D3A5B4;
+
+  --primary-tint:rgba(94,143,132,.12);
+  --accent-tint:rgba(199,143,160,.15);
+  --warning-tint:rgba(198,154,91,.15);
+  --danger-tint:rgba(188,106,92,.12);
+  --lavender-tint:rgba(142,130,173,.12);
+  --mist-tint:rgba(127,168,188,.13);
+
+  --font:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  --mono:ui-monospace,SFMono-Regular,Consolas,Menlo,monospace;
+  --text-page-title:24px;
+  --text-section-title:15px;
+  --text-label:13px;
+  --text-control:14px;
+  --text-body:13px;
+  --text-help:12px;
+
+  --space-1:4px;
+  --space-2:8px;
+  --space-3:12px;
+  --space-4:16px;
+  --space-6:24px;
+  --space-8:32px;
+  --space-12:48px;
+
+  --r-control:9px;
+  --r-row:13px;
+  --r-panel:18px;
+  --ui-section-gap:16px;
+  --ui-first-second-gap:12px;
+  --ui-content-width:720px;
+  --ui-font-scale:1;
+  --ui-radius:18px;
+  --shadow-sm:0 1px 3px rgba(51,74,66,.06);
+  --shadow-md:0 10px 28px rgba(51,74,66,.10);
+  --focus-ring:0 0 0 3px var(--primary-tint);
+
+  --control-height:44px;
+  --action-height:44px;
+  --action-height-secondary:40px;
+  --target-min:40px;
+  --motion-fast:140ms;
+  --motion-base:160ms;
+  --motion-slow:250ms;
+  --ease-standard:cubic-bezier(.2,.8,.2,1);
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+  --canvas:#141816;
+  --surface:#1C211F;
+  --surfaceSubtle:#272C29;
+  --ink:#E9EBE7;
+  --muted:#A9B2AD;
+  --border:#3D4742;
+  --control-border:#69756F;
+  --primary:#8CBDB0;
+  --primary-strong:#9AC8BC;
+  --primary-action:#4D796F;
+  --primaryHover:#527F75;
+  --accent:#D3A5B4;
+  --accent-strong:#E0B3C2;
+  --lavender:#B4A7D0;
+  --lavender-strong:#C0B4DB;
+  --success:#86B08C;
+  --success-strong:#9AC39F;
+  --success-action:#527B5A;
+  --on-success:#FFFFFF;
+  --warning:#D4B072;
+  --warning-strong:#E1C283;
+  --danger:#CE8272;
+  --danger-strong:#DF9586;
+  --mist-blue:#9CC3D6;
+  --mist-strong:#B0D2E1;
+  --rise-gold:#E2C68A;
+  --rise-pink:#E0B3C2;
+  --primary-tint:rgba(140,189,176,.13);
+  --accent-tint:rgba(211,165,180,.15);
+  --warning-tint:rgba(212,176,114,.14);
+  --danger-tint:rgba(206,130,114,.13);
+  --lavender-tint:rgba(180,167,208,.13);
+  --mist-tint:rgba(156,195,214,.14);
+  --shadow-sm:0 1px 3px rgba(0,0,0,.28);
+  --shadow-md:0 10px 28px rgba(0,0,0,.38);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --canvas:#141816;
+    --surface:#1C211F;
+    --surfaceSubtle:#272C29;
+    --ink:#E9EBE7;
+    --muted:#A9B2AD;
+    --border:#3D4742;
+    --control-border:#69756F;
+    --primary:#8CBDB0;
+    --primary-strong:#9AC8BC;
+    --primary-action:#4D796F;
+    --primaryHover:#527F75;
+    --accent:#D3A5B4;
+    --accent-strong:#E0B3C2;
+    --lavender:#B4A7D0;
+    --lavender-strong:#C0B4DB;
+    --success:#86B08C;
+    --success-strong:#9AC39F;
+    --success-action:#527B5A;
+    --on-success:#FFFFFF;
+    --warning:#D4B072;
+    --warning-strong:#E1C283;
+    --danger:#CE8272;
+    --danger-strong:#DF9586;
+    --mist-blue:#9CC3D6;
+    --mist-strong:#B0D2E1;
+    --rise-gold:#E2C68A;
+    --rise-pink:#E0B3C2;
+    --primary-tint:rgba(140,189,176,.13);
+    --accent-tint:rgba(211,165,180,.15);
+    --warning-tint:rgba(212,176,114,.14);
+    --danger-tint:rgba(206,130,114,.13);
+    --lavender-tint:rgba(180,167,208,.13);
+    --mist-tint:rgba(156,195,214,.14);
+    --shadow-sm:0 1px 3px rgba(0,0,0,.28);
+    --shadow-md:0 10px 28px rgba(0,0,0,.38);
+  }
+}

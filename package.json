@@ -1,11 +1,13 @@
 {
   "name": "fluxcatch",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "private": true,
   "type": "module",
   "scripts": {
     "test": "node --test tests/*.test.js",
+    "test:coverage": "node --experimental-test-coverage --test-coverage-lines=65 --test-coverage-functions=70 --test-coverage-branches=65 --test tests/*.test.js",
     "test:e2e": "node e2e/run.mjs",
-    "package": "bash scripts/package.sh"
+    "package": "bash scripts/package.sh",
+    "verify:package": "python3 scripts/verify_packages.py"
   }
 }

@@ -4,6 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>FluxCatch</title>
+  <link rel="stylesheet" href="../ui/tokens.css">
+  <link rel="stylesheet" href="../ui/components.css">
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
@@ -19,10 +21,10 @@
       <div><h1>FluxCatch</h1><p class="tagline">Keep What You See.</p></div>
     </div>
     <div class="toolbar">
-      <button id="scanButton" class="icon-btn" title="重新扫描" aria-label="重新扫描">
+      <button id="scanButton" type="button" class="icon-btn" title="重新扫描" aria-label="重新扫描">
         <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
       </button>
-      <button id="settingsButton" class="icon-btn" title="设置" aria-label="设置">
+      <button id="settingsButton" type="button" class="icon-btn" title="设置" aria-label="设置">
         <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
       </button>
     </div>
@@ -41,48 +43,59 @@
     </select>
   </section>
 
+  <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true" hidden></div>
+
   <main class="body">
     <section id="mediaView" class="view active" role="tabpanel" aria-labelledby="mediaTab" tabindex="0">
-      <div id="mediaList" class="media-list" aria-live="polite" aria-label="检测到的媒体"></div>
-      <div id="emptyState" class="empty">
+      <div id="mediaLoading" class="loading-state" role="status" aria-live="polite"><span class="spinner" aria-hidden="true"></span><span>正在安全扫描当前页面…</span></div>
+      <div id="mediaError" class="state-notice" role="alert" hidden><div><strong>媒体结果读取失败</strong><p id="mediaErrorText">请重试。</p></div><button id="retryMediaButton" type="button" class="secondary-btn">重新读取</button></div>
+      <ul id="mediaList" class="media-list" aria-live="polite" aria-label="检测到的媒体" hidden></ul>
+      <div id="emptyState" class="empty" hidden>
         <div class="radar" aria-hidden="true"><i class="core"></i><span class="ring r1"></span><span class="ring r2"></span><span class="ring r3"></span></div>
-        <div class="empty-copy" role="status" aria-live="polite" aria-atomic="true"><h2>少女祈祷中……</h2><p>播放视频后自动检测可下载的视频、音频与流媒体</p></div>
-        <button id="forceButton" type="button" class="dl-btn">⟳ 强制刷新检测</button>
+        <div class="empty-copy" role="status" aria-live="polite" aria-atomic="true"><h2>尚未检测到媒体</h2><p>播放视频后重新扫描；扫描只读取当前页面的媒体信息，不会刷新页面。</p></div>
+        <button id="forceButton" type="button" class="dl-btn">重新扫描当前页面</button>
       </div>
     </section>
 
     <section id="jobsView" class="view" role="tabpanel" aria-labelledby="jobsTab" tabindex="0" hidden>
       <div id="hostCard" class="host-card">
         <span id="hostDot" class="dot" aria-hidden="true"></span>
-        <div role="status" aria-live="polite" aria-atomic="true"><strong id="hostTitle">高速下载功能</strong><small id="hostDetail">正在检查是否可用…</small></div>
+        <div role="status" aria-live="polite" aria-atomic="true"><strong id="hostTitle">本地下载引擎</strong><small id="hostDetail">正在检查是否可用…</small></div>
         <button id="installHelpButton" type="button" class="link" hidden>安装方法</button>
-        <button id="pingButton" type="button" class="link">重试</button>
+        <button id="pingButton" type="button" class="link" aria-label="重新检查本地下载引擎">重试</button>
       </div>
-      <div id="jobsList" class="jobs-list" aria-label="下载任务"></div>
+      <div id="jobsLoading" class="loading-state" role="status" aria-live="polite"><span class="spinner" aria-hidden="true"></span><span>正在恢复下载任务…</span></div>
+      <div id="jobsError" class="state-notice" role="alert" hidden><div><strong>任务记录读取失败</strong><p id="jobsErrorText">请重试。</p></div><button id="retryJobsButton" type="button" class="secondary-btn">重新读取</button></div>
+      <ul id="jobsList" class="jobs-list" aria-label="下载任务" hidden></ul>
       <div id="jobAnnouncer" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
-      <div id="jobsEmpty" class="empty compact"><h2>暂无任务</h2><p>开始下载后可在这里查看实时速度与进度。</p></div>
+      <div id="jobsEmpty" class="empty compact" hidden><h2>暂无任务</h2><p>开始下载后可在这里查看实时速度与进度。</p></div>
     </section>
   </main>
 
   <footer class="foot-actions">
     <button id="workspaceButton" type="button" class="foot-btn">打开媒体工作台</button>
-    <button id="folderButton" type="button" class="foot-btn">打开下载目录</button>
-    <button id="clearButton" type="button" class="foot-btn" title="清空媒体检测与已结束任务">清空记录</button>
+    <button id="folderButton" type="button" class="foot-btn" title="打开 Chrome 下载目录；本地引擎默认保存到 Downloads/FluxCatch">浏览器下载目录</button>
+    <button id="clearButton" type="button" class="foot-btn" title="清空当前页媒体检测结果与已结束任务，保留进行中任务" aria-label="清空当前页媒体检测结果与已结束任务，保留进行中任务">清空媒体与历史</button>
   </footer>
 
-  <dialog id="downloadDialog" aria-labelledby="downloadDialogTitle" aria-describedby="dialogNote">
+  <dialog id="downloadDialog" aria-labelledby="downloadDialogTitle" aria-describedby="dialogNote dialogRequirement dialogError">
     <form method="dialog" id="downloadForm">
-      <div class="dialog-head"><h2 id="downloadDialogTitle">下载设置</h2><button type="submit" value="cancel" class="close-button" aria-label="关闭">×</button></div>
+      <div class="dialog-head"><h2 id="downloadDialogTitle">下载设置</h2><button type="button" class="close-button" data-dialog-close aria-label="关闭">×</button></div>
       <label>文件名<input id="filenameInput" autocomplete="off" maxlength="200" required></label>
-      <label>保存格式<select id="containerSelect"><option value="mp4">MP4</option><option value="mkv">MKV</option><option value="webm">WebM</option><option value="mp3">MP3（仅音频）</option></select></label>
+      <label>保存格式<select id="containerSelect"><option value="original">原格式（不转换）</option><option value="mp4">MP4</option><option value="mkv">MKV</option><option value="webm">WebM</option><option value="mp3">MP3（仅音频）</option></select></label>
       <label id="variantLabel" hidden>清晰度<select id="variantSelect"></select></label>
-      <label class="check"><input id="nativeDirectInput" type="checkbox"><span>使用多连接高速下载</span></label>
-      <p id="dialogNote" class="dialog-note"></p>
-      <div class="dialog-actions"><button type="submit" value="cancel" class="secondary">取消</button><button type="submit" id="confirmDownload" value="default" class="primary">开始下载</button></div>
+      <label class="check"><input id="nativeDirectInput" type="checkbox"><span>可信直链也使用本地下载引擎</span></label>
+      <p id="dialogNote" class="dialog-note" role="status" aria-live="polite"></p>
+      <div id="dialogRequirement" class="permission-explainer" role="note">
+        <strong id="dialogRequirementTitle">权限说明</strong>
+        <p id="dialogRequirementText">多数媒体需要本地下载引擎；只有严格匹配的 Instagram/X 固定来源不会请求该权限。</p>
+        <button id="dialogSettingsButton" type="button" class="text-button" hidden>打开本地能力设置</button>
+      </div>
+      <p id="dialogError" class="dialog-error" role="alert" aria-live="assertive" aria-atomic="true" hidden></p>
+      <div class="dialog-actions"><button type="button" class="secondary" data-dialog-close>取消</button><button type="submit" id="confirmDownload" value="default" class="primary">开始下载</button></div>
     </form>
   </dialog>
 
-  <div id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
   <script type="module" src="popup.js"></script>
 </body>
 </html>

@@ -38,19 +38,23 @@ jobs:
           const channel = BUILD_PROFILE.channel;
           const profileVersion = String(BUILD_PROFILE.profileVersion);
           const commit = process.env.GITHUB_SHA.slice(0, 12);
-          if (!/^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/.test(version)) throw new Error("invalid build version");
+          const versionParts = version.split(".");
+          if (versionParts.length < 1 || versionParts.length > 4
+              || versionParts.some((part) => !/^(?:0|[1-9]\d*)$/.test(part) || Number(part) > 65535)) {
+            throw new Error("invalid Chrome build version");
+          }
           if (!/^[a-z][a-z0-9-]{0,31}$/.test(channel)) throw new Error("invalid build channel");
           if (!/^\d{1,4}$/.test(profileVersion)) throw new Error("invalid capability profile version");
           if (!/^[0-9a-f]{12}$/.test(commit)) throw new Error("invalid tested commit");
           fs.appendFileSync(process.env.GITHUB_OUTPUT,
             `version=${version}\nchannel=${channel}\nprofile_version=${profileVersion}\ncommit=${commit}\n`);
           NODE
-      - name: Extension unit and UI static tests
+      - name: Extension unit, UI static and coverage gates
         id: extension_tests
         run: |
           set -o pipefail
           log="$RUNNER_TEMP/extension-tests.log"
-          npm test 2>&1 | tee "$log"
+          npm run test:coverage 2>&1 | tee "$log"
           total="$(awk '$2 == "tests" && $3 ~ /^[0-9]+$/ { value=$3 } END { print value }' "$log")"
           passed="$(awk '$2 == "pass" && $3 ~ /^[0-9]+$/ { value=$3 } END { print value }' "$log")"
           failed="$(awk '$2 == "fail" && $3 ~ /^[0-9]+$/ { value=$3 } END { print value }' "$log")"
@@ -59,6 +63,14 @@ jobs:
             exit 1
           }
           printf 'total=%s\npassed=%s\nfailed=%s\n' "$total" "$passed" "$failed" >> "$GITHUB_OUTPUT"
+          node - "$log" "$GITHUB_OUTPUT" <<'NODE'
+          const fs = require("node:fs");
+          const report = fs.readFileSync(process.argv[2], "utf8");
+          const match = report.match(/all files\s+\|\s+([0-9.]+)\s+\|\s+([0-9.]+)\s+\|\s+([0-9.]+)/);
+          if (!match) throw new Error("coverage totals were not available");
+          fs.appendFileSync(process.argv[3],
+            `coverage_lines=${match[1]}\ncoverage_branches=${match[2]}\ncoverage_functions=${match[3]}\n`);
+          NODE
       - name: Native-host unit and security tests
         id: native_tests
         run: |
@@ -79,6 +91,7 @@ jobs:
         id: package
         run: |
           npm run package
+          python3 scripts/verify_packages.py --expected-commit "$(git rev-parse --short=12 HEAD)"
           cd dist
           sha256sum -c SHA256SUMS
           extension_sha="$(awk '$2 ~ /^fluxcatch-extension-/ {print $1}' SHA256SUMS)"
@@ -88,6 +101,17 @@ jobs:
             exit 1
           }
           printf 'extension_sha=%s\nnative_sha=%s\n' "$extension_sha" "$native_sha" >> "$GITHUB_OUTPUT"
+      - name: Upload exact candidate packages
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fluxcatch-packages-${{ github.run_id }}
+          path: |
+            dist/fluxcatch-extension-*.zip
+            dist/fluxcatch-native-host-*.zip
+            dist/SHA256SUMS
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 14
       - name: Record fast-gate evidence
         if: always()
         env:
@@ -98,6 +122,9 @@ jobs:
           EXTENSION_TOTAL: ${{ steps.extension_tests.outputs.total }}
           EXTENSION_PASSED: ${{ steps.extension_tests.outputs.passed }}
           EXTENSION_FAILED: ${{ steps.extension_tests.outputs.failed }}
+          COVERAGE_LINES: ${{ steps.extension_tests.outputs.coverage_lines }}
+          COVERAGE_BRANCHES: ${{ steps.extension_tests.outputs.coverage_branches }}
+          COVERAGE_FUNCTIONS: ${{ steps.extension_tests.outputs.coverage_functions }}
           NATIVE_TOTAL: ${{ steps.native_tests.outputs.total }}
           EXTENSION_SHA: ${{ steps.package.outputs.extension_sha }}
           NATIVE_SHA: ${{ steps.package.outputs.native_sha }}
@@ -115,13 +142,46 @@ jobs:
             printf '| Extension tests | `%s/%s passed; %s failed` |\n' \
               "$(value_or_unavailable "$EXTENSION_PASSED")" "$(value_or_unavailable "$EXTENSION_TOTAL")" \
               "$(value_or_unavailable "$EXTENSION_FAILED")"
+            printf '| Extension coverage | `lines %s%%; branches %s%%; functions %s%%` |\n' \
+              "$(value_or_unavailable "$COVERAGE_LINES")" "$(value_or_unavailable "$COVERAGE_BRANCHES")" \
+              "$(value_or_unavailable "$COVERAGE_FUNCTIONS")"
             printf '| Native tests | `%s passed` |\n' "$(value_or_unavailable "$NATIVE_TOTAL")"
             printf '| Extension package SHA-256 | `%s` |\n' "$(value_or_unavailable "$EXTENSION_SHA")"
             printf '| Native package SHA-256 | `%s` |\n' "$(value_or_unavailable "$NATIVE_SHA")"
           } >> "$GITHUB_STEP_SUMMARY"
 
+  native_compatibility:
+    name: Native host on Python ${{ matrix.python }}
+    runs-on: macos-14
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.9", "3.12"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - name: Compile and test the supported native runtime
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          python3 -c 'import sys; assert sys.version_info >= (3, 9), sys.version'
+          python3 -m compileall -q native-host scripts/build_packages.py scripts/verify_packages.py scripts/validate.py
+          python3 scripts/validate.py
+          python3 scripts/build_packages.py --help
+          python3 scripts/verify_packages.py --help
+          python3 -m unittest discover -s native-host/tests -v
+
   browser:
     name: Chrome for Testing E2E
+    needs: [fast, native_compatibility]
     runs-on: macos-14
     timeout-minutes: 20
     steps:
@@ -131,6 +191,14 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Download exact candidate packages
+        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
+        with:
+          name: fluxcatch-packages-${{ github.run_id }}
+          path: dist
       - name: Read bounded build metadata
         id: metadata
         run: |
@@ -142,7 +210,11 @@ jobs:
           const channel = BUILD_PROFILE.channel;
           const profileVersion = String(BUILD_PROFILE.profileVersion);
           const commit = process.env.GITHUB_SHA.slice(0, 12);
-          if (!/^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/.test(version)) throw new Error("invalid build version");
+          const versionParts = version.split(".");
+          if (versionParts.length < 1 || versionParts.length > 4
+              || versionParts.some((part) => !/^(?:0|[1-9]\d*)$/.test(part) || Number(part) > 65535)) {
+            throw new Error("invalid Chrome build version");
+          }
           if (!/^[a-z][a-z0-9-]{0,31}$/.test(channel)) throw new Error("invalid build channel");
           if (!/^\d{1,4}$/.test(profileVersion)) throw new Error("invalid capability profile version");
           if (!/^[0-9a-f]{12}$/.test(commit)) throw new Error("invalid tested commit");
@@ -158,7 +230,13 @@ jobs:
         id: e2e
         env:
           CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
+          TESTED_COMMIT: ${{ steps.metadata.outputs.commit }}
         run: |
+          python3 scripts/verify_packages.py --expected-commit "$TESTED_COMMIT"
+          mkdir -p "$RUNNER_TEMP/fluxcatch-packaged-extension"
+          unzip -q dist/fluxcatch-extension-*.zip -d "$RUNNER_TEMP/fluxcatch-packaged-extension"
+          export FLUXCATCH_EXTENSION_DIR="$RUNNER_TEMP/fluxcatch-packaged-extension"
+          export FLUXCATCH_EXPECTED_BUILD_COMMIT="$TESTED_COMMIT"
           npm run test:e2e
           node <<'NODE'
           const fs = require("node:fs");
@@ -182,7 +260,9 @@ jobs:
           path: |
             e2e/artifacts/latest.json
             e2e/artifacts/screenshots/
+            e2e/artifacts/phase-b-matrix/
           if-no-files-found: warn
+          overwrite: true
           retention-days: 14
       - name: Record browser-gate evidence
         if: always()

@@ -27,6 +27,7 @@ const TEXT_TRACK_MIMES = new Set([
 const BILIBILI_PAGE_HOSTS = new Set(["www.bilibili.com", "m.bilibili.com"]);
 const BILIBILI_MEDIA_HOST_RE = /(?:^|\.)(?:bilivideo\.com|bilivideo\.cn)$/i;
 const BILIBILI_PARTNER_MEDIA_HOST_RE = /(?:^|\.)mountaintoys\.cn$/i;
+const INSTAGRAM_MEDIA_HOST_RE = /(?:^|\.)(?:cdninstagram\.com|fbcdn\.net)$/i;
 const BILIBILI_VIDEO_HEIGHTS = new Map([
   [6, 240], [16, 360], [32, 480], [64, 720], [74, 720], [80, 1080],
   [112, 1080], [116, 1080], [120, 2160], [125, 2160], [126, 2160], [127, 4320]
@@ -185,6 +186,27 @@ export function normalizeMime(value = "") {
   return String(value).split(";", 1)[0].trim().toLowerCase();
 }
 
+// Instagram's MediaSource player requests ISO-BMFF byte ranges by putting the
+// range in the signed URL itself rather than in an HTTP Range header. Those
+// responses commonly retain both a .mp4 suffix and video/mp4 MIME type, but
+// contain only moof/mdat boxes and are not standalone files. Treat only the
+// trusted Meta CDN shape as a fragment so unrelated sites may legitimately use
+// similarly named application parameters without losing a direct-media row.
+export function isInstagramByteRangeFragment(value) {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" || !INSTAGRAM_MEDIA_HOST_RE.test(url.hostname)) return false;
+    const starts = url.searchParams.getAll("bytestart");
+    const ends = url.searchParams.getAll("byteend");
+    if (starts.length !== 1 || ends.length !== 1 || !/^\d+$/.test(starts[0]) || !/^\d+$/.test(ends[0])) return false;
+    const start = Number(starts[0]);
+    const end = Number(ends[0]);
+    return Number.isSafeInteger(start) && Number.isSafeInteger(end) && end >= start;
+  } catch {
+    return false;
+  }
+}
+
 export function classifyMedia({ url, mime = "", resourceType = "", contentLength = 0 }) {
   const ext = getExtension(url);
   const normalizedMime = normalizeMime(mime);
@@ -207,7 +229,8 @@ export function classifyMedia({ url, mime = "", resourceType = "", contentLength
   // Small numbered fragments are useful as evidence of a stream but should not
   // flood the popup as individually downloadable files.
   const likelyTransportSegment = ["ts", "m2ts", "aac"].includes(ext) && resourceType !== "media" && contentLength > 0 && contentLength < 32 * 1024 * 1024;
-  if (SEGMENT_EXTENSIONS.has(ext) || likelyTransportSegment || (SEGMENT_RE.test(new URL(url).pathname) && contentLength > 0 && contentLength < 32 * 1024 * 1024)) {
+  const instagramByteRange = ext === "mp4" && isInstagramByteRangeFragment(url);
+  if (instagramByteRange || SEGMENT_EXTENSIONS.has(ext) || likelyTransportSegment || (SEGMENT_RE.test(new URL(url).pathname) && contentLength > 0 && contentLength < 32 * 1024 * 1024)) {
     return { kind: "segment", confidence: 0.45, ext, mime: normalizedMime };
   }
 

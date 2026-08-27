@@ -1,8 +1,25 @@
 import { parseAttributeList, resolveUrl } from "./media.js";
 
+export const HLS_LIMITS = Object.freeze({
+  textChars: 4 * 1024 * 1024,
+  lines: 20_000,
+  variants: 512,
+  mediaTracks: 512,
+  segments: 10_000,
+  keys: 256,
+  referencedUrlChars: 4 * 1024 * 1024
+});
+
+function hlsLimitError(kind) {
+  throw new Error(`HLS 播放列表超过${kind}上限`);
+}
+
 export function parseHls(text, manifestUrl) {
   const source = String(text || "").replace(/^\uFEFF/, "");
-  const lines = source.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (source.length > HLS_LIMITS.textChars) hlsLimitError("文本大小");
+  const rawLines = source.split(/\r?\n/);
+  if (rawLines.length > HLS_LIMITS.lines) hlsLimitError("行数");
+  const lines = rawLines.map((line) => line.trim()).filter(Boolean);
   if (lines[0] !== "#EXTM3U") throw new Error("这不是有效的 HLS 播放列表");
 
   const variants = [];
@@ -19,6 +36,15 @@ export function parseHls(text, manifestUrl) {
   let live = true;
   let discontinuity = false;
   let targetDuration = null;
+  let referencedUrlChars = 0;
+
+  const reference = (value) => {
+    const url = resolveUrl(value, manifestUrl);
+    if (!url) return "";
+    referencedUrlChars += url.length;
+    if (referencedUrlChars > HLS_LIMITS.referencedUrlChars) hlsLimitError("引用 URL 总长度");
+    return url;
+  };
 
   for (const line of lines.slice(1)) {
     if (line.startsWith("#EXT-X-STREAM-INF:")) {
@@ -28,9 +54,10 @@ export function parseHls(text, manifestUrl) {
     if (line.startsWith("#EXT-X-MEDIA:")) {
       const attrs = parseAttributeList(line.slice(line.indexOf(":") + 1));
       if (attrs.URI) {
-        const track = { ...attrs, url: resolveUrl(attrs.URI, manifestUrl) };
+        const track = { ...attrs, url: reference(attrs.URI) };
         if (attrs.TYPE === "AUDIO") audioTracks.push(track);
         if (attrs.TYPE === "SUBTITLES" || attrs.TYPE === "CLOSED-CAPTIONS") subtitleTracks.push(track);
+        if (audioTracks.length + subtitleTracks.length > HLS_LIMITS.mediaTracks) hlsLimitError("媒体轨道数量");
       }
       continue;
     }
@@ -44,7 +71,7 @@ export function parseHls(text, manifestUrl) {
     }
     if (line.startsWith("#EXT-X-MAP:")) {
       const attrs = parseAttributeList(line.slice(line.indexOf(":") + 1));
-      initMap = { url: resolveUrl(attrs.URI, manifestUrl), byteRange: attrs.BYTERANGE || null };
+      initMap = { url: reference(attrs.URI), byteRange: attrs.BYTERANGE || null };
       continue;
     }
     if (line.startsWith("#EXT-X-KEY:")) {
@@ -57,7 +84,10 @@ export function parseHls(text, manifestUrl) {
         // period must not downgrade the playlist-wide protection result.
         if (method !== "AES-128" || keyFormat !== "identity") protection = "drm";
         else if (protection !== "drm") protection = "aes128";
-        if (attrs.URI) keys.push({ method, keyFormat, url: resolveUrl(attrs.URI, manifestUrl) });
+        if (attrs.URI) {
+          keys.push({ method, keyFormat, url: reference(attrs.URI) });
+          if (keys.length > HLS_LIMITS.keys) hlsLimitError("密钥引用数量");
+        }
       }
       continue;
     }
@@ -75,7 +105,7 @@ export function parseHls(text, manifestUrl) {
     }
     if (line.startsWith("#")) continue;
 
-    const url = resolveUrl(line, manifestUrl);
+    const url = reference(line);
     if (!url) continue;
     if (pendingStream) {
       const resolution = (pendingStream.RESOLUTION || "").split("x").map(Number);
@@ -90,9 +120,11 @@ export function parseHls(text, manifestUrl) {
         name: pendingStream.NAME || null,
         raw: pendingStream
       });
+      if (variants.length > HLS_LIMITS.variants) hlsLimitError("变体数量");
       pendingStream = null;
     } else {
       segments.push({ url, duration: pendingDuration, byteRange, initMap });
+      if (segments.length > HLS_LIMITS.segments) hlsLimitError("分片数量");
       pendingDuration = null;
       byteRange = null;
     }

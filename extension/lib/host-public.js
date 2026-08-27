@@ -7,6 +7,7 @@ const HOST_EVENT_TYPES = new Set([
   "error",
   "host-disconnected"
 ]);
+const HOST_FAILURE_REASONS = new Set(["api_unavailable", "host_missing", "connection_failed"]);
 
 function cleanText(value, max) {
   return typeof value === "string" ? value.replace(/[\u0000-\u001f]/g, " ").trim().slice(0, max) : "";
@@ -45,11 +46,17 @@ function toolCapabilityForUi(value, { ffmpeg = false } = {}) {
       dash: Boolean(value.demuxers?.dash)
     };
     result.encoders = { libmp3lame: Boolean(value.encoders?.libmp3lame) };
-  } else if (typeof value.networkDisabled === "boolean") {
-    // Preserve the distinction between an explicit `false` capability and an
-    // older/unknown host that did not report the security gate at all.  The
-    // YouTube adapter is allowed only in the former case.
-    result.networkDisabled = value.networkDisabled;
+  } else {
+    // Installation is presentation-only and cannot open the adapter gate.
+    // Preserve it separately from availability so a locally present yt-dlp
+    // is never described as usable while external networking is disabled.
+    if (typeof value.installed === "boolean") result.installed = value.installed;
+    if (typeof value.networkDisabled === "boolean") {
+      // Preserve the distinction between an explicit `false` capability and
+      // an older/unknown host that did not report the security gate at all.
+      // The YouTube adapter is allowed only in the former case.
+      result.networkDisabled = value.networkDisabled;
+    }
   }
   return result;
 }
@@ -86,7 +93,9 @@ export function hostStatusForUi(status = {}) {
     ffmpeg: Boolean(status.ffmpeg),
     capabilities,
     needsPermission: Boolean(status.needsPermission),
-    lastError: redactText(status.lastError, 240) || null
+    failureReason: HOST_FAILURE_REASONS.has(status.failureReason) ? status.failureReason : null,
+    lastError: redactText(status.lastError, 240) || null,
+    restartRequired: Boolean(status.restartRequired)
   };
 }
 

@@ -12,6 +12,23 @@ const optionsJs = readFileSync(new URL("../extension/options/options.js", import
 const sidepanelHtml = readFileSync(new URL("../extension/sidepanel/sidepanel.html", import.meta.url), "utf8");
 const sidepanelCss = readFileSync(new URL("../extension/sidepanel/sidepanel.css", import.meta.url), "utf8");
 const sidepanelJs = readFileSync(new URL("../extension/sidepanel/sidepanel.js", import.meta.url), "utf8");
+const tokensCss = readFileSync(new URL("../extension/ui/tokens.css", import.meta.url), "utf8");
+const componentsCss = readFileSync(new URL("../extension/ui/components.css", import.meta.url), "utf8");
+
+test("all extension surfaces load shared tokens and components before page styles", () => {
+  for (const [html, pageStylesheet] of [
+    [optionsHtml, "options.css"],
+    [popupHtml, "popup.css"],
+    [sidepanelHtml, "sidepanel.css"]
+  ]) {
+    const tokensIndex = html.indexOf('href="../ui/tokens.css"');
+    const componentsIndex = html.indexOf('href="../ui/components.css"');
+    const pageIndex = html.indexOf(`href="${pageStylesheet}"`);
+    assert.ok(tokensIndex >= 0, `${pageStylesheet} page loads shared tokens`);
+    assert.ok(tokensIndex < componentsIndex && componentsIndex < pageIndex,
+      `${pageStylesheet} loads tokens, components and page styles in order`);
+  }
+});
 
 test("options fields retain programmatic labels and keyboard-focusable switches", () => {
   for (const id of [
@@ -25,57 +42,77 @@ test("options fields retain programmatic labels and keyboard-focusable switches"
     assert.match(optionsHtml, new RegExp(`<label\\s+for="${id}">`));
     assert.match(optionsHtml, new RegExp(`<(?:input|select|textarea)\\s+id="${id}"`));
   }
-  const switchRule = optionsCss.match(/\.opt-check input\{([^}]+)\}/)?.[1] || "";
+  const switchRule = componentsCss.match(/\.opt-check input\s*\{([^}]+)\}/)?.[1] || "";
   assert.doesNotMatch(switchRule, /display\s*:\s*none/);
   assert.match(switchRule, /opacity\s*:\s*0/);
-  assert.match(optionsCss, /\.opt-check input:focus-visible\s*\+\s*\.switch/);
+  assert.match(componentsCss, /\.opt-check input:focus-visible\s*\+\s*\.switch/);
   assert.match(optionsHtml, /id="nativePermissionButton"/);
   assert.match(optionsHtml, /id="nativePermissionStatus"[^>]+role="status"[^>]+aria-live="polite"/);
+  assert.match(optionsHtml, /\.\/scripts\/native-install-wrapper\.sh/);
+  assert.match(optionsHtml, /<code>\.\/install-macos\.sh<\/code>/);
   assert.match(optionsJs, /chrome\.permissions\.request\(\{ permissions: \["nativeMessaging"\] \}\)/);
   assert.match(optionsJs, /type: "PING_HOST"/);
 });
 
 test("download settings explain their effect in user-facing language", () => {
   const fields = [
-    ["concurrentFragments", "concurrentFragmentsHelp", "同时下载几个视频片段", /一个视频通常由许多小片段组成。这里设置一次同时下载几个片段；推荐 8。数值越大不一定越快，下载出错时可改为 4。/],
-    ["concurrentRanges", "concurrentRangesHelp", "大文件同时下载几部分", /开启“自动加速大文件”后，较大的 MP4、MP3 等文件会拆开下载。这里设置一次同时下载几部分；推荐 8。数值越大不一定越快，下载出错时可改为 4。/],
-    ["outputContainer", "outputContainerHelp", "下载文件保存格式", /推荐 MP4，兼容性最好；合并流媒体或转换格式时生效/]
+    ["concurrentFragments", "concurrentFragmentsHelp", "HLS 视频片段并发数", /同时获取的视频片段数量，允许 1–24/],
+    ["concurrentRanges", "concurrentRangesHelp", "直接文件 Range 并发数", /大文件分段同时获取的数量，允许 1–24/],
+    ["outputContainer", "outputContainerHelp", "默认保存格式", /推荐 MP4，兼容性最好；合并流媒体或转换格式时生效/]
   ];
   for (const [id, helperId, label, helper] of fields) {
     assert.match(optionsHtml, new RegExp(`<label\\s+for="${id}">${label}</label>`));
-    assert.match(optionsHtml, new RegExp(`<(?:input|select)\\s+id="${id}"[^>]+aria-describedby="${helperId}"`));
-    assert.match(optionsHtml, new RegExp(`<small\\s+id="${helperId}"\\s+class="field-help">[^<]+</small>`));
+    assert.match(optionsHtml, new RegExp(`<(?:input|select)\\s+id="${id}"[^>]+aria-describedby="${helperId}`));
+    assert.match(optionsHtml, new RegExp(`<p\\s+id="${helperId}"\\s+class="field-help">[^<]+</p>`));
     assert.match(optionsHtml, helper);
   }
   assert.doesNotMatch(optionsHtml, /HLS 分片并发数|直接文件连接数|流媒体同时下载数量|大文件同时连接数量|大文件使用多连接加速|默认容器|直播录制时长（秒，0 为手动）/);
-  assert.match(optionsHtml, /每次下载前选择保存位置/);
-  assert.match(optionsHtml, /自动加速大文件/);
-  assert.match(optionsHtml, /关闭后由浏览器普通下载/);
+  assert.match(optionsHtml, /可信浏览器直链下载前选择位置/);
+  assert.match(optionsHtml, /只作用于由 Chrome 保存的固定 Instagram\/X 直链/);
+  assert.match(optionsHtml, /可信直链也使用本地下载引擎/);
+  assert.match(optionsHtml, /固定 Instagram\/X 直链也走本地安全下载与多连接路径/);
   assert.match(optionsHtml, /下载完成或失败时提醒我/);
   assert.match(optionsHtml, /id="allowPrivateNetworkMedia"/);
-  assert.match(optionsHtml, /允许本地网络媒体/);
-  assert.match(optionsHtml, /云服务元数据地址和保留网络始终禁止访问/);
+  assert.match(optionsHtml, /允许访问局域网媒体/);
+  assert.match(optionsHtml, /云元数据服务、链路本地、多播、未指定与保留地址/);
   assert.match(optionsHtml, /id="autoEnrichSiteQuality"/);
-  assert.match(optionsHtml, /自动补全站点画质/);
-  assert.match(optionsHtml, /使用你当前的登录会话，请求该站点自己的播放信息接口/);
-  assert.match(optionsJs, /allowPrivateNetworkMedia: form\.allowPrivateNetworkMedia\.checked/);
-  assert.match(optionsJs, /autoEnrichSiteQuality: form\.autoEnrichSiteQuality\.checked/);
+  assert.match(optionsHtml, /自动补全支持站点的画质/);
+  assert.match(optionsHtml, /默认开启.*B 站可信媒体请求（播放或预加载）/);
+  assert.match(optionsHtml, /同站 Cookie/);
+  assert.match(optionsHtml, /同页首次可信请求触发.*重复 Range 请求会合并.*缓存 45 秒.*冷却 5 秒/);
+  assert.match(optionsHtml, /关闭后不发起自动补全.*重新扫描.*角标可能延迟出现/);
+  assert.match(optionsHtml, /接口由扩展固定，页面不能指定/);
+  assert.doesNotMatch(optionsHtml, /确认视频已播放|仅在.*播放后/);
+  assert.match(optionsJs, /allowPrivateNetworkMedia: privateNetworkInput\.checked/);
+  assert.match(optionsJs, /autoEnrichSiteQuality: form\.elements\.namedItem\("autoEnrichSiteQuality"\)\.checked/);
+  assert.match(optionsJs, /allowPrivateNetworkMedia: normalized\.allowPrivateNetworkMedia/);
+  assert.match(optionsJs, /autoEnrichSiteQuality: normalized\.autoEnrichSiteQuality/);
   assert.match(optionsJs, /liveDuration: 0/);
   assert.match(optionsJs, /import \{ BUILD_PROFILE, HOST_MISMATCH_MESSAGE \} from "\.\.\/lib\/build-profile\.js"/);
   assert.match(optionsJs, /youtubeEnabled: false/);
   for (const deadControl of ["liveDuration", "youtubeEnabled", "ytdlpStatus", "ytdlpRefreshButton", "ytdlpGuide"]) {
     assert.doesNotMatch(optionsHtml, new RegExp(`id="${deadControl}"`));
   }
-  assert.doesNotMatch(`${optionsHtml}\n${optionsJs}`, /yt-dlp|安装 yt-dlp|refreshYtdlp|ytdlpNetworkDisabled/);
-  assert.match(optionsCss, /\.field-help\{[^}]*color:var\(--muted\)[^}]*line-height:1\.45/);
-  assert.match(optionsHtml, /id="diagnosticsHeading"/);
+  assert.doesNotMatch(optionsHtml, /id="(?:refreshYtdlp|ytdlpNetworkDisabled|youtubeEnabled|liveDuration)"/);
+  assert.match(optionsHtml, /id="capabilityYtDlp"/);
+  assert.match(optionsCss, /\.field-help\{[^}]*color:var\(--muted\)[^}]*line-height:1\.55/);
+  assert.match(optionsHtml, /id="runtimeHeading"/);
   assert.match(optionsHtml, /id="copyDiagnosticsButton"/);
   assert.match(optionsHtml, /id="capabilityList"/);
+  assert.match(optionsHtml, /id="privateNetworkDialog"/);
+  assert.equal((optionsHtml.match(/<fieldset\b/g) || []).length, 6);
+  assert.match(optionsHtml, /class="save-btn" disabled/);
   for (const feature of ["directMedia", "staticHls", "staticDash", "bilibiliDashPair", "liveHls", "encryptedHls", "separateAudioHls", "externalToolNetwork", "remoteThumbnails"]) {
     assert.match(optionsJs, new RegExp(`${feature}:`));
   }
   assert.match(optionsJs, /BUILD_PROFILE\.features\[feature\] === true/);
   assert.match(optionsJs, /value\.textContent = enabled \? "可用" : "未启用"/);
+  const labFeatures = optionsJs.slice(
+    optionsJs.indexOf("const LAB_FEATURES"),
+    optionsJs.indexOf("const PRESETS", optionsJs.indexOf("const LAB_FEATURES"))
+  );
+  assert.doesNotMatch(labFeatures, /separateAudioHls/);
+  assert.doesNotMatch(optionsHtml, /HLS 独立音轨/);
   assert.match(optionsJs, /type: "GET_DIAGNOSTICS"/);
   assert.match(optionsJs, /navigator\.clipboard\.writeText\(JSON\.stringify\(diagnostics, null, 2\)\)/);
 });
@@ -90,8 +127,18 @@ test("popup tabs expose complete ARIA state and keyboard navigation", () => {
   assert.match(popupJs, /setAttribute\("aria-selected", String\(selected\)\)/);
 });
 
-test("popup requests the controlled native path for candidates not observed by the browser", () => {
-  assert.match(popupJs, /item\.provenance !== "observed_response"/);
+test("popup requests the controlled native path except fixed trusted browser candidates", () => {
+  assert.match(popupJs, /function downloadNeedsNative[\s\S]*\|\| !trustedBrowserDirect/);
+  assert.match(popupJs, /isTrustedInstagramBrowserItem\(item\)/);
+  assert.match(popupJs, /isTrustedXBrowserItem\(item\)/);
+  assert.match(sidepanelJs, /isTrustedInstagramBrowserItem\(item\)/);
+  assert.match(sidepanelJs, /isTrustedXBrowserItem\(item\)/);
+  for (const js of [popupJs, sidepanelJs]) {
+    assert.match(js, /hostname === "cdninstagram\.com"/);
+    assert.match(js, /hostname\.endsWith\("\.fbcdn\.net"\)/);
+    assert.match(js, /\/\\\.mp4\$\/i\.test\(url\.pathname\)/);
+    assert.match(js, /url\.hostname\.toLowerCase\(\) === "video\.twimg\.com"/);
+  }
   assert.match(popupJs, /if \(advanced\) \{\s*const granted = await chrome\.permissions\.request/);
 });
 
@@ -122,12 +169,19 @@ test("popup and side panel report native build mismatches without hiding ordinar
 });
 
 test("HLS UI exposes the clear static VOD boundary and blocks unsupported modes", () => {
-  for (const marker of ["aes128", "probe.type === \"media\" && probe.live", "probe.discontinuity", "probe.audioTrackCount"]) {
+  for (const marker of ["aes128", "probe.type === \"media\" && probe.live", "probe.discontinuity"]) {
     assert.match(popupJs, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
   assert.match(popupJs, /manifestDownloadBlockReason\(probe\)/);
   assert.match(popupJs, /state\.probes\.get\(mediaKey\(item\)\)/);
-  assert.match(popupJs, /FluxCatch 0\.2\.4 暂不支持 AES-128 加密的 HLS 下载/);
+  assert.match(popupJs, /当前版本暂不支持 AES-128 加密的 HLS 下载/);
+  assert.match(popupJs, /separateAudioHls/);
+  assert.match(popupJs, /在本地分别下载画面和声音并自动合并/);
+  const blockReason = popupJs.slice(
+    popupJs.indexOf("function manifestDownloadBlockReason(probe)"),
+    popupJs.indexOf("function openDownloadDialog", popupJs.indexOf("function manifestDownloadBlockReason(probe)"))
+  );
+  assert.doesNotMatch(blockReason, /audioTrackCount|audioGroup|独立音轨/);
   assert.doesNotMatch(popupJs, /检测到可处理的加密流媒体/);
 });
 
@@ -145,6 +199,15 @@ test("dynamic status, task history and progress are exposed without duplicate ro
   assert.match(popupJs, /focusedJobId/);
   assert.match(popupHtml, /id="workspaceButton"/);
   assert.match(popupJs, /chrome\.sidePanel\.open\(\{ windowId: state\.windowId \}\)/);
+  for (const source of [popupJs, sidepanelJs]) {
+    assert.match(source, /representedByJob/);
+    assert.match(source, /typeof response\?\.jobId === "string"/);
+    assert.match(source, /announceJobChange\(null, (?:state\.jobs\.get\(error\.jobId\)|representedJob)\)/);
+    assert.match(source, /lastJobAnnouncementKey === key/);
+    assert.match(source, /queueMicrotask\(\(\) =>/);
+    assert.doesNotMatch(source, /这种流媒体暂(?:时)?不支持下载/);
+  }
+  assert.doesNotMatch(sidepanelJs, /showError\(error\);\s*showToast\(friendlyErrorMessage/);
 });
 
 test("popup task cards keep long filenames, terminal states and counts readable", () => {
@@ -170,34 +233,38 @@ test("popup task cards keep long filenames, terminal states and counts readable"
 test("empty state, host state and motion preferences retain correct semantics", () => {
   assert.match(popupJs, /emptyState\.hidden = items\.length > 0/);
   assert.match(popupJs, /当前筛选下没有媒体/);
-  assert.match(popupCss, /\.host-card \.dot\.ok\{/);
-  assert.match(popupCss, /\.host-card \.dot\.bad\{/);
-  assert.match(popupCss, /@media\s*\(prefers-reduced-motion:\s*reduce\)/);
-  assert.match(optionsCss, /@media\s*\(prefers-reduced-motion:\s*reduce\)/);
-  assert.match(popupCss, /button:focus-visible/);
-  assert.match(optionsCss, /button:focus-visible/);
+  assert.match(componentsCss, /\.host-card \.dot\.ok/);
+  assert.match(componentsCss, /\.host-card \.dot\.bad/);
+  assert.match(componentsCss, /@media\s*\(prefers-reduced-motion:\s*reduce\)/);
+  assert.match(componentsCss, /button:focus-visible/);
 });
 
-test("download acceleration status uses plain, consistent user-facing language", () => {
-  assert.match(popupHtml, /id="hostTitle">高速下载功能</);
-  assert.match(sidepanelHtml, /id="hostTitle">高速下载功能</);
-  assert.match(optionsHtml, /<strong>高速下载功能<\/strong>/);
-  assert.match(optionsHtml, />开启高速下载功能<\/button>/);
+test("local download engine status uses plain, consistent user-facing language", () => {
+  assert.match(popupHtml, /id="hostTitle">本地下载引擎</);
+  assert.match(sidepanelHtml, /id="hostTitle">本地下载引擎</);
+  assert.match(optionsHtml, /<strong>本地下载引擎<\/strong>/);
+  assert.match(optionsHtml, />开启本地下载引擎<\/button>/);
   for (const js of [popupJs, sidepanelJs]) {
-    assert.match(js, /高速下载功能已就绪/);
-    assert.match(js, /高速下载功能暂未就绪/);
+    assert.match(js, /本地下载引擎已就绪/);
+    assert.match(js, /本地下载引擎暂未就绪/);
     assert.match(js, /可加速大文件、合并视频片段并转换格式/);
-    assert.match(js, /请先允许使用高速下载功能，再继续下载/);
+    assert.match(js, /请先允许使用本地下载引擎，再继续下载/);
     assert.doesNotMatch(js, /本地高速引擎已连接|本地高速引擎未连接|DASH 静态规划|DASH 原生|FFmpeg 缺失|FFmpeg 可用/);
   }
   assert.match(popupJs, /检测到 DRM\/内容保护，受保护内容暂不支持下载/);
   assert.match(popupJs, /在线视频由许多小片段组成.*逐段下载并自动组合.*可直接播放的文件/);
-  assert.match(sidepanelJs, /高速下载任务已开始/);
+  assert.match(sidepanelJs, /本地下载任务已开始/);
   assert.doesNotMatch(`${popupHtml}\n${sidepanelHtml}\n${optionsHtml}`, /本地高速引擎|授权本地引擎/);
 });
 
 test("popup offers one parsed download flow with format-driven filenames", () => {
+  assert.match(popupHtml, /<option value="original">原格式（不转换）<\/option>/);
   assert.match(popupHtml, /<option value="mp3">MP3（仅音频）<\/option>/);
+  assert.equal((popupHtml.match(/data-dialog-close/g) || []).length, 2);
+  assert.doesNotMatch(popupHtml, /type="submit"[^>]+value="cancel"/);
+  assert.match(popupJs, /querySelectorAll\("\[data-dialog-close\]"\)/);
+  assert.match(popupJs, /ffmpeg\?\.encoders\?\.libmp3lame === false/);
+  assert.match(popupJs, /MP3（当前 FFmpeg 不支持）/);
   assert.doesNotMatch(popupHtml, /id="extractAudioInput"|id="concurrencyInput"|同时下载数量/);
   assert.match(popupJs, /download\.addEventListener\("click", \(\) => void prepareDownload\(item, download\)\)/);
   assert.doesNotMatch(popupJs, /more\.textContent = stream \? "解析"|function probeAndOpen/);
@@ -207,6 +274,10 @@ test("popup offers one parsed download flow with format-driven filenames", () =>
   assert.match(popupJs, /variantOptionLabel\(variant, index\)/);
   assert.match(popupJs, /variantUrl: .*\? null : .*\.value \|\| null/);
   assert.match(popupJs, /extractAudio: outputFormat === "mp3"/);
+  assert.match(popupJs, /outputFormat,/);
+  assert.match(popupJs, /outputFormat !== "original".*!sourceExtension.*sourceExtension !== outputFormat/);
+  assert.match(popupJs, /"audio\/mp4": "m4a"/);
+  assert.match(popupJs, /"audio\/mpeg": "mp3"/);
   assert.match(popupJs, /kind === "dash_pair"/);
   assert.match(popupJs, /streamTypeLabel/);
   assert.match(popupJs, /pairedDash && \["mkv", "webm"\]\.includes/);
@@ -222,8 +293,11 @@ test("popup offers one parsed download flow with format-driven filenames", () =>
 });
 
 test("popup clear action names and explains its combined history scope", () => {
-  assert.match(popupHtml, /id="clearButton"[^>]*title="清空媒体检测与已结束任务"[^>]*>清空记录<\/button>/);
-  assert.match(popupJs, /removedJobs/);
+  assert.match(popupHtml, /id="clearButton"[^>]*title="清空当前页媒体检测结果与已结束任务，保留进行中任务"[^>]*>清空媒体与历史<\/button>/);
+  assert.match(popupJs, /window\.confirm\("清空当前页媒体检测结果与已结束任务/);
+  assert.match(popupJs, /type: "CLEAR_TAB"/);
+  assert.match(popupJs, /type: "CLEAR_COMPLETED_JOBS"/);
+  assert.match(popupJs, /result\.removed/);
   assert.match(popupJs, /个进行中任务保留/);
 });
 
@@ -254,15 +328,25 @@ test("popup preserves long text and a visible scroll affordance", () => {
   assert.doesNotMatch(popupCss, /scrollbar-width:none/);
 });
 
+test("toolbar popup keeps an intrinsic Chrome action size", () => {
+  const htmlRule = popupCss.match(/html\{[^}]+\}/)?.[0] || "";
+  const bodyRule = popupCss.match(/body\{[^}]+\}/)?.[0] || "";
+  assert.match(htmlRule, /width:372px;height:560px;overflow:hidden/);
+  assert.match(bodyRule, /width:372px/);
+  assert.match(bodyRule, /height:min\(560px,100dvh\);max-height:100dvh/);
+  const widthDeclaration = bodyRule.match(/(?:^|[;{])\s*width:([^;]+)/)?.[1] || "";
+  assert.doesNotMatch(widthDeclaration, /v[wh]/i,
+    "viewport-relative width collapses the real toolbar popup during intrinsic layout");
+});
+
 test("light and dark UI tokens meet text and control contrast floors", () => {
-  for (const css of [popupCss, optionsCss, sidepanelCss]) {
-    const light = parseVariables(css.match(/:root\s*\{([\s\S]*?)\}/)?.[1] || "");
-    const dark = parseVariables(css.match(/\[data-theme="dark"\]\s*\{([\s\S]*?)\}/)?.[1] || css.match(/@media\s*\(prefers-color-scheme:\s*dark\)[\s\S]*?:root\s*\{([\s\S]*?)\}/)?.[1] || "");
-    for (const [mode, variables] of [["light", light], ["dark", dark]]) {
-      if (variables["--primary-action"]) assert.ok(contrast("#FFFFFF", variables["--primary-action"]) >= 4.5, `${mode} primary action text contrast`);
-      assert.ok(contrast(variables["--muted"], variables["--surface"]) >= 4.5, `${mode} muted text contrast`);
-      assert.ok(contrast(variables["--control-border"], variables["--surface"]) >= 3, `${mode} control boundary contrast`);
-    }
+  const light = parseVariables(tokensCss.match(/:root\s*\{([\s\S]*?)\}/)?.[1] || "");
+  const dark = parseVariables(tokensCss.match(/\[data-theme="dark"\]\s*\{([\s\S]*?)\}/)?.[1] || "");
+  for (const [mode, variables] of [["light", light], ["dark", dark]]) {
+    assert.ok(contrast("#FFFFFF", variables["--primary-action"]) >= 4.5, `${mode} primary action text contrast`);
+    assert.ok(contrast(variables["--on-success"], variables["--success-action"]) >= 4.5, `${mode} success action text contrast`);
+    assert.ok(contrast(variables["--muted"], variables["--surface"]) >= 4.5, `${mode} muted text contrast`);
+    assert.ok(contrast(variables["--control-border"], variables["--surface"]) >= 3, `${mode} control boundary contrast`);
   }
   assert.match(sidepanelJs, /setAttribute\("aria-valuetext"/);
 });

@@ -15,6 +15,7 @@ import contextvars
 import hashlib
 import hmac
 import http.client
+import ipaddress
 import json
 import math
 import os
@@ -53,17 +54,48 @@ from fluxcatch_network_policy import (  # noqa: E402 - local host package
     set_current_network_policy,
 )
 
-VERSION = "0.2.4"
+VERSION = "0.2.5"
 NATIVE_PROTOCOL_VERSION = 1
 CAPABILITY_PROFILE_VERSION = 1
 MAX_MESSAGE = 1024 * 1024
 MAX_MANIFEST = 4 * 1024 * 1024
+# Bounded manifest fetch: a stalled playlist connection gets one retry and
+# then fails the job with a diagnosable timeout instead of hanging forever.
+MANIFEST_FETCH_TIMEOUT_SECONDS = 20
 ALLOWED_HEADERS = {"accept", "authorization", "cookie", "origin", "referer", "user-agent"}
 USER_AGENT = f"Mozilla/5.0 FluxCatch/{VERSION}"
 SENSITIVE_REDIRECT_HEADERS = {"authorization", "cookie", "origin", "referer"}
+CONDITIONAL_REDIRECT_HEADERS = {
+    "if-range",
+    "if-match",
+    "if-none-match",
+    "if-modified-since",
+    "if-unmodified-since",
+}
 FFMPEG_PROBE_TIMEOUT = 8
-MAX_DASH_SEGMENTS = 100_000
+MAX_HLS_LINES = 20_000
+MAX_HLS_VARIANTS = 512
+MAX_HLS_MEDIA_TRACKS = 512
+MAX_HLS_SEGMENTS = 10_000
+MAX_HLS_KEYS = 256
+MAX_MANIFEST_CHILDREN = 20_000
+MAX_MANIFEST_URL_CHARS = 4 * 1024 * 1024
+MAX_DASH_XML_ELEMENTS = 50_000
+MAX_DASH_ADAPTATION_SETS = 128
+MAX_DASH_REPRESENTATIONS = 256
+MAX_DASH_SEGMENTS = 10_000
+MAX_DASH_RESOURCES = 20_000
+MAX_NATIVE_ADMITTED_JOBS = 16
+FFMPEG_MAX_THREADS = 4
+FFMPEG_MAX_OUTPUT_BYTES = 512 * 1024 * 1024 * 1024
+FFMPEG_MAX_WALL_SECONDS = 6 * 60 * 60
 DASH_PAIR_WORK_PREFIX = ".fluxcatch-dash-pair-"
+TEMP_WORK_PREFIXES = (
+    DASH_PAIR_WORK_PREFIX,
+    "fluxcatch-hls-",
+    "fluxcatch-dash-",
+    ".fluxcatch-convert-",
+)
 DASH_PAIR_EXPIRY_SAFETY_SECONDS = 30.0
 
 
@@ -329,16 +361,29 @@ def ensure_dash_pair_fresh(expires_at: float, phase: str) -> None:
         raise DownloadError(f"DASH {phase}前签名链接即将过期，请刷新页面后重试")
 
 
-def cleanup_dash_pair_workdirs(directory: Path) -> None:
-    """Remove crash remnants before accepting new native-host jobs."""
+def cleanup_stale_workdirs(directory: Path) -> None:
+    """Remove private crash remnants for every native temporary-work class."""
     try:
         entries = list(directory.iterdir())
     except OSError:
         return
     for entry in entries:
-        if not entry.name.startswith(DASH_PAIR_WORK_PREFIX) or entry.is_symlink() or not entry.is_dir():
+        if not entry.name.startswith(TEMP_WORK_PREFIXES):
+            continue
+        try:
+            metadata = entry.lstat()
+        except OSError:
+            continue
+        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+            continue
+        if hasattr(metadata, "st_uid") and hasattr(os, "getuid") and metadata.st_uid != os.getuid():
             continue
         shutil.rmtree(entry, ignore_errors=True)
+
+
+def cleanup_dash_pair_workdirs(directory: Path) -> None:
+    """Backward-compatible entry point for older callers and installations."""
+    cleanup_stale_workdirs(directory)
 
 
 def unique_path(
@@ -444,6 +489,10 @@ _ACTIVE_REQUEST_HEADERS: contextvars.ContextVar[dict[str, str] | None] = context
     "fluxcatch_active_request_headers",
     default=None,
 )
+_ACTIVE_VIA_SYSTEM_PROXY: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "fluxcatch_active_via_system_proxy",
+    default=False,
+)
 
 
 class SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -455,11 +504,15 @@ class SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
         if source is None or source.url != req.full_url:
             source = policy.authorize(req.full_url, purpose="redirect source")
         _validate_connected_response(fp, policy, source)
+        source_scheme = urllib.parse.urlsplit(req.full_url).scheme.lower()
+        target_scheme = urllib.parse.urlsplit(newurl).scheme.lower()
+        if source_scheme == "https" and target_scheme != "https":
+            raise NetworkPolicyError("HTTPS redirects may not downgrade transport security")
         redirect_target = policy.authorize(newurl, purpose="redirect target")
         redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
         if redirected is not None and not _same_origin(req.full_url, newurl):
             for key in list(redirected.headers):
-                if key.lower() in SENSITIVE_REDIRECT_HEADERS:
+                if key.lower() in SENSITIVE_REDIRECT_HEADERS | CONDITIONAL_REDIRECT_HEADERS:
                     redirected.remove_header(key)
             effective_headers = _ACTIVE_REQUEST_HEADERS.get()
             if effective_headers is not None:
@@ -492,6 +545,13 @@ def _create_pinned_connection(
     target = _ACTIVE_AUTHORIZED_TARGET.get()
     if target is None:
         raise OSError("No authorized network target is active")
+    if _ACTIVE_VIA_SYSTEM_PROXY.get():
+        # The dial terminates at the locally trusted system proxy (its address
+        # was already gated by _target_bypasses_proxy), and authorization plus
+        # DNS resolution ran before opener dispatch. Peer pinning cannot apply
+        # across the CONNECT tunnel; TLS still fully verifies the origin
+        # certificate chain against the authorized hostname.
+        return socket.create_connection(requested_address, timeout, source_address)
     requested_host = str(requested_address[0]).strip("[]").rstrip(".").lower()
     if requested_host != target.hostname or int(requested_address[1]) != target.port:
         raise OSError("HTTP connection target did not match the authorized network target")
@@ -534,17 +594,62 @@ class PinnedHTTPSHandler(urllib.request.HTTPSHandler):
         return self.do_open(PinnedHTTPSConnection, req, context=self._context)
 
 
-HTTP_OPENER = urllib.request.build_opener(
-    urllib.request.ProxyHandler({}),
+_PROXY_HANDLER_CHAIN: tuple[Any, ...] = (
     SafeRedirectHandler(),
     PinnedHTTPHandler(),
     PinnedHTTPSHandler(),
 )
 
 
+def _system_proxies() -> dict[str, str]:
+    """Best-effort HTTP(S) proxies from the OS network configuration."""
+    if os.environ.get("FLUXCATCH_DISABLE_SYSTEM_PROXY") == "1":
+        return {}
+    try:
+        discovered = urllib.request.getproxies()
+    except Exception:  # noqa: BLE001 - proxy discovery must never be fatal
+        return {}
+    return {scheme: url for scheme, url in discovered.items() if scheme in {"http", "https"}}
+
+
+def _target_bypasses_proxy(host: str | None) -> bool:
+    """Loopback, private and local targets always connect directly."""
+    if not host:
+        return True
+    lowered = host.strip("[]").lower()
+    if lowered == "localhost" or lowered.endswith(".local"):
+        return True
+    try:
+        address = ipaddress.ip_address(lowered)
+    except ValueError:
+        return False
+    return address.is_loopback or address.is_private or address.is_link_local
+
+
+HTTP_OPENER = urllib.request.build_opener(
+    urllib.request.ProxyHandler({}),
+    *_PROXY_HANDLER_CHAIN,
+)
+_SYSTEM_PROXY_OPENER: urllib.request.OpenerDirector | None
+_system_proxies_found = _system_proxies()
+if _system_proxies_found:
+    _SYSTEM_PROXY_OPENER = urllib.request.build_opener(
+        urllib.request.ProxyHandler(_system_proxies_found),
+        *_PROXY_HANDLER_CHAIN,
+    )
+else:
+    _SYSTEM_PROXY_OPENER = None
+
+
 def _response_peer_address(response: Any) -> str | None:
     """Best-effort extraction of urllib's connected peer for DNS pinning."""
     candidates = [
+        # ``urllib`` wraps non-2xx responses in ``HTTPError``. Its ``fp`` is an
+        # ``HTTPResponse``, whose own ``fp`` owns the buffered socket. Some
+        # media CDNs reject HEAD while accepting Range GET; retain peer
+        # validation for that expected error response so the caller can fall
+        # back to the GET probe instead of misclassifying it as a policy error.
+        getattr(getattr(getattr(getattr(response, "fp", None), "fp", None), "raw", None), "_sock", None),
         getattr(getattr(getattr(response, "fp", None), "raw", None), "_sock", None),
         getattr(getattr(response, "fp", None), "_sock", None),
         getattr(getattr(response, "raw", None), "_sock", None),
@@ -563,6 +668,11 @@ def _response_peer_address(response: Any) -> str | None:
 
 
 def _validate_connected_response(response: Any, policy: NetworkPolicy, target: Any) -> None:
+    if _ACTIVE_VIA_SYSTEM_PROXY.get():
+        # The system proxy terminates the TCP connection locally (CONNECT
+        # tunnel), so raw peer pinning cannot apply across it. TLS chain and
+        # hostname identity stay fully verified by the pinned TLS handler.
+        return
     peer = _response_peer_address(response)
     if peer is None:
         raise NetworkPolicyError(f"Could not verify the connected peer for {target.hostname}")
@@ -577,12 +687,18 @@ def request(url: str, headers: dict[str, str], *, method: str = "GET", timeout: 
     response = None
     target_token = None
     headers_token = None
+    proxy_token = None
     try:
         initial_target = policy.authorize(safe_url, purpose="HTTP request")
         target_token = _ACTIVE_AUTHORIZED_TARGET.set(initial_target)
         headers_token = _ACTIVE_REQUEST_HEADERS.set(dict(reusable_headers))
         req = urllib.request.Request(safe_url, headers=merged, method=method)
-        response = HTTP_OPENER.open(req, timeout=timeout)
+        use_system_proxy = _SYSTEM_PROXY_OPENER is not None and not _target_bypasses_proxy(
+            urllib.parse.urlsplit(safe_url).hostname
+        )
+        opener = _SYSTEM_PROXY_OPENER if use_system_proxy else HTTP_OPENER
+        proxy_token = _ACTIVE_VIA_SYSTEM_PROXY.set(use_system_proxy)
+        response = opener.open(req, timeout=timeout)
         final_url = valid_url(response.geturl())
         final_target = _ACTIVE_AUTHORIZED_TARGET.get()
         if final_target is None or final_target.url != final_url:
@@ -605,7 +721,9 @@ def request(url: str, headers: dict[str, str], *, method: str = "GET", timeout: 
         except NetworkPolicyError as policy_error:
             error.close()
             raise NetworkPolicyDownloadError(redact_text(policy_error)) from policy_error
-        raise DownloadError(f"HTTP {error.code} for {redact_url(safe_url)}") from error
+        code = error.code
+        error.close()
+        raise DownloadError(f"HTTP {code} for {redact_url(safe_url)}") from error
     except (urllib.error.URLError, TimeoutError, OSError) as error:
         reason = getattr(error, "reason", error)
         raise DownloadError(f"Network request failed for {redact_url(safe_url)}: {redact_text(reason)}") from error
@@ -614,12 +732,32 @@ def request(url: str, headers: dict[str, str], *, method: str = "GET", timeout: 
             _ACTIVE_REQUEST_HEADERS.reset(headers_token)
         if target_token is not None:
             _ACTIVE_AUTHORIZED_TARGET.reset(target_token)
+        if proxy_token is not None:
+            _ACTIVE_VIA_SYSTEM_PROXY.reset(proxy_token)
 
 
 def authorize_network_urls(values: Iterable[str], *, purpose: str) -> None:
-    """Validate manifest children before the pinned downloader can use them."""
+    """Validate bounded manifest children, resolving each network origin once."""
     try:
-        current_network_policy().authorize_many(values, purpose=purpose)
+        policy = current_network_policy()
+        seen_origins: set[tuple[str, str, int]] = set()
+        total = 0
+        url_chars = 0
+        for value in values:
+            total += 1
+            if total > MAX_MANIFEST_CHILDREN:
+                raise NetworkPolicyError("Manifest exceeds the child resource limit")
+            safe = valid_url(value)
+            url_chars += len(safe)
+            if url_chars > MAX_MANIFEST_URL_CHARS:
+                raise NetworkPolicyError("Manifest child URLs exceed the configured limit")
+            parsed = urllib.parse.urlsplit(safe)
+            port = parsed.port or (443 if parsed.scheme.lower() == "https" else 80)
+            origin = (parsed.scheme.lower(), (parsed.hostname or "").lower(), port)
+            if origin in seen_origins:
+                continue
+            seen_origins.add(origin)
+            policy.authorize(safe, purpose=purpose)
     except NetworkPolicyError as error:
         raise NetworkPolicyDownloadError(redact_text(error)) from error
 
@@ -628,6 +766,43 @@ def _submit_with_context(pool: concurrent.futures.Executor, function: Callable[.
     """Propagate the per-job NetworkPolicy into bounded worker pools."""
     context = contextvars.copy_context()
     return pool.submit(context.run, function, *args)
+
+
+def _bounded_executor_results(
+    pool: concurrent.futures.Executor,
+    function: Callable[..., Any],
+    arguments: Iterable[tuple[Any, ...]],
+    *,
+    max_pending: int,
+) -> Iterable[Any]:
+    """Yield results while keeping only a fixed-size Future admission window."""
+    iterator = iter(arguments)
+    pending: set[concurrent.futures.Future[Any]] = set()
+    limit = max(1, max_pending)
+
+    def fill() -> None:
+        while len(pending) < limit:
+            try:
+                args = next(iterator)
+            except StopIteration:
+                return
+            pending.add(_submit_with_context(pool, function, *args))
+
+    fill()
+    try:
+        while pending:
+            completed, pending_now = concurrent.futures.wait(
+                pending,
+                return_when=concurrent.futures.FIRST_COMPLETED,
+            )
+            pending = set(pending_now)
+            for future in completed:
+                yield future.result()
+            fill()
+    except Exception:
+        for future in pending:
+            future.cancel()
+        raise
 
 
 def read_limited(response, maximum: int) -> bytes:
@@ -833,6 +1008,22 @@ class Progress:
                 "speed": int(self.done / elapsed),
                 "message": message,
             })
+
+    def report(self, payload: dict[str, Any], *, force: bool = False) -> bool:
+        """Emit externally computed progress through the same global throttle."""
+        with self.lock:
+            now = time.monotonic()
+            if not force and now - self.last_emit < 0.25:
+                return False
+            self.last_emit = now
+            event = {
+                "type": "progress",
+                "jobId": self.job_id,
+                "filename": self.filename,
+                **payload,
+            }
+        self.emit(event)
+        return True
 
     def status(self, status: str, message: str = "", **extra: Any) -> None:
         self.emit({"type": "progress", "jobId": self.job_id, "filename": self.filename, "status": status, "progress": min(1.0, self.done / self.total) if self.total else 0, "message": message, **extra})
@@ -1330,6 +1521,109 @@ class ManifestFetchResult:
     request_headers: dict[str, str]
 
 
+def is_manifest_fetch_timeout(error: BaseException) -> bool:
+    """True when a manifest request died from a connection/read timeout."""
+    seen: set[int] = set()
+    candidates: list[BaseException | None] = [error]
+    reason = getattr(error, "reason", None)
+    if isinstance(reason, BaseException):
+        candidates.append(reason)
+    while candidates:
+        current = candidates.pop(0)
+        if current is None or id(current) in seen:
+            continue
+        seen.add(id(current))
+        if isinstance(current, TimeoutError):  # socket.timeout aliases this on 3.10+
+            return True
+        if isinstance(current, OSError) and "timed out" in str(current).lower():
+            return True
+        cause = current.__cause__
+        if isinstance(cause, BaseException):
+            candidates.append(cause)
+    return False
+
+
+class ManifestFetchDeadlineExceeded(TimeoutError):
+    """Raised when one manifest attempt outlives its whole-operation budget."""
+
+
+def _manifest_fetch_bounded(
+    url: str,
+    headers: dict[str, str],
+    cancel: threading.Event,
+) -> ManifestFetchResult:
+    """Run a single manifest attempt under a hard wall-clock deadline.
+
+    A per-socket timeout cannot interrupt reads against servers that drip
+    bytes slowly enough to reset every idle window, so a watchdog closes
+    the live response once the total budget expires.
+    """
+    policy = current_network_policy()
+    finished = threading.Event()
+    aborted = threading.Event()
+    holder: dict[str, Any] = {}
+
+    def worker() -> None:
+        token = set_current_network_policy(policy)
+        try:
+            if cancel.is_set():
+                raise Cancelled()
+            try:
+                response = request(url, headers, timeout=MANIFEST_FETCH_TIMEOUT_SECONDS)
+                holder["response"] = response
+                holder["value"] = ManifestFetchResult(
+                    text=read_limited(response, MAX_MANIFEST).decode("utf-8-sig", "replace"),
+                    final_url=valid_url(response.geturl()),
+                    request_headers=dict(getattr(response, "_fluxcatch_request_headers", {})),
+                )
+            finally:
+                streamed = holder.get("response")
+                if streamed is not None:
+                    try:
+                        streamed.close()
+                    except Exception:  # noqa: BLE001 - double close must not mask results
+                        pass
+        except BaseException as error:  # noqa: BLE001 - relayed to the caller below
+            if aborted.is_set():
+                # Closing the response under a blocked reader surfaces as an
+                # arbitrary error (often AttributeError on the cleared fp);
+                # normalize it to the deadline failure callers expect.
+                host_name = urllib.parse.urlsplit(url).hostname or urllib.parse.urlsplit(url).netloc or "unknown"
+                deadline_error = ManifestFetchDeadlineExceeded(
+                    f"获取播放列表超时({MANIFEST_FETCH_TIMEOUT_SECONDS}s): {host_name}"
+                )
+                deadline_error.__cause__ = error
+                holder["error"] = deadline_error
+            else:
+                holder["error"] = error
+        finally:
+            reset_current_network_policy(token)
+            finished.set()
+
+    reader = threading.Thread(target=worker, daemon=True, name="fluxcatch-manifest-fetch")
+    reader.start()
+    host_name = urllib.parse.urlsplit(url).hostname or urllib.parse.urlsplit(url).netloc or "unknown"
+    if not finished.wait(MANIFEST_FETCH_TIMEOUT_SECONDS):
+        stalled = holder.get("response")
+        if stalled is not None:
+            aborted.set()
+            try:
+                stalled.close()
+            except Exception:  # noqa: BLE001 - best-effort abort of the blocked read
+                pass
+        if not finished.wait(5.0):
+            raise ManifestFetchDeadlineExceeded(
+                f"获取播放列表超时({MANIFEST_FETCH_TIMEOUT_SECONDS}s): {host_name}"
+            ) from None
+    error = holder.get("error")
+    if error is not None:
+        raise error
+    value = holder.get("value")
+    if isinstance(value, ManifestFetchResult):
+        return value
+    raise DownloadError("Manifest download failed without a result")
+
+
 def fetch_manifest(
     url: str,
     headers: dict[str, str],
@@ -1337,28 +1631,31 @@ def fetch_manifest(
 ) -> ManifestFetchResult:
     cancel = cancel or threading.Event()
     last_error: Exception | None = None
+    timeout_streak = 0
     for attempt in range(4):
         if cancel.is_set():
             raise Cancelled()
-        response = None
         try:
-            response = request(url, headers, timeout=30)
-            return ManifestFetchResult(
-                text=read_limited(response, MAX_MANIFEST).decode("utf-8-sig", "replace"),
-                final_url=valid_url(response.geturl()),
-                request_headers=dict(getattr(response, "_fluxcatch_request_headers", {})),
-            )
+            return _manifest_fetch_bounded(url, headers, cancel)
         except Cancelled:
             raise
         except NetworkPolicyDownloadError:
             raise
         except Exception as error:  # noqa: BLE001 - retry manifest network failures
             last_error = error
+            if is_manifest_fetch_timeout(error):
+                # One bounded immediate retry; a second stall surfaces a clear
+                # user-facing timeout instead of a raw socket traceback.
+                timeout_streak += 1
+                if timeout_streak >= 2:
+                    host_name = urllib.parse.urlsplit(url).hostname or urllib.parse.urlsplit(url).netloc or "unknown"
+                    raise DownloadError(
+                        f"获取播放列表超时({MANIFEST_FETCH_TIMEOUT_SECONDS}s): {host_name}"
+                    ) from error
+                continue
+            timeout_streak = 0
             if attempt < 3:
                 _retry_wait(cancel, min(4.0, 0.35 * (2**attempt)))
-        finally:
-            if response is not None:
-                response.close()
     raise DownloadError(f"Manifest download failed after retries: {last_error}")
 
 
@@ -1376,7 +1673,12 @@ def normalize_hls_range(value: str, url: str, previous_range_end: dict[str, int]
 
 
 def parse_hls(text: str, url: str) -> HlsPlaylist:
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if len(text) > MAX_MANIFEST:
+        raise DownloadError("HLS playlist exceeds the text limit")
+    raw_lines = text.splitlines()
+    if len(raw_lines) > MAX_HLS_LINES:
+        raise DownloadError("HLS playlist exceeds the line limit")
+    lines = [line.strip() for line in raw_lines if line.strip()]
     if not lines or lines[0] != "#EXTM3U":
         raise DownloadError("Invalid HLS playlist")
     playlist = HlsPlaylist(url=url)
@@ -1384,6 +1686,16 @@ def parse_hls(text: str, url: str) -> HlsPlaylist:
     pending_duration = 0.0
     pending_range = ""
     previous_range_end: dict[str, int] = {}
+    referenced_url_chars = 0
+
+    def reference(value: str) -> str:
+        nonlocal referenced_url_chars
+        absolute = valid_url(urllib.parse.urljoin(url, value))
+        referenced_url_chars += len(absolute)
+        if referenced_url_chars > MAX_MANIFEST_URL_CHARS:
+            raise DownloadError("HLS playlist child URLs exceed the configured limit")
+        return absolute
+
     for line in lines[1:]:
         if line.startswith("#EXT-X-STREAM-INF:"):
             pending_variant = parse_attrs(line.split(":", 1)[1])
@@ -1391,9 +1703,10 @@ def parse_hls(text: str, url: str) -> HlsPlaylist:
             attrs = parse_attrs(line.split(":", 1)[1])
             if attrs.get("TYPE") == "AUDIO" and attrs.get("URI"):
                 playlist.separate_audio = True
-                audio_url = urllib.parse.urljoin(url, attrs["URI"])
-                valid_url(audio_url)
+                audio_url = reference(attrs["URI"])
                 playlist.audio_tracks.append({**attrs, "url": audio_url})
+                if len(playlist.audio_tracks) > MAX_HLS_MEDIA_TRACKS:
+                    raise DownloadError("HLS playlist exceeds the media-track limit")
         elif line.startswith("#EXTINF:"):
             with contextlib.suppress(ValueError):
                 pending_duration = float(line[8:].split(",", 1)[0])
@@ -1402,8 +1715,7 @@ def parse_hls(text: str, url: str) -> HlsPlaylist:
         elif line.startswith("#EXT-X-MAP:"):
             attrs = parse_attrs(line.split(":", 1)[1])
             if attrs.get("URI"):
-                playlist.init_map = urllib.parse.urljoin(url, attrs["URI"])
-                valid_url(playlist.init_map)
+                playlist.init_map = reference(attrs["URI"])
                 raw_range = attrs.get("BYTERANGE", "")
                 playlist.init_map_range = normalize_hls_range(raw_range, playlist.init_map, previous_range_end) if raw_range else ""
         elif line.startswith("#EXT-X-KEY:"):
@@ -1418,16 +1730,16 @@ def parse_hls(text: str, url: str) -> HlsPlaylist:
                 if observed == "drm" or playlist.protection != "drm":
                     playlist.protection = observed
                 if observed == "aes128" and attrs.get("URI"):
-                    key_url = urllib.parse.urljoin(url, attrs["URI"])
-                    valid_url(key_url)
+                    key_url = reference(attrs["URI"])
                     playlist.key_urls.append(key_url)
+                    if len(playlist.key_urls) > MAX_HLS_KEYS:
+                        raise DownloadError("HLS playlist exceeds the key-reference limit")
         elif line == "#EXT-X-DISCONTINUITY":
             playlist.discontinuity = True
         elif line == "#EXT-X-ENDLIST":
             playlist.live = False
         elif not line.startswith("#"):
-            absolute = urllib.parse.urljoin(url, line)
-            valid_url(absolute)
+            absolute = reference(line)
             if pending_variant is not None:
                 resolution = pending_variant.get("RESOLUTION", "0x0").split("x")
                 playlist.variants.append({
@@ -1437,24 +1749,37 @@ def parse_hls(text: str, url: str) -> HlsPlaylist:
                     "codecs": pending_variant.get("CODECS", ""),
                     "audio_group": pending_variant.get("AUDIO", ""),
                 })
+                if len(playlist.variants) > MAX_HLS_VARIANTS:
+                    raise DownloadError("HLS playlist exceeds the variant limit")
                 pending_variant = None
             else:
                 normalized_range = pending_range
                 if pending_range:
                     normalized_range = normalize_hls_range(pending_range, absolute, previous_range_end)
                 playlist.segments.append(HlsSegment(absolute, pending_duration, normalized_range))
+                if len(playlist.segments) > MAX_HLS_SEGMENTS:
+                    raise DownloadError("HLS playlist exceeds the segment limit")
                 pending_duration = 0.0
                 pending_range = ""
     return playlist
 
 
-def dash_is_protected(text: str) -> bool:
+def _parse_dash_root(text: str) -> ET.Element:
+    if len(text) > MAX_MANIFEST:
+        raise DownloadError("DASH MPD exceeds the text limit")
     try:
         root = ET.fromstring(text)
     except ET.ParseError as error:
         raise DownloadError("Invalid DASH MPD") from error
     if root.tag.rsplit("}", 1)[-1] != "MPD":
         raise DownloadError("Invalid DASH MPD")
+    if sum(1 for _element in root.iter()) > MAX_DASH_XML_ELEMENTS:
+        raise UnsupportedDashError("DASH MPD exceeds the XML element limit")
+    return root
+
+
+def dash_is_protected(text: str) -> bool:
+    root = _parse_dash_root(text)
     return any(element.tag.rsplit("}", 1)[-1] == "ContentProtection" for element in root.iter())
 
 
@@ -1650,6 +1975,17 @@ def _dash_representation_track(
 
     descriptor = _dash_descriptor(period, adaptation, representation)
     resources: list[DashResource] = []
+    resource_url_chars = 0
+
+    def append_resource(resource: DashResource) -> None:
+        nonlocal resource_url_chars
+        resource_url_chars += len(resource.url)
+        if resource_url_chars > MAX_MANIFEST_URL_CHARS:
+            raise UnsupportedDashError("DASH representation child URLs exceed the configured limit")
+        if len(resources) >= MAX_DASH_SEGMENTS + 1:
+            raise UnsupportedDashError("DASH representation exceeds the resource limit")
+        resources.append(resource)
+
     if descriptor is None:
         # ISO-BMFF on-demand profiles may point a Representation directly at a
         # complete media file. Only accept a Representation-local BaseURL so a
@@ -1657,7 +1993,7 @@ def _dash_representation_track(
         direct_base = _xml_child(representation, "BaseURL")
         if direct_base is None or not (direct_base.text or "").strip():
             raise UnsupportedDashError("representation has no SegmentTemplate, SegmentList, or media BaseURL")
-        resources.append(DashResource(representation_base))
+        append_resource(DashResource(representation_base))
     else:
         mode, attrs, timeline, initialization, segment_urls = descriptor
         if mode == "SegmentTemplate":
@@ -1680,10 +2016,10 @@ def _dash_representation_track(
                 time_points = [index * segment_duration for index in range(count)]
             if attrs.get("initialization"):
                 init_value = _dash_template_value(attrs["initialization"], representation_id, bandwidth, start_number, time_points[0])
-                resources.append(DashResource(valid_url(urllib.parse.urljoin(representation_base, init_value))))
+                append_resource(DashResource(valid_url(urllib.parse.urljoin(representation_base, init_value))))
             for offset, time_value in enumerate(time_points):
                 media_value = _dash_template_value(media_template, representation_id, bandwidth, start_number + offset, time_value)
-                resources.append(DashResource(valid_url(urllib.parse.urljoin(representation_base, media_value))))
+                append_resource(DashResource(valid_url(urllib.parse.urljoin(representation_base, media_value))))
         else:
             if initialization is not None:
                 source = initialization.get("sourceURL", "")
@@ -1691,16 +2027,18 @@ def _dash_representation_track(
                 range_value = initialization.get("range", "")
                 if range_value:
                     _dash_range(range_value)
-                resources.append(DashResource(init_url, range_value))
+                append_resource(DashResource(init_url, range_value))
             if not segment_urls:
                 raise UnsupportedDashError("DASH SegmentList has no SegmentURL entries")
+            if len(segment_urls) > MAX_DASH_SEGMENTS:
+                raise UnsupportedDashError("DASH SegmentList exceeds the segment limit")
             for item in segment_urls:
                 source = item.get("media", "")
                 media_url = valid_url(urllib.parse.urljoin(representation_base, source)) if source else representation_base
                 range_value = item.get("mediaRange", "")
                 if range_value:
                     _dash_range(range_value)
-                resources.append(DashResource(media_url, range_value))
+                append_resource(DashResource(media_url, range_value))
     if not resources:
         raise UnsupportedDashError("DASH representation has no downloadable resources")
     return DashTrack(
@@ -1714,12 +2052,7 @@ def _dash_representation_track(
 
 
 def plan_static_dash(text: str, manifest_url: str) -> list[DashTrack]:
-    try:
-        root = ET.fromstring(text)
-    except ET.ParseError as error:
-        raise DownloadError("Invalid DASH MPD") from error
-    if _xml_name(root) != "MPD":
-        raise DownloadError("Invalid DASH MPD")
+    root = _parse_dash_root(text)
     if any(_xml_name(element) == "ContentProtection" for element in root.iter()):
         raise DownloadError("Protected DASH is metadata-only")
     if (root.get("type") or "static").lower() != "static":
@@ -1731,34 +2064,67 @@ def plan_static_dash(text: str, manifest_url: str) -> list[DashTrack]:
     if len(periods) != 1:
         raise UnsupportedDashError("built-in DASH planner requires exactly one Period")
     period = periods[0]
-    candidates: dict[str, list[DashTrack]] = {"video": [], "audio": []}
+    adaptations = _xml_children(period, "AdaptationSet")
+    if len(adaptations) > MAX_DASH_ADAPTATION_SETS:
+        raise UnsupportedDashError("DASH MPD exceeds the AdaptationSet limit")
+    candidates: dict[str, list[tuple[ET.Element, ET.Element]]] = {"video": [], "audio": []}
     errors: dict[str, list[str]] = {"video": [], "audio": [], "unknown": []}
     declared_kinds: set[str] = set()
-    for adaptation in _xml_children(period, "AdaptationSet"):
+    representation_count = 0
+    for adaptation in adaptations:
         representations = _xml_children(adaptation, "Representation")
+        representation_count += len(representations)
+        if representation_count > MAX_DASH_REPRESENTATIONS:
+            raise UnsupportedDashError("DASH MPD exceeds the Representation limit")
         for representation in representations:
             mime = (representation.get("mimeType") or adaptation.get("mimeType") or "").lower()
             declared_kind = (adaptation.get("contentType") or mime.split("/", 1)[0]).lower()
             if declared_kind in {"video", "audio"}:
                 declared_kinds.add(declared_kind)
+                candidates[declared_kind].append((adaptation, representation))
+            else:
+                errors["unknown"].append(f"unsupported DASH representation type: {declared_kind or 'unknown'}")
+
+    def score(kind: str, representation: ET.Element) -> tuple[int, ...]:
+        def value(name: str) -> int:
             try:
-                track = _dash_representation_track(manifest_url, root, period, adaptation, representation)
-                candidates[track.kind].append(track)
+                result = int(representation.get(name, "0"))
+            except ValueError:
+                return -1
+            return result if result >= 0 else -1
+
+        if kind == "video":
+            return value("height"), value("width"), value("bandwidth")
+        return (value("bandwidth"),)
+
+    selected: list[DashTrack] = []
+    for kind in ("video", "audio"):
+        if kind not in declared_kinds:
+            continue
+        ordered = sorted(candidates[kind], key=lambda item: score(kind, item[1]), reverse=True)
+        selected_track: DashTrack | None = None
+        for adaptation, representation in ordered:
+            try:
+                selected_track = _dash_representation_track(
+                    manifest_url,
+                    root,
+                    period,
+                    adaptation,
+                    representation,
+                )
+                break
             except UnsupportedDashError as error:
-                errors[declared_kind if declared_kind in errors else "unknown"].append(str(error))
-    for kind in declared_kinds:
-        if not candidates[kind]:
+                errors[kind].append(str(error))
+        if selected_track is None:
             detail = errors[kind][0] if errors[kind] else f"no usable {kind} Representation was found"
             raise UnsupportedDashError(f"{kind} track is unsupported: {detail}")
-    selected: list[DashTrack] = []
-    if candidates["video"]:
-        selected.append(max(candidates["video"], key=lambda item: (item.height, item.width, item.bandwidth)))
-    if candidates["audio"]:
-        selected.append(max(candidates["audio"], key=lambda item: item.bandwidth))
+        selected.append(selected_track)
     if not selected:
         all_errors = errors["unknown"] + errors["video"] + errors["audio"]
         detail = all_errors[0] if all_errors else "no audio/video Representations were found"
         raise UnsupportedDashError(detail)
+    if sum(len(track.resources) for track in selected) > MAX_DASH_RESOURCES:
+        raise UnsupportedDashError("DASH MPD exceeds the total resource limit")
     return selected
 
 
@@ -1823,17 +2189,14 @@ def _fetch_dash_resource(
             with state_lock:
                 state["completed"] += 1
                 elapsed = max(0.001, time.monotonic() - progress.started)
-                progress.emit({
-                    "type": "progress",
-                    "jobId": progress.job_id,
-                    "filename": progress.filename,
+                progress.report({
                     "status": "downloading",
                     "bytes": state["bytes"],
                     "total": 0,
                     "progress": state["completed"] / max(1, state["resources"]),
                     "speed": int(state["bytes"] / elapsed),
                     "message": f"DASH 分片 {state['completed']}/{state['resources']}",
-                })
+                }, force=state["completed"] >= state["resources"])
             return destination
         except Cancelled:
             destination.unlink(missing_ok=True)
@@ -1869,30 +2232,31 @@ def _download_dash_track(
     abort = threading.Event()
     track_dir = work_dir / f"{track.kind}-{safe_filename(track.representation_id or 'default')}"
     track_dir.mkdir(mode=0o700)
-    pool = concurrent.futures.ThreadPoolExecutor(max_workers=max(1, min(24, workers)))
-    futures = {
-        _submit_with_context(
-            pool,
-            _fetch_dash_resource,
-            resource,
-            track_dir / f"{index:08d}.part",
-            headers,
-            cancel,
-            abort,
-            progress,
-            state,
-            state_lock,
-        ): index
-        for index, resource in enumerate(track.resources)
-    }
+    worker_count = max(1, min(24, workers))
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=worker_count)
     paths: list[Path] = []
     try:
-        for future in concurrent.futures.as_completed(futures):
-            paths.append(future.result())
+        arguments = (
+            (
+                resource,
+                track_dir / f"{index:08d}.part",
+                headers,
+                cancel,
+                abort,
+                progress,
+                state,
+                state_lock,
+            )
+            for index, resource in enumerate(track.resources)
+        )
+        paths.extend(_bounded_executor_results(
+            pool,
+            _fetch_dash_resource,
+            arguments,
+            max_pending=worker_count * 2,
+        ))
     except Exception:
         abort.set()
-        for future in futures:
-            future.cancel()
         raise
     finally:
         pool.shutdown(wait=True, cancel_futures=True)
@@ -1968,9 +2332,13 @@ def select_hls_media(
     playlist.request_headers = fetched.request_headers
     master: HlsPlaylist | None = None
     selected: dict[str, Any] | None = None
+    if variant_url and not playlist.variants:
+        raise DownloadError("The selected HLS variant is no longer present; refresh the page and choose again")
     if playlist.variants:
         master = playlist
         selected = next((item for item in playlist.variants if variant_url and item["url"] == variant_url), None)
+        if variant_url and selected is None:
+            raise DownloadError("The selected HLS variant is no longer present; refresh the page and choose again")
         selected = selected or max(playlist.variants, key=lambda item: (item["height"], item["bandwidth"]))
         fetched = fetch_manifest(
             selected["url"],
@@ -2006,6 +2374,45 @@ def authorize_hls_playlist(playlist: HlsPlaylist, *, purpose: str = "HLS manifes
     authorize_network_urls(children, purpose=purpose)
 
 
+def select_hls_audio_rendition(master: HlsPlaylist, selected: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Select the preferred external audio rendition for a video variant."""
+    if not selected or not selected.get("audio_group"):
+        return None
+    group = selected["audio_group"]
+    tracks = [track for track in master.audio_tracks if track.get("GROUP-ID") == group]
+    if not tracks:
+        raise DownloadError("Selected HLS variant references a missing external audio group")
+    return max(
+        tracks,
+        key=lambda track: (
+            str(track.get("DEFAULT", "")).upper() == "YES",
+            str(track.get("AUTOSELECT", "")).upper() == "YES",
+        ),
+    )
+
+
+def validate_hls_static_media(
+    playlist: HlsPlaylist,
+    *,
+    label: str = "",
+    require_segments: bool = True,
+) -> None:
+    """Fail closed for media playlists that the pinned static path cannot join."""
+    scope = f"{label} HLS" if label else "HLS"
+    if playlist.protection == "drm":
+        raise DownloadError(f"DRM/SAMPLE-AES {scope} is metadata-only")
+    if playlist.encrypted or playlist.protection == "aes128":
+        raise DownloadError(f"AES-128 {scope} is not supported in FluxCatch {VERSION}")
+    if playlist.live:
+        raise DownloadError(f"Live {scope} recording is not supported in FluxCatch {VERSION}")
+    if playlist.discontinuity:
+        raise DownloadError(f"Discontinuous {scope} is not supported in FluxCatch {VERSION}")
+    if playlist.separate_audio:
+        raise DownloadError(f"Nested separate-audio {scope} is not supported")
+    if require_segments and not playlist.segments:
+        raise DownloadError(f"{scope} playlist has no downloadable static VOD segments")
+
+
 def hls_fast_download(
     url: str,
     target: Path,
@@ -2017,47 +2424,102 @@ def hls_fast_download(
     variant_url: str | None = None,
     live_duration: int = 0,
     extract_audio: bool = False,
+    audio_url: str | None = None,
 ) -> Path:
     if cancel.is_set():
         raise Cancelled()
+    progress.status("starting", "正在获取播放列表")
     playlist, _text, master, selected = select_hls_media(url, headers, variant_url, cancel)
     authorize_hls_playlist(playlist)
     if master:
         authorize_hls_playlist(master)
-    if playlist.protection == "drm" or (master and master.protection == "drm"):
+
+    if master and master.protection == "drm":
         raise DownloadError("DRM/SAMPLE-AES HLS is metadata-only")
-    if playlist.encrypted or playlist.protection == "aes128" or (master and (master.encrypted or master.protection == "aes128")):
-        raise DownloadError("AES-128 HLS is not supported in FluxCatch 0.2.4")
+    if master and (master.encrypted or master.protection == "aes128"):
+        raise DownloadError(f"AES-128 HLS is not supported in FluxCatch {VERSION}")
+
+    audio_rendition = select_hls_audio_rendition(master, selected) if master else None
+    # Rendition-style players never expose a master playlist. The extension
+    # probes the sibling media playlists and passes the best audio one here.
+    explicit_audio_url = valid_url(audio_url) if audio_url else None
+    wants_separate_audio = audio_rendition is not None or explicit_audio_url is not None
+    # The selected video media is fetched first. Validate it before following
+    # an alternate rendition so a protected/complex playlist cannot cause
+    # extra network activity before the static-mode decision is made.
+    validate_hls_static_media(
+        playlist,
+        require_segments=not (extract_audio and wants_separate_audio),
+    )
+    if wants_separate_audio and not ffmpeg:
+        raise DownloadError("Separate-audio HLS requires FFmpeg")
     if extract_audio and not ffmpeg:
         raise DownloadError("HLS audio extraction requires FFmpeg")
-    if master and selected and selected.get("audio_group"):
-        tracks = [track for track in master.audio_tracks if track.get("GROUP-ID") == selected["audio_group"]]
-        if tracks:
-            raise DownloadError("Separate-audio HLS is not supported in FluxCatch 0.2.4")
-    if playlist.live:
-        raise DownloadError("Live HLS recording is not supported in FluxCatch 0.2.4")
-    if playlist.discontinuity:
-        raise DownloadError("Discontinuous HLS is not supported in FluxCatch 0.2.4")
-    if playlist.separate_audio:
-        raise DownloadError("Separate-audio HLS is not supported in FluxCatch 0.2.4")
-    if not playlist.segments:
-        raise DownloadError("HLS playlist has no downloadable static VOD segments")
+
+    audio_playlist: HlsPlaylist | None = None
+    audio_master: HlsPlaylist | None = None
+    audio_selected: dict[str, Any] | None = None
+    if audio_rendition:
+        resolved_audio_url = audio_rendition["url"]
+        audio_playlist, _audio_text, audio_master, audio_selected = select_hls_media(
+            resolved_audio_url,
+            scope_subresource_headers(master.url, [resolved_audio_url], master.request_headers),
+            cancel=cancel,
+        )
+        authorize_hls_playlist(audio_playlist, purpose="HLS audio manifest child")
+        if audio_master:
+            authorize_hls_playlist(audio_master, purpose="HLS audio master child")
+            if audio_master.protection == "drm":
+                raise DownloadError("DRM/SAMPLE-AES audio HLS is metadata-only")
+            if audio_master.encrypted or audio_master.protection == "aes128":
+                raise DownloadError(f"AES-128 audio HLS is not supported in FluxCatch {VERSION}")
+            if select_hls_audio_rendition(audio_master, audio_selected):
+                raise DownloadError("Nested separate-audio HLS is not supported")
+    elif explicit_audio_url:
+        audio_playlist, _audio_text, audio_master, audio_selected = select_hls_media(
+            explicit_audio_url,
+            headers,
+            cancel=cancel,
+        )
+        authorize_hls_playlist(audio_playlist, purpose="HLS audio manifest child")
+        if audio_master:
+            authorize_hls_playlist(audio_master, purpose="HLS audio master child")
+            if audio_master.protection == "drm":
+                raise DownloadError("DRM/SAMPLE-AES audio HLS is metadata-only")
+            if audio_master.encrypted or audio_master.protection == "aes128":
+                raise DownloadError(f"AES-128 audio HLS is not supported in FluxCatch {VERSION}")
+            if select_hls_audio_rendition(audio_master, audio_selected):
+                raise DownloadError("Nested separate-audio HLS is not supported")
+
+    if audio_playlist:
+        validate_hls_static_media(audio_playlist, label="audio")
+
+    planned_playlists: list[tuple[str, HlsPlaylist]]
+    if extract_audio and audio_playlist:
+        planned_playlists = [("audio", audio_playlist)]
+    elif audio_playlist:
+        planned_playlists = [("video", playlist), ("audio", audio_playlist)]
+    else:
+        planned_playlists = [("media", playlist)]
 
     temp_dir = Path(tempfile.mkdtemp(prefix="fluxcatch-hls-", dir=str(target.parent)))
-    total_segments = len(playlist.segments) + (1 if playlist.init_map else 0)
+    total_segments = sum(
+        len(current.segments) + (1 if current.init_map else 0)
+        for _label, current in planned_playlists
+    )
     progress.total = 0
     completed = 0
     downloaded_bytes = 0
     completed_lock = threading.Lock()
     abort = threading.Event()
 
-    def fetch_file(index: int, segment: HlsSegment) -> Path:
+    def fetch_file(label: str, current: HlsPlaylist, index: int, segment: HlsSegment) -> Path:
         nonlocal completed, downloaded_bytes
         if cancel.is_set():
             raise Cancelled()
         if abort.is_set():
             raise DownloadError("HLS download aborted")
-        dest = temp_dir / f"{index:08d}.part"
+        dest = temp_dir / label / f"{index:08d}.part"
         extra: dict[str, str] = {}
         if segment.byte_range:
             amount_offset = segment.byte_range.split("@", 1)
@@ -2071,7 +2533,7 @@ def hls_fast_download(
             try:
                 response = request(
                     segment.url,
-                    scope_subresource_headers(playlist.url, [segment.url], playlist.request_headers),
+                    scope_subresource_headers(current.url, [segment.url], current.request_headers),
                     timeout=45,
                     extra=extra,
                 )
@@ -2080,7 +2542,8 @@ def hls_fast_download(
                     validate_range_response(response, offset, offset + amount - 1)
                 elif response.status != 200:
                     raise DownloadError("Unexpected HLS segment response status")
-                with dest.open("wb") as output:
+                fd = _open_private(dest, truncate=True)
+                with os.fdopen(fd, "wb", closefd=True) as output:
                     while True:
                         if cancel.is_set():
                             raise Cancelled()
@@ -2098,7 +2561,7 @@ def hls_fast_download(
                 with completed_lock:
                     completed += 1
                     elapsed = max(0.001, time.monotonic() - progress.started)
-                    progress.emit({"type": "progress", "jobId": progress.job_id, "filename": progress.filename, "status": "downloading", "bytes": downloaded_bytes, "total": 0, "progress": completed / total_segments, "speed": int(downloaded_bytes / elapsed), "message": f"分片 {completed}/{total_segments}"})
+                    progress.report({"status": "downloading", "bytes": downloaded_bytes, "total": 0, "progress": completed / total_segments, "speed": int(downloaded_bytes / elapsed), "message": f"分片 {completed}/{total_segments}"}, force=completed >= total_segments)
                 return dest
             except Cancelled:
                 raise
@@ -2116,41 +2579,63 @@ def hls_fast_download(
             finally:
                 if response is not None:
                     response.close()
-        raise DownloadError(f"HLS segment {index} failed: {last_error}")
+        raise DownloadError(f"HLS {label} segment {index} failed: {last_error}")
 
-    try:
+    def stage_playlist(label: str, current: HlsPlaylist) -> Path:
+        track_dir = temp_dir / label
+        track_dir.mkdir(mode=0o700)
         init_file: Path | None = None
-        if playlist.init_map:
-            init_file = fetch_file(-1, HlsSegment(playlist.init_map, byte_range=playlist.init_map_range))
-        pool = concurrent.futures.ThreadPoolExecutor(max_workers=max(1, min(24, workers)))
-        future_paths = {
-            _submit_with_context(pool, fetch_file, index, segment): index
-            for index, segment in enumerate(playlist.segments)
-        }
+        if current.init_map:
+            init_file = fetch_file(
+                label,
+                current,
+                -1,
+                HlsSegment(current.init_map, byte_range=current.init_map_range),
+            )
+        worker_count = max(1, min(24, workers))
+        pool = concurrent.futures.ThreadPoolExecutor(max_workers=worker_count)
         files: list[Path] = []
         try:
-            for future in concurrent.futures.as_completed(future_paths):
-                files.append(future.result())
+            arguments = (
+                (label, current, index, segment)
+                for index, segment in enumerate(current.segments)
+            )
+            files.extend(_bounded_executor_results(
+                pool,
+                fetch_file,
+                arguments,
+                max_pending=worker_count * 2,
+            ))
         except Exception:
             abort.set()
-            for future in future_paths:
-                future.cancel()
             raise
         finally:
             pool.shutdown(wait=True, cancel_futures=True)
         files.sort()
         if cancel.is_set():
             raise Cancelled()
-        joined = temp_dir / ("joined.mp4" if init_file else "joined.ts")
-        with joined.open("wb") as output:
+        joined = temp_dir / f"joined-{label}{'.mp4' if init_file else '.ts'}"
+        fd = _open_private(joined, truncate=True)
+        with os.fdopen(fd, "wb", closefd=True) as output:
             if init_file:
                 with init_file.open("rb") as source:
                     shutil.copyfileobj(source, output, 1024 * 1024)
             for path in files:
                 with path.open("rb") as source:
                     shutil.copyfileobj(source, output, 1024 * 1024)
+            output.flush()
+            os.fsync(output.fileno())
+        return joined
+
+    try:
+        local = {
+            label: stage_playlist(label, current)
+            for label, current in planned_playlists
+        }
         if extract_audio:
             assert ffmpeg is not None
+            source_playlist = audio_playlist or playlist
+            source = local["audio"] if audio_playlist else local["media"]
             progress.status("remuxing", "正在从本地媒体提取音频")
             args = [
                 ffmpeg,
@@ -2158,7 +2643,7 @@ def hls_fast_download(
                 "-nostdin",
                 "-y",
                 "-i",
-                str(joined),
+                str(source),
                 "-vn",
                 "-c:a",
                 "libmp3lame",
@@ -2174,10 +2659,41 @@ def hls_fast_download(
                 target,
                 cancel,
                 progress,
-                expected_duration=hls_media_duration(playlist),
+                expected_duration=hls_media_duration(source_playlist),
                 activity="正在从本地媒体提取音频",
                 report_output_speed=False,
             )
+        if audio_playlist:
+            assert ffmpeg is not None
+            progress.status("remuxing", "正在无损合并 HLS 音视频")
+            args = [
+                ffmpeg,
+                "-hide_banner",
+                "-nostdin",
+                "-y",
+                "-i",
+                str(local["video"]),
+                "-i",
+                str(local["audio"]),
+                "-map",
+                "0:v:0",
+                "-map",
+                "1:a:0",
+                *output_codecs(target),
+                "-progress",
+                "pipe:1",
+                "-nostats",
+                str(target),
+            ]
+            return run_ffmpeg(
+                args,
+                target,
+                cancel,
+                progress,
+                expected_duration=hls_media_duration(playlist),
+                activity="正在无损合并 HLS 音视频",
+            )
+        joined = local["media"]
         if ffmpeg:
             progress.status("remuxing", "正在无损封装")
             return ffmpeg_remux(joined, target, cancel, progress, ffmpeg)
@@ -2502,8 +3018,8 @@ def local_only_ffmpeg_args(args: list[str]) -> list[str]:
 
     FFmpeg demuxers may otherwise follow URLs embedded in a downloaded file.
     A per-input protocol whitelist makes that fail closed even when content is
-    mislabeled as a regular media file.  ``pipe`` is retained solely for the
-    progress channel; network protocols are never present.
+    mislabeled as a regular media file. The progress channel is process stdout,
+    not an FFmpeg input protocol, so only ``file`` is permitted here.
     """
     result: list[str] = []
     index = 0
@@ -2519,9 +3035,25 @@ def local_only_ffmpeg_args(args: list[str]) -> list[str]:
         source_path = Path(source)
         if not source_path.is_absolute() or source_path.is_symlink() or not source_path.is_file():
             raise DownloadError("FFmpeg input must be an existing local regular file")
-        result.extend(["-protocol_whitelist", "file,pipe", "-i", str(source_path)])
+        result.extend(["-protocol_whitelist", "file", "-i", str(source_path)])
         index += 2
     return result
+
+
+def resource_limited_ffmpeg_args(args: list[str]) -> list[str]:
+    """Apply small deterministic CPU limits without enabling new protocols."""
+    if len(args) < 2:
+        raise DownloadError("Internal FFmpeg argument list is incomplete")
+    return [
+        *args[:-1],
+        "-threads",
+        str(FFMPEG_MAX_THREADS),
+        "-filter_threads",
+        str(max(1, FFMPEG_MAX_THREADS // 2)),
+        "-filter_complex_threads",
+        str(max(1, FFMPEG_MAX_THREADS // 2)),
+        args[-1],
+    ]
 
 
 def run_ffmpeg(
@@ -2539,7 +3071,9 @@ def run_ffmpeg(
     if target.exists() or target.is_symlink():
         raise DownloadError("Output filename became occupied")
     staging = target.with_name(f".{target.stem}.{uuid.uuid4().hex}.part{target.suffix}")
-    process_args = local_only_ffmpeg_args([*args[:-1], str(staging)])
+    process_args = resource_limited_ffmpeg_args(
+        local_only_ffmpeg_args([*args[:-1], str(staging)])
+    )
     error_log = tempfile.TemporaryFile(mode="w+b")
     proc: subprocess.Popen[bytes] | None = None
     selector = selectors.DefaultSelector()
@@ -2628,7 +3162,14 @@ def run_ffmpeg(
             stdout_buffer.clear()
 
     try:
-        proc = subprocess.Popen(process_args, stdout=subprocess.PIPE, stderr=error_log, bufsize=0)
+        proc = subprocess.Popen(
+            process_args,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=error_log,
+            bufsize=0,
+            start_new_session=True,
+        )
         assert proc.stdout is not None
         selector.register(proc.stdout, selectors.EVENT_READ)
         while proc.poll() is None:
@@ -2639,6 +3180,16 @@ def run_ffmpeg(
                 except subprocess.TimeoutExpired:
                     proc.kill()
                 raise Cancelled()
+            if time.monotonic() - started > FFMPEG_MAX_WALL_SECONDS:
+                proc.terminate()
+                raise DownloadError("FFmpeg exceeded the processing time limit")
+            if total_size > FFMPEG_MAX_OUTPUT_BYTES:
+                proc.terminate()
+                raise DownloadError("FFmpeg output exceeded the configured size limit")
+            with contextlib.suppress(OSError):
+                if staging.exists() and staging.stat().st_size > FFMPEG_MAX_OUTPUT_BYTES:
+                    proc.terminate()
+                    raise DownloadError("FFmpeg output exceeded the configured size limit")
             events = selector.select(timeout=0.25)
             for key, _mask in events:
                 consume_progress_bytes(os.read(key.fileobj.fileno(), 64 * 1024))
@@ -2701,7 +3252,7 @@ class Host:
         configured = os.environ.get("FLUXCATCH_DOWNLOAD_DIR")
         self.download_dir = Path(configured).expanduser() if configured else Path.home() / "Downloads" / "FluxCatch"
         self.download_dir.mkdir(parents=True, exist_ok=True)
-        cleanup_dash_pair_workdirs(self.download_dir)
+        cleanup_stale_workdirs(self.download_dir)
 
     def send(self, message: dict[str, Any]) -> None:
         payload = json.dumps(message, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
@@ -2745,13 +3296,40 @@ class Host:
             self.send({"type": "error", "requestId": message.get("requestId"), "error": "Unknown request type"})
             return
         job_id = str(message.get("jobId") or uuid.uuid4())[:100]
+        rejection: dict[str, Any] | None = None
+        cancel: threading.Event | None = None
         with self.jobs_lock:
             if job_id in self.jobs:
-                self.send({"type": "error", "jobId": job_id, "error": "Duplicate job ID"})
-                return
-            cancel = threading.Event()
-            self.jobs[job_id] = cancel
-        self.executor.submit(self.run_job, job_id, message, cancel)
+                rejection = {"type": "error", "jobId": job_id, "error": "Duplicate job ID"}
+            elif len(self.jobs) >= MAX_NATIVE_ADMITTED_JOBS:
+                rejection = {
+                    "type": "failed",
+                    "jobId": job_id,
+                    "status": "failed",
+                    "error": "Native job queue is full; retry after an active job finishes",
+                    "message": "本地引擎任务队列已满，请稍后重试",
+                    "code": "host_busy",
+                }
+            else:
+                cancel = threading.Event()
+                self.jobs[job_id] = cancel
+        if rejection is not None:
+            self.send(rejection)
+            return
+        assert cancel is not None
+        try:
+            self.executor.submit(self.run_job, job_id, message, cancel)
+        except RuntimeError as error:
+            with self.jobs_lock:
+                self.jobs.pop(job_id, None)
+            detail = redact_text(error)
+            self.send({
+                "type": "failed",
+                "jobId": job_id,
+                "status": "failed",
+                "error": detail,
+                "message": detail,
+            })
 
     def run_job(self, job_id: str, message: dict[str, Any], cancel: threading.Event) -> None:
         filename = safe_filename(message.get("filename"), "media.mp4")
@@ -2862,6 +3440,7 @@ class Host:
                     )
             elif kind == "hls":
                 variant_url = valid_url(options.get("variantUrl")) if options.get("variantUrl") else None
+                rendition_audio_url = valid_url(options.get("audioUrl")) if options.get("audioUrl") else None
                 target = hls_fast_download(
                     url,
                     target,
@@ -2873,6 +3452,7 @@ class Host:
                     variant_url,
                     live_duration,
                     extract_audio,
+                    rendition_audio_url,
                 )
             elif kind == "dash":
                 if not self.ffmpeg:

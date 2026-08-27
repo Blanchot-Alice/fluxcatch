@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.2.5 — Unreleased
+
+- Fixed Bilibili CDN probing when a server rejects `HEAD` but accepts a one-byte Range `GET`; HTTP error responses now retain connected-peer validation before the safe fallback runs.
+- Stopped Instagram `bytestart`/`byteend` MediaSource fragments from appearing as dozens of standalone MP4 downloads that QuickTime cannot open.
+- Added bounded top-frame Instagram/X SPA response observers that publish only strictly allowlisted complete MP4 metadata; Instagram keeps one best rendition and X prefers the highest-bitrate progressive variant.
+- Routed those allowlisted Instagram/X progressive MP4 transfers through Chrome by default so they reuse the browser's working network path when the native process is reset or times out on Meta/Twitter CDNs; **可信直链也使用本地下载引擎** opts the exception back into Native, and the save-location prompt applies only to Chrome-backed saves.
+- Made the site observers SPA-aware, replaced stale/recommended Instagram rows with the current shortcode-bound rendition, preserved X source lineage after webRequest merging, and added a bounded page-scoped cache that restores signed candidates after MV3 worker suspension without writing them to extension storage.
+- Added pinned-client download and local FFmpeg merging for clear static HLS masters with separate audio renditions, including audio-only extraction without downloading video segments.
+- Added shared, packaged UI tokens and control primitives for Settings, popup, and Side Panel while retaining vanilla Manifest V3 HTML, CSS, and JavaScript.
+- Reorganized Settings around runtime identity, basic downloads, performance, detection and naming, privacy and network boundaries, local capabilities, notifications, and non-interactive Lab roadmap states.
+- Added normalized dirty-state tracking, field-level validation and an error summary for concurrency, minimum size, filename templates, and ignored domains; failed saves retain the unsaved state.
+- Moved optional notification and Native Messaging permission requests to their originating user gestures and added an explicit confirmation step before enabling private-network media access.
+- Separated native-host connection, protocol compatibility, FFmpeg installation/local processing, yt-dlp installation, external-tool networking, and build availability so installed tools are not presented as enabled features.
+- Unified restrained pending, success, failure, toast, focus-restoration, and duplicate-action protection across the popup and Side Panel, including card-local manifest loading feedback.
+- Strengthened keyboard, focus-visible, dark-mode, reduced-motion, narrow-width, long-filename, helper/error semantics, and minimum-target behavior without changing media detection or native download protocols.
+- Bound package/E2E evidence to clean Git identity, made dirty diagnostic packages explicitly content-addressed, and made default-on Bilibili quality enrichment obey one user setting across every automatic playback/preload path with documented in-flight, TTL, and failure-cooldown limits.
+- Made extension/native ZIPs reproducible from `SOURCE_DATE_EPOCH` or the commit time, normalized archive timestamps/modes/regular-file types, rejected symlink and non-portable paths, bound dirty diagnostics to a canonical digest of the complete extension tree, and made verification require the current canonical extension/native source trees.
+- Changed CI to retain one verified package set and run Chrome E2E against that exact extension ZIP, with native-host compatibility gates on Python 3.9 and 3.12.
+- Added English and Simplified Chinese manifest catalogs, plus a self-contained native-host bundle with checked Python preflight, valid relative documentation links, and root install/uninstall wrappers.
+- Kept ended task rows across popup close and detection clearing; terminal history is removed only by the explicit completed-task cleanup action, while current-page detection clearing affects media results only.
+- Added bounded track-type probing for masterless HLS media playlists (fMP4 `moov`/`hdlr` and MPEG-TS stream sniffing) so audio renditions no longer masquerade as downloadable videos; audio-only candidates are labeled 仅音频 and excluded from video variant groups.
+- Grouped same-host rendition media playlists into one card with a resolution dropdown when the site never exposes a master playlist; downloads pair the selected video rendition with the highest-bandwidth audio rendition and merge losslessly through FFmpeg.
+- Bounded native HLS manifest fetching with a 20-second total wall-clock budget enforced by a watchdog that closes stalled or byte-dribbling connections, one immediate retry, and an explicit 获取播放列表超时 failure state plus per-manifest progress messages instead of an indefinite connecting state.
+- Made the native engine honor the system HTTP/HTTPS proxy configuration for public targets so downloads work behind local proxies; loopback and private targets always connect directly, and FLUXCATCH_DISABLE_SYSTEM_PROXY=1 restores strict direct connections.
+
 ## 0.2.4 — 2026-08-23
 
 - Split network guarantees by execution layer: the extension validates literal URL/host information, purpose, provenance, and worker-derived origins; the native client validates DNS answers, pins connected peers, reauthorizes redirects and manifest children, and defends against rebinding.

@@ -5,7 +5,7 @@ import { hostEventForUi, hostStatusForUi } from "../extension/lib/host-public.js
 test("host status exposes capabilities without executable paths, probe errors or future fields", () => {
   const status = hostStatusForUi({
     connected: true,
-    version: "0.2.4",
+    version: "0.2.5",
     protocolVersion: 1,
     capabilityProfileVersion: 1,
     ffmpeg: true,
@@ -20,24 +20,40 @@ test("host status exposes capabilities without executable paths, probe errors or
         encoders: { libmp3lame: true },
         future: "FFMPEG_FUTURE"
       },
-      ytdlp: { available: false, networkDisabled: true, path: "/Users/private/YTDLP_PATH", version: "2026.08", probeError: "YTDLP_PROBE" },
+      ytdlp: { available: false, installed: true, networkDisabled: true, path: "/Users/private/YTDLP_PATH", version: "2026.08", probeError: "YTDLP_PROBE" },
       dashPlanner: "static-v1",
       dashPair: "direct-v1",
       future: "CAPABILITY_FUTURE"
     },
+    failureReason: "api_unavailable",
+    restartRequired: true,
     lastError: "failed at /opt/homebrew/bin/STATUS_PATH token=STATUS_SECRET",
     future: "STATUS_FUTURE"
   });
   assert.deepEqual(Object.keys(status).sort(), [
     "capabilities", "capabilityProfileCompatible", "capabilityProfileVersion", "compatible", "connected", "ffmpeg",
-    "lastError", "needsPermission", "protocolCompatible", "protocolVersion", "version", "versionCompatible"
+    "failureReason", "lastError", "needsPermission", "protocolCompatible", "protocolVersion", "restartRequired", "version", "versionCompatible"
   ].sort());
   assert.deepEqual(Object.keys(status.capabilities).sort(), ["dashPair", "dashPlanner", "ffmpeg", "ytdlp"].sort());
   assert.deepEqual(Object.keys(status.capabilities.ffmpeg).sort(), ["available", "demuxers", "encoders", "networkInput", "version"].sort());
   assert.equal(status.capabilities.ffmpeg.networkInput, false);
+  assert.deepEqual(Object.keys(status.capabilities.ytdlp).sort(), ["available", "installed", "networkDisabled", "version"].sort());
+  assert.equal(status.capabilities.ytdlp.installed, true);
+  assert.equal(status.capabilities.ytdlp.available, false);
   assert.equal(status.capabilities.ytdlp.networkDisabled, true);
+  assert.equal(status.failureReason, "api_unavailable");
+  assert.equal(status.restartRequired, true);
   assert.equal(status.compatible, true);
   assert.doesNotMatch(JSON.stringify(status), /FFMPEG_PATH|PROBE_SECRET|DEMUX_SECRET|FFMPEG_FUTURE|YTDLP_PATH|YTDLP_PROBE|CAPABILITY_FUTURE|STATUS_PATH|STATUS_SECRET|STATUS_FUTURE/);
+});
+
+test("host failure reason crosses the public boundary only through a fixed allowlist", () => {
+  for (const reason of ["api_unavailable", "host_missing", "connection_failed"]) {
+    assert.equal(hostStatusForUi({ failureReason: reason }).failureReason, reason);
+  }
+  assert.equal(hostStatusForUi({ failureReason: "future_failure" }).failureReason, null);
+  assert.equal(hostStatusForUi({ failureReason: "/Users/private/FAILURE_REASON_SECRET" }).failureReason, null);
+  assert.equal(hostStatusForUi({}).failureReason, null);
 });
 
 test("host status does not turn an unknown network gate into explicit permission", () => {
@@ -46,12 +62,13 @@ test("host status does not turn an unknown network gate into explicit permission
     capabilities: { ytdlp: { available: true, version: "legacy" } }
   });
   assert.equal(status.capabilities.ytdlp.available, true);
+  assert.equal(Object.hasOwn(status.capabilities.ytdlp, "installed"), false);
   assert.equal(Object.hasOwn(status.capabilities.ytdlp, "networkDisabled"), false);
   assert.equal(status.compatible, false, "a legacy host without protocol metadata fails closed");
 });
 
 test("host compatibility requires exact extension, protocol and profile versions", () => {
-  const base = { connected: true, version: "0.2.4", protocolVersion: 1, capabilityProfileVersion: 1 };
+  const base = { connected: true, version: "0.2.5", protocolVersion: 1, capabilityProfileVersion: 1 };
   assert.equal(hostStatusForUi(base).compatible, true);
   assert.equal(hostStatusForUi({ ...base, version: "0.2.3" }).versionCompatible, false);
   assert.equal(hostStatusForUi({ ...base, protocolVersion: 2 }).protocolCompatible, false);

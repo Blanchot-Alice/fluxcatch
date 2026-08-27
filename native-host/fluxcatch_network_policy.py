@@ -79,7 +79,7 @@ _URL_PATTERN = re.compile(r"https?://[^\s\"'<>]+", re.IGNORECASE)
 
 
 def redact_url(value: Any) -> str:
-    """Return a useful URL identity without credentials, query or fragment."""
+    """Return only origin-level URL identity; paths may themselves be secrets."""
     text = str(value or "")
     try:
         parsed = urllib.parse.urlsplit(text)
@@ -94,7 +94,7 @@ def redact_url(value: Any) -> str:
             port = None
         default_port = 443 if parsed.scheme.lower() == "https" else 80
         authority = host if port in {None, default_port} else f"{host}:{port}"
-        path = parsed.path or "/"
+        path = "/…" if parsed.path not in {"", "/"} else "/"
         return urllib.parse.urlunsplit((parsed.scheme.lower(), authority, path, "", ""))
     except (TypeError, ValueError, UnicodeError):
         return "[redacted URL]"

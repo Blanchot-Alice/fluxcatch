@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { captureMediaRefresh, isMediaRefreshCurrent } from "../extension/sidepanel/refresh-guard.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const extension = path.join(root, "extension");
@@ -17,6 +18,8 @@ test("manifest exposes the FluxCatch side panel workspace", () => {
 test("side panel ships complete workspace assets and accessible states", () => {
   const html = fs.readFileSync(path.join(extension, "sidepanel/sidepanel.html"), "utf8");
   const css = fs.readFileSync(path.join(extension, "sidepanel/sidepanel.css"), "utf8");
+  const tokens = fs.readFileSync(path.join(extension, "ui/tokens.css"), "utf8");
+  const components = fs.readFileSync(path.join(extension, "ui/components.css"), "utf8");
   const js = fs.readFileSync(path.join(extension, "sidepanel/sidepanel.js"), "utf8");
 
   assert.match(html, /id="mediaLoading"/);
@@ -25,15 +28,17 @@ test("side panel ships complete workspace assets and accessible states", () => {
   assert.match(html, /id="jobsList"/);
   assert.match(html, /id="jobAnnouncer"[^>]*role="status"/);
   assert.match(html, /id="clearCompletedButton"/);
-  assert.match(html, /<h3>少女祈祷中……<\/h3>/);
-  assert.match(html, /<p>播放视频后自动检测可下载的视频、音频与流媒体<\/p>/);
+  assert.match(html, /<h3>尚未检测到媒体<\/h3>/);
+  assert.match(html, /扫描不会刷新当前页面/);
   assert.match(html, /sidepanel\.css/);
   assert.match(html, /sidepanel\.js/);
+  assert.ok(html.indexOf('href="../ui/tokens.css"') < html.indexOf('href="../ui/components.css"'));
+  assert.ok(html.indexOf('href="../ui/components.css"') < html.indexOf('href="sidepanel.css"'));
 
-  assert.match(css, /--primary:#5E8F84/);
-  assert.match(css, /prefers-color-scheme:\s*dark/);
-  assert.match(css, /prefers-reduced-motion:\s*reduce/);
-  assert.match(css, /button:focus-visible/);
+  assert.match(tokens, /--primary:#5E8F84/);
+  assert.match(tokens, /prefers-color-scheme:\s*dark/);
+  assert.match(components, /prefers-reduced-motion:\s*reduce/);
+  assert.match(components, /button:focus-visible/);
 
   assert.match(js, /name:\s*"fluxcatch-sidepanel"/);
   assert.match(js, /type:\s*"GET_TAB_MEDIA"/);
@@ -45,10 +50,12 @@ test("side panel ships complete workspace assets and accessible states", () => {
   assert.match(js, /kind === "dash_pair"/);
   assert.match(js, /streamTypeLabel/);
   assert.match(js, /item\.kind !== "youtube" \|\| BUILD_PROFILE\.features\.externalToolNetwork/);
-  assert.match(js, /download\.textContent = "快速下载"/);
+  assert.match(js, /download\.textContent = advanced \? "检查并下载" : "按默认设置下载"/);
+  assert.match(html, /id="downloadSettingsButton"/);
+  assert.match(html, /Chrome 权限只会在你点击该按钮后请求/);
   assert.doesNotMatch(js, /chrome\.action\?\.openPopup|打开下载设置|yt-dlp/);
   assert.match(js, /permissions\.request\(\{ permissions: \["nativeMessaging"\] \}\)/);
-  assert.match(js, /item\.provenance !== "observed_response"/);
+  assert.match(js, /function mediaNeedsLocalEngine[\s\S]*\|\| !trustedBrowserDirect/);
   assert.match(js, /openOptionsPage/);
 });
 
@@ -59,6 +66,29 @@ test("side panel task rows keep long hashes inside the card", () => {
   assert.match(css, /\.job-head\s*\{[^}]*grid-template-columns:minmax\(0,1fr\) max-content[^}]*width:100%[^}]*max-width:100%/);
   assert.match(css, /\.job-title\s*\{[^}]*width:100%[^}]*max-width:100%[^}]*min-width:0[^}]*text-overflow:ellipsis/);
   assert.match(css, /\.job-state\s*\{[^}]*min-width:max-content[^}]*white-space:nowrap/);
+});
+
+test("side panel drops a tab A media response after tab B becomes active", () => {
+  const js = fs.readFileSync(path.join(extension, "sidepanel/sidepanel.js"), "utf8");
+  const refreshMediaStart = js.indexOf("async function refreshMedia()");
+  const refreshMediaEnd = js.indexOf("\nfunction renderPageContext", refreshMediaStart);
+  const refreshMedia = js.slice(refreshMediaStart, refreshMediaEnd);
+
+  assert.ok(refreshMediaStart >= 0 && refreshMediaEnd > refreshMediaStart);
+  assert.match(refreshMedia, /const request = captureMediaRefresh\(state\)/);
+  assert.match(refreshMedia, /GET_TAB_MEDIA", tabId: request\.tabId/);
+  assert.match(refreshMedia, /if \(!isMediaRefreshCurrent\(request, state\)\) return/);
+  assert.ok(
+    refreshMedia.indexOf("!isMediaRefreshCurrent(request, state)") < refreshMedia.indexOf("state.items ="),
+    "the tab/token guard must run before a late response mutates Side Panel state"
+  );
+
+  const tabARequest = captureMediaRefresh({ tabId: 101, refreshToken: 7 });
+  const stateAfterActivatingTabB = { tabId: 202, refreshToken: 8 };
+  assert.equal(isMediaRefreshCurrent(tabARequest, stateAfterActivatingTabB), false,
+    "a late tab A response must be rejected after tab B activation");
+  assert.equal(isMediaRefreshCurrent(tabARequest, { tabId: 101, refreshToken: 7 }), true,
+    "the originating tab response remains current before activation changes state");
 });
 
 test("popup and side panel render privacy-safe thumbnails with kind fallbacks", () => {

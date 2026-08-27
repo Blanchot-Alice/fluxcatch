@@ -1,0 +1,383 @@
+/* Shared, behavior-neutral UI primitives. Page styles own layout and density. */
+* {
+  box-sizing:border-box;
+  margin:0;
+}
+
+html,
+body {
+  margin:0;
+}
+
+body {
+  font-family:var(--font);
+  color:var(--ink);
+  background:var(--canvas);
+}
+
+button,
+input,
+select,
+textarea {
+  font:inherit;
+}
+
+button {
+  cursor:pointer;
+  min-width:var(--target-min);
+  min-height:var(--target-min);
+}
+
+[hidden] {
+  display:none !important;
+}
+
+.sr-only {
+  position:absolute !important;
+  width:1px !important;
+  height:1px !important;
+  padding:0 !important;
+  margin:-1px !important;
+  overflow:hidden !important;
+  clip:rect(0,0,0,0) !important;
+  white-space:nowrap !important;
+  border:0 !important;
+}
+
+/* Brand mark */
+.mark {
+  display:inline-block;
+}
+
+.mark svg {
+  width:100%;
+  height:100%;
+  display:block;
+}
+
+.mark svg .c-primary,
+.mark .c-primary {
+  fill:var(--primary);
+}
+
+.mark svg .c-accent,
+.mark .c-accent {
+  fill:var(--accent);
+}
+
+.mark svg .c-ink,
+.mark .c-ink {
+  fill:var(--ink);
+}
+
+.mark svg .s-ink,
+.mark .s-ink {
+  stroke:var(--ink);
+}
+
+/* Forms */
+input:not([type="checkbox"]):not([type="radio"]),
+select {
+  min-height:var(--control-height);
+}
+
+input:not([type="checkbox"]):not([type="radio"]),
+select,
+textarea {
+  border:1px solid var(--control-border);
+  border-radius:var(--r-control);
+  color:var(--ink);
+  background:var(--surface);
+  transition:
+    border-color var(--motion-base) ease,
+    box-shadow var(--motion-base) ease;
+}
+
+input:not([type="checkbox"]):not([type="radio"]):focus,
+select:focus,
+textarea:focus {
+  border-color:var(--primary-strong);
+  box-shadow:var(--focus-ring);
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+summary:focus-visible {
+  outline:2px solid var(--primary-strong);
+  outline-offset:2px;
+}
+
+button:disabled,
+[aria-disabled="true"] {
+  cursor:not-allowed;
+  opacity:.56;
+}
+
+/* Button variants use existing page class names without changing the DOM. */
+:where(.save-btn,.download-button,.primary,.dl-btn) {
+  border:0;
+  border-radius:var(--r-control);
+  color:var(--on-primary,#fff);
+  background:var(--primary-action);
+  font-family:var(--font);
+  font-weight:650;
+  transition:
+    background-color var(--motion-base) ease,
+    border-color var(--motion-base) ease,
+    box-shadow var(--motion-base) ease,
+    color var(--motion-base) ease,
+    transform var(--motion-fast) var(--ease-standard);
+}
+
+:where(.secondary-btn,.secondary,.media-download) {
+  border:1px solid var(--control-border);
+  border-radius:var(--r-control);
+  color:var(--primary-strong);
+  background:var(--surface);
+  font-family:var(--font);
+  font-weight:650;
+  transition:
+    background-color var(--motion-base) ease,
+    border-color var(--motion-base) ease,
+    box-shadow var(--motion-base) ease,
+    color var(--motion-base) ease,
+    transform var(--motion-fast) var(--ease-standard);
+}
+
+:where(.quiet-button,.text-button,.foot-btn,.host-card .link,.cancel-job,.cancel-button) {
+  border:0;
+  background:transparent;
+  font-family:var(--font);
+  cursor:pointer;
+  transition:
+    background-color var(--motion-base) ease,
+    color var(--motion-base) ease,
+    opacity var(--motion-base) ease,
+    transform var(--motion-fast) var(--ease-standard);
+}
+
+button:active:not(:disabled):not([aria-disabled="true"]) {
+  transform:translateY(1px) scale(.99);
+}
+
+button[data-ui-state="pending"] {
+  position:relative;
+  cursor:progress;
+}
+
+button[data-ui-state="pending"]::before {
+  content:"";
+  display:inline-block;
+  width:14px;
+  height:14px;
+  margin-right:7px;
+  vertical-align:-2px;
+  border:2px solid currentColor;
+  border-right-color:transparent;
+  border-radius:50%;
+  animation:fc-spin 700ms linear infinite;
+}
+
+button[data-ui-state="success"] {
+  border-color:var(--success-strong);
+  color:var(--success-strong);
+  background:color-mix(in srgb,var(--surface) 76%,var(--success) 24%);
+}
+
+:where(.save-btn,.download-button,.primary,.dl-btn)[data-ui-state="success"] {
+  color:var(--on-success,#fff);
+  background:var(--success-action,var(--success-strong));
+}
+
+button[data-ui-state="failure"] {
+  border-color:var(--danger-strong);
+  color:var(--danger-strong);
+  background:var(--danger-tint);
+}
+
+/* Switch */
+.opt-check {
+  cursor:pointer;
+  position:relative;
+}
+
+.opt-check input {
+  position:absolute;
+  width:1px;
+  height:1px;
+  margin:0;
+  opacity:0;
+}
+
+.switch {
+  width:34px;
+  height:19px;
+  border-radius:10px;
+  background:var(--control-border);
+  position:relative;
+  flex:none;
+  transition:background-color 200ms ease;
+}
+
+.switch::after {
+  content:"";
+  position:absolute;
+  top:2px;
+  left:2px;
+  width:15px;
+  height:15px;
+  border-radius:50%;
+  background:#fff;
+  box-shadow:0 1px 3px rgba(0,0,0,.2);
+  transition:left 200ms ease;
+}
+
+.opt-check input:checked + .switch {
+  background:var(--primary-action);
+}
+
+.opt-check input:checked + .switch::after {
+  left:17px;
+}
+
+.opt-check input:focus-visible + .switch {
+  outline:2px solid var(--primary-strong);
+  outline-offset:3px;
+}
+
+/* Status, badges and notices */
+:where(.badge,.chip,.count) {
+  font-weight:700;
+}
+
+:where(.status-dot,.host-card .dot) {
+  width:9px;
+  height:9px;
+  border-radius:50%;
+  flex:none;
+  background:var(--warning-strong);
+  box-shadow:0 0 0 4px var(--warning-tint);
+}
+
+:where(.status-dot.ok,.host-card .dot.ok) {
+  background:var(--success-strong);
+  box-shadow:0 0 0 4px color-mix(in srgb,var(--success) 14%,transparent);
+}
+
+:where(.status-dot.bad,.host-card .dot.bad) {
+  background:var(--danger-strong);
+  box-shadow:0 0 0 4px var(--danger-tint);
+}
+
+.notice {
+  border:1px solid color-mix(in srgb,var(--danger) 45%,var(--border));
+  border-radius:var(--r-row);
+  background:var(--danger-tint);
+}
+
+/* Toasts */
+:where(#toast,.toast) {
+  z-index:20;
+  color:var(--ink);
+  background:var(--surface);
+  box-shadow:var(--shadow-md);
+  line-height:1.4;
+}
+
+:where(#toast,.toast)[data-toast-type="success"] {
+  border-color:color-mix(in srgb,var(--success) 52%,var(--border));
+}
+
+:where(#toast,.toast)[data-toast-type="warning"] {
+  border-color:color-mix(in srgb,var(--warning) 62%,var(--border));
+  background:color-mix(in srgb,var(--surface) 86%,var(--warning-tint));
+}
+
+:where(#toast,.toast)[data-toast-type="error"] {
+  border-color:color-mix(in srgb,var(--danger) 60%,var(--border));
+  background:color-mix(in srgb,var(--surface) 84%,var(--danger-tint));
+}
+
+.toast-message {
+  min-width:0;
+  overflow-wrap:anywhere;
+}
+
+.toast-close {
+  display:grid;
+  place-items:center;
+  flex:none;
+  padding:0;
+  border:0;
+  border-radius:var(--r-control);
+  color:var(--danger-strong);
+  background:transparent;
+  font-size:20px;
+}
+
+/* Disclosure */
+.install-guide {
+  border:1px solid var(--border);
+  border-radius:var(--r-control);
+  background:var(--surfaceSubtle);
+}
+
+.install-guide summary {
+  cursor:pointer;
+  list-style:none;
+}
+
+/* Loading */
+.spinner {
+  width:16px;
+  height:16px;
+  border:2px solid var(--border);
+  border-top-color:var(--primary);
+  border-radius:50%;
+  animation:fc-spin 800ms linear infinite;
+}
+
+@keyframes fc-spin {
+  to { transform:rotate(360deg); }
+}
+
+@media (hover:hover) {
+  button:hover:not(:disabled):not([aria-disabled="true"]) {
+    transform:translateY(-1px);
+    box-shadow:var(--shadow-sm);
+  }
+
+  :where(.save-btn,.download-button,.primary,.dl-btn):hover:not(:disabled) {
+    background:var(--primaryHover);
+  }
+
+  :where(.secondary-btn,.secondary,.media-download):hover:not(:disabled) {
+    border-color:var(--primary-strong);
+    color:var(--primary-strong);
+  }
+}
+
+@media (prefers-reduced-motion:reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior:auto !important;
+    animation-duration:.01ms !important;
+    animation-iteration-count:1 !important;
+    transition-duration:.01ms !important;
+  }
+
+  .spinner {
+    animation:none;
+    border-color:var(--border);
+    border-top-color:var(--primary);
+  }
+
+  button,
+  button:hover,
+  button:active {
+    transform:none !important;
+  }
+}

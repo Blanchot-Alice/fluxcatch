@@ -18,6 +18,8 @@ test("MV3 worker registers network and message listeners during module load", as
   const onTabRemoved = event();
   const onTabUpdated = event();
   const onTabActivated = event();
+  const onPermissionsAdded = event();
+  const onPermissionsRemoved = event();
   const nativeOnMessage = event();
   const nativeOnDisconnect = event();
   const extensionId = "gpnojfocoanelgibidlhholjobljefab";
@@ -25,6 +27,8 @@ test("MV3 worker registers network and message listeners during module load", as
   let nativePermission = false;
   const nativeOutgoing = [];
   let nativeConnectCalls = 0;
+  let nativePortDisconnects = 0;
+  let rejectNextNativeDownload = false;
   let blockBrowserPersist = false;
   let browserPersistEntered = null;
   let releaseBrowserPersist = null;
@@ -34,17 +38,26 @@ test("MV3 worker registers network and message listeners during module load", as
   let browserSearchState = "complete";
   let browserDownloadId = 42;
   const browserDownloadRequests = [];
+  const notificationRequests = [];
   let blockSettingsRead = false;
   let settingsReadEntered = null;
   let releaseSettingsRead = null;
+  let blockAutomaticTabRead = false;
+  let automaticTabReadEntered = null;
+  let releaseAutomaticTabRead = null;
+  let revokeNativePermissionAfterRecoveryWrite = false;
   let cancelEmitsInterrupted = false;
   let cancelRejects = false;
   const cancelledDownloads = [];
   const manifestFixtures = new Map();
   const manifestFetches = [];
+  let automaticBiliFetchDelayMs = 0;
+  let automaticBiliPageListDelayMs = 0;
   const settingsState = {};
+  const cachedSiteResponses = new Map();
   const uiMessages = [];
   const badgeUpdates = [];
+  const tabGetCalls = [];
   const legacyRootUrl = "https://legacy.example.test/media/master.m3u8";
   const legacyHighUrl = "https://legacy-cdn.example.test/delivery/high.m3u8";
   const legacyLowUrl = "https://legacy-cdn.example.test/delivery/low.m3u8";
@@ -66,10 +79,13 @@ test("MV3 worker registers network and message listeners during module load", as
   const biliPageUrl = "https://www.bilibili.com/video/BV14N8G6pEAf/";
   const biliAvPageUrl = "https://www.bilibili.com/video/av99999/";
   const biliOptInPageUrl = "https://www.bilibili.com/video/av424242/";
+  const biliFailedDiscoveryPageUrl = "https://www.bilibili.com/video/av13579/";
   const biliAvVideo = "https://upos-sz-mirror08c.bilivideo.cn/upgcxcode/77/88/88001-1-30080.m4s?deadline=1999999999&upsig=AV_1080_SECRET";
   const biliAvAudio = "https://upos-sz-mirror08c.bilivideo.cn/upgcxcode/77/88/88001-1-30280.m4s?deadline=1999999999&upsig=AV_AUDIO_SECRET";
   const youtubeWatchUrl = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
   const instagramCdnUrl = "https://scontent.cdninstagram.com/v/t66.28340-6/10000000_4242424242424242_7777777777777777777_n.mp4?efg=eyJ1IjoxfQ&oe=67FFFFFF";
+  const instagramRecommendationUrl = "https://scontent.cdninstagram.com/v/t66.28340-6/recommendation.mp4?efg=RECOMMENDATION&oe=67FFFFFF";
+  const instagramFragmentUrl = `${instagramCdnUrl}&bytestart=1588937&byteend=4876523`;
   const twitterCdnUrl = "https://video.twimg.com/ext_tw_video/1899999999999999999/pu/vid/avc1/1280x720/abcdefghijklmnopqrstuv-rs=600?tag=12";
   const biliVideo480 = "https://upos-sz-mirrorcoso1.edge.mountaintoys.cn:4483/v1/resource/upgcxcode/12/34/41067939286-1-30032.m4s?deadline=1999999999&upsig=VIDEO_480_SECRET";
   const biliVideo480Hevc = "https://upos-sz-mirror08c.bilivideo.cn:8082/upgcxcode/12/34/41067939286-1-30132.m4s?deadline=1999999999&upsig=VIDEO_HEVC_SECRET";
@@ -137,7 +153,11 @@ test("MV3 worker registers network and message listeners during module load", as
     })
   });
   const tabFixtures = new Map([
+    [9, { id: 9, title: "Preview fixture", url: "https://page.example.test/watch" }],
+    [10, { id: 10, title: "Closing fixture", url: "https://page.example.test/closing" }],
+    [11, { id: 11, title: "DASH fixture", url: "https://page.example.test/dash" }],
     [12, { id: 12, title: "Generative Motion Workshop", url: "https://course.example.test/generative-motion" }],
+    [14, { id: 14, title: "Volume of Distribution Interactive | Pharmacokinetics - Part 1", url: "https://onlinelearning.hms.harvard.edu/pharmacokinetics" }],
     [21, { id: 21, title: "Bilibili Fixture | 哔哩哔哩", url: `${biliPageUrl}?spm_id_from=333.1007&vd_source=PRIVATE_TRACKING` }],
     [22, { id: 22, title: "Observed Bilibili Fixture", url: "https://www.bilibili.com/video/av12345/" }],
     [23, { id: 23, title: "Unpaired Bilibili Fixture", url: "https://www.bilibili.com/video/av67890/" }],
@@ -151,7 +171,16 @@ test("MV3 worker registers network and message listeners during module load", as
     [31, { id: 31, title: "X Fixture", url: "https://x.com/fluxcatch/status/1899999999999999999" }],
     [32, { id: 32, title: "Opt-in Bilibili Fixture", url: biliOptInPageUrl }],
     [33, { id: 33, title: "Generic page title", url: "https://page.example.test/direct" }],
-    [34, { id: 34, title: "Unobserved redirect hint", url: "https://page.example.test/hint" }]
+    [34, { id: 34, title: "Unobserved redirect hint", url: "https://page.example.test/hint" }],
+    [35, { id: 35, title: "Failed Bilibili discovery fixture", url: biliFailedDiscoveryPageUrl }],
+    [36, { id: 36, title: "Automatic discovery generation fixture", url: biliAvPageUrl }],
+    [37, { id: 37, title: "Automatic discovery fallback-budget fixture", url: biliAvPageUrl }],
+    [38, { id: 38, title: "Disabled automatic discovery fixture", url: biliOptInPageUrl }],
+    [39, { id: 39, title: "Recovered X Fixture", url: "https://x.com/fluxcatch/status/1899999999999999999" }],
+    [40, { id: 40, title: "WebRequest route fixture", url: "https://page.example.test/old-route" }],
+    [41, { id: 41, title: "Content route fixture", url: "https://page.example.test/content-old" }],
+    [42, { id: 42, title: "Manifest identity fixture", url: "https://page.example.test/manifest-assets" }],
+    [43, { id: 43, title: "Document binding fixture", url: "https://page.example.test/document-binding" }]
   ]);
   const restoredJobs = Array.from({ length: 205 }, (_, index) => ({
     jobId: `old-${index}`,
@@ -242,13 +271,37 @@ test("MV3 worker registers network and message listeners during module load", as
           firstSeen: Date.now() - 2_800,
           lastSeen: Date.now() - 800
         }
-      ]
+      ],
+      30: [{
+        id: "legacy-instagram-fragment",
+        url: instagramFragmentUrl,
+        kind: "video",
+        mime: "video/mp4",
+        ext: "mp4",
+        contentLength: 3_287_587,
+        source: "webRequest",
+        sources: ["webRequest"],
+        provenance: "observed_response",
+        pageTitle: "Instagram Fixture",
+        firstSeen: Date.now() - 2_000,
+        lastSeen: Date.now() - 1_000
+      }]
     },
     jobs: restoredJobs
   };
   globalThis.fetch = async (input, options = {}) => {
     const url = String(input);
     manifestFetches.push({ url, credentials: options.credentials });
+    if (automaticBiliPageListDelayMs > 0 && url.includes("pagelist?avid=99999")) {
+      const delay = automaticBiliPageListDelayMs;
+      automaticBiliPageListDelayMs = 0;
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+    if (automaticBiliFetchDelayMs > 0 && url.includes("playurl?avid=99999&cid=88001")) {
+      const delay = automaticBiliFetchDelayMs;
+      automaticBiliFetchDelayMs = 0;
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
     const fixture = manifestFixtures.get(url);
     return {
       ok: Boolean(fixture),
@@ -263,7 +316,7 @@ test("MV3 worker registers network and message listeners during module load", as
     runtime: {
       id: extensionId,
       getURL: (path = "") => `chrome-extension://${extensionId}/${path}`,
-      getManifest: () => ({ name: "FluxCatch", version: "0.2.4" }),
+      getManifest: () => ({ name: "FluxCatch", version: "0.2.5" }),
       onConnect,
       onMessage,
       lastError: null,
@@ -272,12 +325,17 @@ test("MV3 worker registers network and message listeners during module load", as
         return ({
         onMessage: nativeOnMessage,
         onDisconnect: nativeOnDisconnect,
+        disconnect: () => { nativePortDisconnects += 1; },
         postMessage: (message) => {
+          if (message.type === "download" && rejectNextNativeDownload) {
+            rejectNextNativeDownload = false;
+            throw new Error("fixture native dispatch failure");
+          }
           nativeOutgoing.push(message);
           if (message.type === "ping") queueMicrotask(() => nativeOnMessage.listeners[0]?.fn({
             type: "pong",
             requestId: message.requestId,
-            version: "0.2.4",
+            version: "0.2.5",
             protocolVersion: 1,
             capabilityProfileVersion: 1,
             ffmpeg: true,
@@ -307,7 +365,27 @@ test("MV3 worker registers network and message listeners during module load", as
       onRemoved: onTabRemoved,
       onUpdated: onTabUpdated,
       onActivated: onTabActivated,
-      get: async (tabId) => tabFixtures.get(tabId) || {}
+      get: async (tabId) => {
+        tabGetCalls.push(tabId);
+        if (tabId === 36 && blockAutomaticTabRead) {
+          blockAutomaticTabRead = false;
+          automaticTabReadEntered?.();
+          await new Promise((resolve) => { releaseAutomaticTabRead = resolve; });
+        }
+        return tabFixtures.get(tabId) || {};
+      },
+      sendMessage: async (tabId, message) => {
+        if (message?.type === "CLEAR_CACHED_SITE_MEDIA") cachedSiteResponses.delete(tabId);
+        return message?.type === "GET_CACHED_SITE_MEDIA"
+          ? { ok: true, items: structuredClone(cachedSiteResponses.get(tabId) || []) }
+          : { ok: true };
+      }
+    },
+    notifications: {
+      create: async (id, options) => {
+        notificationRequests.push({ id, options: structuredClone(options) });
+        return id;
+      }
     },
     downloads: {
       onChanged: onDownloadChanged,
@@ -367,16 +445,22 @@ test("MV3 worker registers network and message listeners during module load", as
         },
         set: async (value) => {
           Object.assign(settingsState, structuredClone(value));
-        }
+          if (revokeNativePermissionAfterRecoveryWrite && value?.nativeApiRecovery) {
+            revokeNativePermissionAfterRecoveryWrite = false;
+            nativePermission = false;
+          }
+        },
+        remove: async (key) => { delete settingsState[key]; }
       }
     },
-    permissions: { contains: async () => nativePermission },
+    permissions: { contains: async () => nativePermission, onAdded: onPermissionsAdded, onRemoved: onPermissionsRemoved },
     action: {
       setBadgeText: async (value) => badgeUpdates.push(value),
       setBadgeBackgroundColor: async () => {},
       setTitle: async () => {}
     }
   };
+  const nativeConnectFixture = globalThis.chrome.runtime.connectNative;
   await import(`../extension/background.js?smoke=${Date.now()}`);
   assert.equal(onBeforeSendHeaders.listeners.length, 1);
   assert.equal(onHeadersReceived.listeners.length, 1);
@@ -387,12 +471,18 @@ test("MV3 worker registers network and message listeners during module load", as
   assert.equal(onTabRemoved.listeners.length, 1);
   assert.equal(onTabUpdated.listeners.length, 1);
   assert.equal(onTabActivated.listeners.length, 1);
+  assert.equal(onPermissionsRemoved.listeners.length, 1);
   assert.deepEqual(onHeadersReceived.listeners[0].args[0].types, ["media", "xmlhttprequest", "other"]);
 
   const extensionSender = { id: extensionId, url: `chrome-extension://${extensionId}/sidepanel/sidepanel.html` };
   const sendRuntimeMessage = (message, sender = extensionSender) => new Promise((resolve) => {
     onMessage.listeners[0].fn(message, sender, resolve);
   });
+  assert.deepEqual(
+    (await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 30 })).items,
+    [],
+    "an Instagram byte-range fragment persisted by an older worker is discarded during session restore"
+  );
   const uiDisconnect = event();
   onConnect.listeners[0].fn({
     name: "fluxcatch-sidepanel",
@@ -400,6 +490,17 @@ test("MV3 worker registers network and message listeners during module load", as
     onDisconnect: uiDisconnect,
     postMessage: (message) => uiMessages.push(structuredClone(message))
   });
+
+  onTabActivated.listeners[0].fn({ tabId: 9 });
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    if (badgeUpdates.filter((item) => item.tabId === 9).at(-1)?.text === "1") break;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  assert.equal(
+    badgeUpdates.filter((item) => item.tabId === 9).at(-1)?.text,
+    "1",
+    "tab activation reapplies a badge from media restored after a service-worker restart"
+  );
 
   const response = await new Promise((resolve) => {
     const keepAlive = onMessage.listeners[0].fn(
@@ -412,24 +513,43 @@ test("MV3 worker registers network and message listeners during module load", as
   assert.equal(response.ok, true);
   assert.equal(response.settings.concurrentFragments, 8);
   assert.equal(response.settings.minimumBytes, 500 * 1024);
-  assert.equal(response.settings.autoEnrichSiteQuality, false);
+  assert.equal(response.settings.autoEnrichSiteQuality, true, "automatic Bilibili enrichment defaults to enabled");
   assert.equal(response.settings.allowPrivateNetworkMedia, false);
   const unknownHostYoutube = await sendRuntimeMessage({ type: "SAVE_SETTINGS", settings: { youtubeEnabled: true } });
   assert.equal(unknownHostYoutube.settings.youtubeEnabled, false,
     "an unknown or unpermitted native capability cannot persist the YouTube switch");
   assert.equal(settingsState.settings.youtubeEnabled, false);
 
+  onBeforeSendHeaders.listeners[0].fn({
+    requestId: "content-disposition-name",
+    tabId: 33,
+    url: "https://media.example.test/direct.mp4?token=PRIVATE_TOKEN",
+    type: "media",
+    documentId: "document-33",
+    requestHeaders: []
+  });
   onHeadersReceived.listeners[0].fn({
     requestId: "content-disposition-name",
     tabId: 33,
     url: "https://media.example.test/direct.mp4?token=PRIVATE_TOKEN",
     type: "media",
+    documentId: "document-33",
     responseHeaders: [
       { name: "content-type", value: "video/mp4" },
       { name: "content-length", value: String(900 * 1024) },
       { name: "content-disposition", value: "attachment; filename=server_course_title.mp4" }
     ]
   });
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    if (badgeUpdates.filter((item) => item.tabId === 33).at(-1)?.text === "1") break;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  const directBadgeUpdatesBeforeRead = badgeUpdates.filter((item) => item.tabId === 33).length;
+  assert.equal(
+    badgeUpdates.filter((item) => item.tabId === 33).at(-1)?.text,
+    "1",
+    "a direct-media response publishes its badge before any UI reads tab media"
+  );
   let namedDirect = null;
   for (let attempt = 0; attempt < 20; attempt += 1) {
     namedDirect = (await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 33 })).items[0] || null;
@@ -444,9 +564,108 @@ test("MV3 worker registers network and message listeners during module load", as
   assert.equal(namedDirect?.urlIsRedacted, true);
   assert.equal(namedDirect?.copyable, false);
   assert.equal(namedDirect?.requiresRefresh, true);
+  assert.equal(
+    badgeUpdates.filter((item) => item.tabId === 33).length,
+    directBadgeUpdatesBeforeRead,
+    "GET_TAB_MEDIA is a read-only operation for an already detected direct-media badge"
+  );
   assert.equal(Object.hasOwn(namedDirect || {}, "url"), false, "PublicCandidate never publishes an executable URL field");
   assert.doesNotMatch(JSON.stringify({ namedDirect, sessionState }), /PRIVATE_TOKEN/);
 
+  const staleResponseUrl = "https://media.example.test/stale-route.mp4";
+  onBeforeSendHeaders.listeners[0].fn({
+    requestId: "stale-route-response", tabId: 40, url: staleResponseUrl, type: "media",
+    documentId: "old-document", requestHeaders: []
+  });
+  tabFixtures.get(40).url = "https://page.example.test/new-route";
+  onTabUpdated.listeners[0].fn(40, { url: tabFixtures.get(40).url });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  onHeadersReceived.listeners[0].fn({
+    requestId: "stale-route-response", tabId: 40, url: staleResponseUrl, type: "media",
+    documentId: "old-document",
+    responseHeaders: [
+      { name: "content-type", value: "video/mp4" },
+      { name: "content-length", value: "2000000" }
+    ]
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual((await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 40 })).items, [],
+    "a response is bound to the route generation/document that initiated it");
+
+  const genericSettingsGate = new Promise((resolve) => { settingsReadEntered = resolve; });
+  blockSettingsRead = true;
+  const staleContentPromise = sendRuntimeMessage({
+    type: "CONTENT_MEDIA",
+    data: { url: "https://media.example.test/stale-content.mp4", mime: "video/mp4", contentLength: 2000000, source: "dom" }
+  }, {
+    id: extensionId,
+    url: "https://page.example.test/content-old",
+    documentId: "content-old-document",
+    frameId: 0,
+    tab: structuredClone(tabFixtures.get(41))
+  });
+  await genericSettingsGate;
+  tabFixtures.get(41).url = "https://page.example.test/content-new";
+  onTabUpdated.listeners[0].fn(41, { url: tabFixtures.get(41).url });
+  releaseSettingsRead();
+  const staleContent = await staleContentPromise;
+  assert.equal(staleContent.ignored, true);
+  assert.deepEqual((await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 41 })).items, [],
+    "content candidates recheck route generation after awaited settings/storage work");
+
+  const queryAssets = [
+    "https://manifest.example.test/deliveries/d03df398cd8e29f29e3cc137a2385f72.m3u8?asset=alpha",
+    "https://manifest.example.test/deliveries/d03df398cd8e29f29e3cc137a2385f72.m3u8?asset=beta"
+  ];
+  queryAssets.forEach((url, index) => {
+    const requestId = `query-asset-${index}`;
+    onBeforeSendHeaders.listeners[0].fn({
+      requestId, tabId: 42, url, type: "xmlhttprequest", documentId: "manifest-document", requestHeaders: []
+    });
+    onHeadersReceived.listeners[0].fn({
+      requestId, tabId: 42, url, type: "xmlhttprequest", documentId: "manifest-document",
+      responseHeaders: [{ name: "content-type", value: "application/vnd.apple.mpegurl" }]
+    });
+  });
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    if ((await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 42 })).items.length === 2) break;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  assert.equal((await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 42 })).items.length, 2,
+    "different query-addressed assets on one origin/path are not merged without a verified relation");
+
+  const unboundDocumentUrl = "https://media.example.test/unbound-document.mp4";
+  onBeforeSendHeaders.listeners[0].fn({
+    requestId: "missing-response-document", tabId: 43, url: unboundDocumentUrl, type: "media",
+    documentId: "document-43", requestHeaders: []
+  });
+  onHeadersReceived.listeners[0].fn({
+    requestId: "missing-response-document", tabId: 43, url: unboundDocumentUrl, type: "media",
+    responseHeaders: [
+      { name: "content-type", value: "video/mp4" },
+      { name: "content-length", value: "2000000" }
+    ]
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual((await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 43 })).items, [],
+    "a response missing the initiating documentId fails closed");
+
+  const biliFetchesBeforeRead = manifestFetches.filter((item) => item.url.startsWith("https://api.bilibili.com/")).length;
+  const biliBadgeUpdatesBeforeRead = badgeUpdates.filter((item) => item.tabId === 21).length;
+  const biliBeforeScan = await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 21 });
+  assert.deepEqual(biliBeforeScan.items, [], "opening media UI is read-only before Bilibili playback or an explicit scan");
+  assert.equal(
+    manifestFetches.filter((item) => item.url.startsWith("https://api.bilibili.com/")).length,
+    biliFetchesBeforeRead,
+    "GET_TAB_MEDIA does not start Bilibili metadata discovery"
+  );
+  assert.equal(
+    badgeUpdates.filter((item) => item.tabId === 21).length,
+    biliBadgeUpdatesBeforeRead,
+    "opening media UI does not repaint or create a Bilibili badge"
+  );
+  const biliExplicitScan = await sendRuntimeMessage({ type: "SCAN_TAB", tabId: 21 });
+  assert.equal(biliExplicitScan.ok, true);
   let biliApiMedia = null;
   for (let attempt = 0; attempt < 20; attempt += 1) {
     biliApiMedia = await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 21 });
@@ -544,6 +763,15 @@ test("MV3 worker registers network and message listeners during module load", as
   };
   observeBiliTrack("bili-audio-first", 22, observedAudio, "document-A");
   observeBiliTrack("bili-video-second", 22, observedVideoA, "document-A");
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    if (badgeUpdates.filter((item) => item.tabId === 22).at(-1)?.text === "1") break;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  assert.equal(
+    badgeUpdates.filter((item) => item.tabId === 22).at(-1)?.text,
+    "1",
+    "a passively observed Bilibili audio/video pair publishes its badge before any UI read"
+  );
   let observedBiliMedia = null;
   for (let attempt = 0; attempt < 30; attempt += 1) {
     observedBiliMedia = await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 22 });
@@ -763,11 +991,16 @@ test("MV3 worker registers network and message listeners during module load", as
   assert.equal(forgedPreview.ok, false);
   assert.match(forgedPreview.error, /来源未通过校验/);
 
+  onBeforeSendHeaders.listeners[0].fn({
+    requestId: "preview-hls", tabId: 9, url: "https://media.example.test/master.m3u8",
+    type: "xmlhttprequest", documentId: "document-9", requestHeaders: []
+  });
   onHeadersReceived.listeners[0].fn({
     requestId: "preview-hls",
     tabId: 9,
     url: "https://media.example.test/master.m3u8",
     type: "xmlhttprequest",
+    documentId: "document-9",
     responseHeaders: [{ name: "content-type", value: "application/vnd.apple.mpegurl" }]
   });
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -801,17 +1034,23 @@ test("MV3 worker registers network and message listeners during module load", as
       "https://cdn-b.example.test/deliveries/other-video-480.m3u8"
     ].join("\n")
   });
-  const observeManifest = (requestId, url, filename, contentLength) => onHeadersReceived.listeners[0].fn({
-    requestId,
-    tabId: 12,
-    url,
-    type: "xmlhttprequest",
-    responseHeaders: [
-      { name: "content-type", value: "application/vnd.apple.mpegurl" },
-      { name: "content-length", value: String(contentLength) },
-      { name: "content-disposition", value: `attachment; filename=\"${filename}\"` }
-    ]
-  });
+  const observeManifest = (requestId, url, filename, contentLength) => {
+    onBeforeSendHeaders.listeners[0].fn({
+      requestId, tabId: 12, url, type: "xmlhttprequest", documentId: "document-12", requestHeaders: []
+    });
+    onHeadersReceived.listeners[0].fn({
+      requestId,
+      tabId: 12,
+      url,
+      type: "xmlhttprequest",
+      documentId: "document-12",
+      responseHeaders: [
+        { name: "content-type", value: "application/vnd.apple.mpegurl" },
+        { name: "content-length", value: String(contentLength) },
+        { name: "content-disposition", value: `attachment; filename=\"${filename}\"` }
+      ]
+    });
+  };
   const internalAssetTitle = await sendRuntimeMessage({
     type: "CONTENT_MEDIA",
     data: {
@@ -940,16 +1179,22 @@ test("MV3 worker registers network and message listeners during module load", as
       pageTitle: "Volume of Distribution Interactive | Pharmacokinetics - Part 1"
     }
   }, wistiaSender);
-  const observeWistia = (requestId, url) => onHeadersReceived.listeners[0].fn({
-    requestId,
-    tabId: 14,
-    url,
-    type: "xmlhttprequest",
-    responseHeaders: [
-      { name: "content-type", value: "application/vnd.apple.mpegurl" },
-      { name: "content-length", value: "1500" }
-    ]
-  });
+  const observeWistia = (requestId, url) => {
+    onBeforeSendHeaders.listeners[0].fn({
+      requestId, tabId: 14, url, type: "xmlhttprequest", documentId: "document-14", requestHeaders: []
+    });
+    onHeadersReceived.listeners[0].fn({
+      requestId,
+      tabId: 14,
+      url,
+      type: "xmlhttprequest",
+      documentId: "document-14",
+      responseHeaders: [
+        { name: "content-type", value: "application/vnd.apple.mpegurl" },
+        { name: "content-length", value: "1500" }
+      ]
+    });
+  };
   observeWistia("wistia-high", wistiaHighObserved);
   observeWistia("wistia-low", wistiaLowObserved);
   observeWistia("wistia-captions", wistiaCaptionsUrl);
@@ -994,6 +1239,40 @@ test("MV3 worker registers network and message listeners during module load", as
   assert.equal(finalWistia.title, "Volume of Distribution Interactive | Pharmacokinetics - Part 1");
   assert.equal(finalWistia.suggestedFilename, "Volume of Distribution Interactive _ Pharmacokinetics - Part 1.mp4");
   assert.ok(afterWistiaProbe.items.some((item) => item.displayUrl === secondMasterUrl), "an unrelated video is never merged by page title");
+
+  const separateAudioManifest = "https://security.example.test/separate-audio.m3u8";
+  const separateAudioPlaylist = "https://security-cdn.example.test/audio-en.m3u8";
+  const separateVideoPlaylist = "https://security-cdn.example.test/video-720.m3u8";
+  manifestFixtures.set(separateAudioManifest, {
+    text: [
+      "#EXTM3U",
+      `#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="English",DEFAULT=YES,AUTOSELECT=YES,URI="${separateAudioPlaylist}"`,
+      "#EXT-X-STREAM-INF:BANDWIDTH=1200000,RESOLUTION=1280x720,AUDIO=\"audio\"",
+      separateVideoPlaylist
+    ].join("\n")
+  });
+  manifestFixtures.set(separateAudioPlaylist, {
+    text: ["#EXTM3U", "#EXTINF:6,", "https://security-cdn.example.test/audio-1.m4s", "#EXT-X-ENDLIST"].join("\n")
+  });
+  manifestFixtures.set(separateVideoPlaylist, {
+    text: ["#EXTM3U", "#EXTINF:6,", "https://security-cdn.example.test/video-1.m4s", "#EXT-X-ENDLIST"].join("\n")
+  });
+  observeWistia("separate-audio-root", separateAudioManifest);
+  let separateAudioCandidate = null;
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    separateAudioCandidate = (await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 14 })).items
+      .find((item) => item.displayUrl === separateAudioManifest);
+    if (separateAudioCandidate) break;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  const separateAudioProbe = await sendRuntimeMessage({
+    type: "PROBE_MANIFEST",
+    tabId: 14,
+    candidate: separateAudioCandidate
+  });
+  assert.equal(separateAudioProbe.ok, true);
+  assert.equal(separateAudioProbe.probe.audioTrackCount, 1);
+  assert.equal(separateAudioProbe.probe.variants[0].audioGroup, "audio");
 
   // Manifest children and redirect destinations cross the same NetworkPolicy
   // boundary as the root URL. A public manifest cannot smuggle a private
@@ -1042,8 +1321,8 @@ test("MV3 worker registers network and message listeners during module load", as
   const aesProbe = await sendRuntimeMessage({ type: "PROBE_MANIFEST", tabId: 14, candidate: aesCandidate });
   assert.equal(aesProbe.probe.protection, "aes128");
   const aesDownload = await sendRuntimeMessage({ type: "DOWNLOAD", tabId: 14, candidate: aesCandidate, options: {} });
-  assert.equal(aesDownload.ok, false, "AES-128 HLS is metadata-only in 0.2.4");
-  assert.match(aesDownload.error, /0\.2\.4.*AES-128/);
+  assert.equal(aesDownload.ok, false, "AES-128 HLS is metadata-only in 0.2.5");
+  assert.match(aesDownload.error, /0\.2\.5.*AES-128/);
 
   const redirectManifest = "https://security.example.test/private-redirect.m3u8";
   manifestFixtures.set(redirectManifest, {
@@ -1128,6 +1407,18 @@ test("MV3 worker registers network and message listeners during module load", as
   assert.equal(restoredDirect.copyable, true, "an exact queryless direct URL may be copied");
   assert.equal(restoredDirect.urlIsRedacted, false);
   const candidate = { id: restoredDirect.id, kind: restoredDirect.kind, generation: restoredDirect.generation };
+  const trustedBrowserFixture = await sendRuntimeMessage({
+    type: "CONTENT_MEDIA",
+    data: { url: twitterCdnUrl, mime: "video/mp4", source: "x-api-response", width: 1280, height: 720 }
+  }, {
+    id: extensionId,
+    url: "https://x.com/fluxcatch/status/1899999999999999999",
+    frameId: 0,
+    tab: tabFixtures.get(31)
+  });
+  assert.equal(trustedBrowserFixture.accepted, true);
+  const trustedBrowserCandidate = (await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 31 })).items[0];
+  assert.equal(trustedBrowserCandidate.site, "twitter");
   const browserPersistReached = new Promise((resolve) => { browserPersistEntered = resolve; });
   const browserSearchReached = new Promise((resolve) => { browserSearchEntered = resolve; });
   blockBrowserPersist = true;
@@ -1136,9 +1427,9 @@ test("MV3 worker registers network and message listeners during module load", as
     onMessage.listeners[0].fn(
       {
         type: "DOWNLOAD",
-        tabId: 9,
+        tabId: 31,
         candidate: {
-          ...candidate,
+          ...trustedBrowserCandidate,
           displayUrl: "https://attacker.example/forged.mp4",
           url: "https://attacker.example/forged.mp4?token=FORGED_TARGET_SECRET",
           headers: { authorization: "Bearer FORGED_HEADER_SECRET" }
@@ -1183,7 +1474,7 @@ test("MV3 worker registers network and message listeners during module load", as
   assert.deepEqual({ method: browserStart.method, downloadId: browserStart.downloadId, jobId: browserStart.jobId }, {
     method: "browser", downloadId: 42, jobId: "browser:42"
   });
-  assert.equal(browserDownloadRequests.at(-1)?.url, "https://media.example.test/movie.mp4",
+  assert.equal(browserDownloadRequests.at(-1)?.url, twitterCdnUrl,
     "UI candidate tampering cannot replace the worker-private download target");
   assert.doesNotMatch(JSON.stringify(browserDownloadRequests), /FORGED_TARGET_SECRET|FORGED_HEADER_SECRET/);
   assert.equal(
@@ -1199,8 +1490,8 @@ test("MV3 worker registers network and message listeners during module load", as
   cancelEmitsInterrupted = true;
   const cancellableStart = await sendRuntimeMessage({
     type: "DOWNLOAD",
-    tabId: 9,
-    candidate,
+    tabId: 31,
+    candidate: trustedBrowserCandidate,
     options: { filename: "cancel-race.mp4" }
   });
   assert.equal(cancellableStart.ok, true);
@@ -1225,8 +1516,8 @@ test("MV3 worker registers network and message listeners during module load", as
   cancelRejects = true;
   const rejectedCancelStart = await sendRuntimeMessage({
     type: "DOWNLOAD",
-    tabId: 9,
-    candidate,
+    tabId: 31,
+    candidate: trustedBrowserCandidate,
     options: { filename: "cancel-rejected.mp4" }
   });
   const rejectedCancel = await sendRuntimeMessage({ type: "CANCEL_JOB", jobId: rejectedCancelStart.jobId });
@@ -1242,19 +1533,47 @@ test("MV3 worker registers network and message listeners during module load", as
     "a rejected cancellation clears its intent marker before a later interruption"
   );
 
-  nativePermission = true;
   const trustedSender = { id: extensionId, url: `chrome-extension://${extensionId}/sidepanel/sidepanel.html` };
+  nativePermission = true;
+  globalThis.chrome.runtime.connectNative = undefined;
+  const unavailableNativeApi = await sendRuntimeMessage({ type: "PING_HOST" }, trustedSender);
+  assert.equal(unavailableNativeApi.ok, true, "PING_HOST reports an unavailable Chrome API as status instead of a raw exception");
+  assert.equal(unavailableNativeApi.hostStatus.connected, false);
+  assert.equal(unavailableNativeApi.hostStatus.needsPermission, false);
+  assert.equal(unavailableNativeApi.hostStatus.failureReason, "api_unavailable");
+  assert.match(unavailableNativeApi.hostStatus.lastError, /自动重试/);
+  assert.match(unavailableNativeApi.hostStatus.lastError, /正在初始化连接接口/);
+  assert.doesNotMatch(unavailableNativeApi.hostStatus.lastError, /重新加载 FluxCatch|完全退出/);
+  assert.doesNotMatch(JSON.stringify(unavailableNativeApi), /TypeError|connectNative is not a function/i);
+  assert.equal(nativeConnectCalls, 0, "an absent nativeMessaging API never attempts a native connection");
+
+  const recovery = await sendRuntimeMessage({ type: "RECOVER_NATIVE_API" }, trustedSender);
+  assert.equal(recovery.ok, true);
+  assert.equal(recovery.retryAfterMs, 35_000, "the UI receives the measured idle wait without reloading the extension");
+  assert.equal(recovery.recoveryBlocked, false);
+  assert.equal(settingsState.nativeApiRecovery?.phase, "waiting");
+  assert.equal(settingsState.nativeApiRecovery?.resumeCount, 0);
+  assert.equal(settingsState.nativeApiRecovery.retryAt - settingsState.nativeApiRecovery.requestedAt, 35_000);
+
+  globalThis.chrome.runtime.connectNative = undefined;
+  const restoreNativeBinding = setTimeout(() => {
+    globalThis.chrome.runtime.connectNative = nativeConnectFixture;
+  }, 75);
   const pingResponses = await Promise.all([1, 2].map(() => new Promise((resolve) => {
     onMessage.listeners[0].fn({ type: "PING_HOST" }, trustedSender, resolve);
   })));
+  clearTimeout(restoreNativeBinding);
   assert.equal(nativeConnectCalls, 1, "concurrent PING_HOST requests share one native connection");
+  assert.equal(globalThis.chrome.runtime.connectNative, nativeConnectFixture, "a delayed native API binding becomes usable without a second user action");
   assert.ok(pingResponses.every((response) => response.ok && response.hostStatus.connected), "PING_HOST waits for pong before reporting status");
   assert.ok(pingResponses.every((response) => response.hostStatus.capabilities?.ffmpeg?.available));
   assert.ok(pingResponses.every((response) => response.hostStatus.capabilities?.ytdlp?.networkDisabled === false),
     "only an explicit networkDisabled=false capability opens the future adapter gate");
   assert.ok(pingResponses.every((response) => response.hostStatus.compatible === true));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(settingsState.nativeApiRecovery, undefined, "a successful native pong clears recovery state");
   const diagnosticsResponse = await sendRuntimeMessage({ type: "GET_DIAGNOSTICS" });
-  assert.equal(diagnosticsResponse.diagnostics.extension.version, "0.2.4");
+  assert.equal(diagnosticsResponse.diagnostics.extension.version, "0.2.5");
   assert.equal(diagnosticsResponse.diagnostics.extension.id, extensionId);
   assert.equal(diagnosticsResponse.diagnostics.native.compatible, true);
   assert.doesNotMatch(JSON.stringify(diagnosticsResponse),
@@ -1290,7 +1609,7 @@ test("MV3 worker registers network and message listeners during module load", as
   nativeOnMessage.listeners[0].fn({
     type: "pong",
     requestId: "compatible-reset",
-    version: "0.2.4",
+    version: "0.2.5",
     protocolVersion: 1,
     capabilityProfileVersion: 1,
     ffmpeg: true,
@@ -1301,6 +1620,20 @@ test("MV3 worker registers network and message listeners during module load", as
       dashPair: "direct-v1"
     }
   });
+
+  const separateAudioNativeCount = nativeOutgoing.filter((message) => message.type === "download").length;
+  const separateAudioStart = await sendRuntimeMessage({
+    type: "DOWNLOAD",
+    tabId: 14,
+    candidate: separateAudioCandidate,
+    options: { filename: "separate-audio.mp4" }
+  });
+  assert.equal(separateAudioStart.ok, true, "separate-audio HLS passes the extension gate");
+  assert.equal(separateAudioStart.method, "native");
+  assert.equal(nativeOutgoing.filter((message) => message.type === "download").length, separateAudioNativeCount + 1);
+  const separateAudioMessage = nativeOutgoing.find((message) => message.type === "download" && message.jobId === separateAudioStart.jobId);
+  assert.equal(separateAudioMessage?.mediaKind, "hls");
+  assert.equal(separateAudioMessage?.url, separateAudioManifest);
 
   const biliStart = await sendRuntimeMessage({
     type: "DOWNLOAD",
@@ -1338,34 +1671,180 @@ test("MV3 worker registers network and message listeners during module load", as
   assert.doesNotMatch(JSON.stringify(uiMessages), /COMPLETE_PATH_SECRET|COMPLETE_FUTURE_SECRET|\/Users\/private/,
     "native completion paths and future fields never reach popup or side panel ports");
 
-  // ===== Passive default: page completion does not call the credentialed
-  // Bilibili metadata API. Opening a UI (GET_TAB_MEDIA) enriches on demand. =====
-  const badgeCountFor = (tabId) => badgeUpdates.filter((item) => item.tabId === 29).length;
+  // ===== Default-on enrichment still requires a trusted Bilibili media
+  // request. Page completion stays passive; playback/preload starts one
+  // cooldown-limited fixed-site attempt and completes the badge. =====
+  const badgeCountFor = (tabId) => badgeUpdates.filter((item) => item.tabId === tabId).length;
   const badgeBefore = badgeCountFor(29);
   const metadataFetchesBefore = manifestFetches.filter((item) => item.url.startsWith("https://api.bilibili.com/")).length;
   onTabUpdated.listeners[0].fn(29, { status: "complete" });
   await new Promise((resolve) => setTimeout(resolve, 10));
-  assert.equal(badgeCountFor(29), badgeBefore, "page completion does not synthesize an enriched candidate by default");
+  assert.equal(badgeCountFor(29), badgeBefore, "page completion alone does not synthesize an enriched candidate");
   assert.equal(
     manifestFetches.filter((item) => item.url.startsWith("https://api.bilibili.com/")).length,
     metadataFetchesBefore,
-    "passive default makes no site metadata request"
+    "default-on enrichment waits for a trusted media request"
   );
+  automaticBiliFetchDelayMs = 1_500;
+  const automaticBadgeStartedAt = Date.now();
+  observeBiliTrack("auto-badge-playback", 29, biliAvVideo, "auto-badge-document");
+  for (let attempt = 0; attempt < 650; attempt += 1) {
+    const badge = badgeUpdates.filter((item) => item.tabId === 29).at(-1);
+    const fetchedPlayback = manifestFetches.some((item) => item.url.includes("playurl?avid=99999"));
+    if (badge?.text === "1" && fetchedPlayback) break;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.ok(Date.now() - automaticBadgeStartedAt <= 3_000, "the delayed Bilibili metadata fixture still paints its badge within three seconds");
+  assert.ok(
+    !manifestFetches.some((item) => item.url.includes("pagelist?avid=99999"))
+      && manifestFetches.some((item) => item.url.includes("playurl?avid=99999&cid=88001")),
+    "a trusted Bilibili media request derives its cid locally and uses one fixed playback metadata request"
+  );
+  assert.equal(
+    badgeUpdates.filter((item) => item.tabId === 29).at(-1)?.text,
+    "1",
+    "an observed Bilibili media request publishes the badge without opening popup or reading tab media"
+  );
+  const playbackBadgeUpdatesBeforeRead = badgeCountFor(29);
   const autoBadgeMedia = await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 29 });
   assert.equal(autoBadgeMedia.items.length, 1);
   assert.equal(autoBadgeMedia.items[0].kind, "dash_pair");
   assert.equal(autoBadgeMedia.items[0].height, 1080, "logged-in av discovery carries the full quality ladder fixture");
-  assert.equal((await sendRuntimeMessage({ type: "GET_SETTINGS" })).settings.autoEnrichSiteQuality, false);
-  const enrichSave = await sendRuntimeMessage({ type: "SAVE_SETTINGS", settings: { autoEnrichSiteQuality: true } });
-  assert.equal(enrichSave.settings.autoEnrichSiteQuality, true);
-  onTabUpdated.listeners[0].fn(32, { status: "complete" });
-  for (let attempt = 0; attempt < 50; attempt += 1) {
-    if (manifestFetches.some((item) => item.url.includes("pagelist?avid=424242"))) break;
+  assert.equal(
+    badgeCountFor(29),
+    playbackBadgeUpdatesBeforeRead,
+    "GET_TAB_MEDIA does not drive or repaint an already published Bilibili badge"
+  );
+
+  const opaqueBiliVideo = "https://upos-sz-mirror08c.bilivideo.cn/upgcxcode/77/88/shared-tail-30080.m4s?deadline=1999999999&upsig=OPAQUE_VIDEO_SECRET";
+  automaticBiliPageListDelayMs = 800;
+  automaticBiliFetchDelayMs = 800;
+  const fallbackBadgeStartedAt = Date.now();
+  observeBiliTrack("auto-badge-fallback-budget", 37, opaqueBiliVideo, "auto-badge-fallback-document");
+  for (let attempt = 0; attempt < 650; attempt += 1) {
+    if (badgeUpdates.filter((item) => item.tabId === 37).at(-1)?.text === "1") break;
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
-  assert.ok(
-    manifestFetches.some((item) => item.url.includes("pagelist?avid=424242")),
-    "automatic site metadata enrichment runs only after the explicit opt-in"
+  assert.equal(badgeUpdates.filter((item) => item.tabId === 37).at(-1)?.text, "1");
+  assert.ok(Date.now() - fallbackBadgeStartedAt <= 3_000,
+    "the accepted Bilibili URL without an embedded cid shares one metadata deadline and paints within three seconds");
+  assert.ok(manifestFetches.some((item) => item.url.includes("pagelist?avid=99999")),
+    "the fallback-budget fixture exercised pagelist instead of the direct-cid fast path");
+
+  const staleAutomaticFetchesBefore = manifestFetches.filter((item) => item.url.startsWith("https://api.bilibili.com/")).length;
+  const automaticTabGate = new Promise((resolve) => { automaticTabReadEntered = resolve; });
+  blockAutomaticTabRead = true;
+  beginBiliTrack("stale-automatic-request", 36, biliAvVideo, "stale-automatic-document");
+  await automaticTabGate;
+  const automaticNextUrl = "https://www.bilibili.com/video/av24681/";
+  tabFixtures.get(36).url = automaticNextUrl;
+  onTabUpdated.listeners[0].fn(36, { url: automaticNextUrl });
+  releaseAutomaticTabRead();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(
+    manifestFetches.filter((item) => item.url.startsWith("https://api.bilibili.com/")).length,
+    staleAutomaticFetchesBefore,
+    "a trusted request from the prior SPA generation cannot trigger metadata discovery for the next page"
+  );
+
+  const failedPlaybackUrl = "https://api.bilibili.com/x/player/playurl?avid=13579&cid=88001&qn=127&fnval=16&fourk=1";
+  const failedFetchCount = () => manifestFetches.filter((item) => item.url === failedPlaybackUrl).length;
+  const failedFetchesBefore = failedFetchCount();
+  beginBiliTrack("failed-auto-discovery-1", 35, biliAvVideo, "failed-auto-document");
+  for (let attempt = 0; attempt < 50 && failedFetchCount() === failedFetchesBefore; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 2));
+  }
+  assert.equal(failedFetchCount(), failedFetchesBefore + 1, "the first trusted media request attempts fixed-endpoint discovery");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  for (let index = 2; index <= 5; index += 1) {
+    beginBiliTrack(`failed-auto-discovery-${index}`, 35, biliAvVideo, "failed-auto-document");
+  }
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(
+    failedFetchCount(),
+    failedFetchesBefore + 1,
+    "failed automatic discovery is cooldown-limited instead of retrying for every media Range request"
+  );
+
+  const automaticRetryRealDateNow = Date.now;
+  const retryAt = automaticRetryRealDateNow() + 5_001;
+  Date.now = () => retryAt;
+  try {
+    beginBiliTrack("failed-auto-after-short-backoff", 35, biliAvVideo, "failed-auto-document");
+    for (let attempt = 0; attempt < 50 && failedFetchCount() < failedFetchesBefore + 2; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    }
+  } finally {
+    Date.now = automaticRetryRealDateNow;
+  }
+  assert.equal(failedFetchCount(), failedFetchesBefore + 2, "failed automatic discovery retries after its short backoff");
+
+  const failedPageListUrl = "https://api.bilibili.com/x/player/pagelist?avid=13579";
+  const failedPageListFetchesBefore = manifestFetches.filter((item) => item.url === failedPageListUrl).length;
+  const forcedRetry = await sendRuntimeMessage({ type: "SCAN_TAB", tabId: 35 });
+  assert.equal(forcedRetry.ok, true);
+  assert.equal(
+    manifestFetches.filter((item) => item.url === failedPageListUrl).length,
+    failedPageListFetchesBefore + 1,
+    "an explicit rescan bypasses automatic backoff and runs its complete fixed-endpoint path"
+  );
+
+  onTabUpdated.listeners[0].fn(35, { status: "loading" });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  beginBiliTrack("failed-auto-after-navigation", 35, biliAvVideo, "failed-auto-document-next");
+  for (let attempt = 0; attempt < 50 && failedFetchCount() < failedFetchesBefore + 3; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 2));
+  }
+  assert.equal(
+    failedFetchCount(),
+    failedFetchesBefore + 3,
+    "navigation clears the per-page automatic attempt cooldown"
+  );
+
+  assert.equal((await sendRuntimeMessage({ type: "GET_SETTINGS" })).settings.autoEnrichSiteQuality, true);
+
+  const disabledEnrichment = await sendRuntimeMessage({
+    type: "SAVE_SETTINGS",
+    settings: { autoEnrichSiteQuality: false }
+  });
+  assert.equal(disabledEnrichment.settings.autoEnrichSiteQuality, false);
+  const disabledFetchesBefore = manifestFetches.filter((item) => item.url.startsWith("https://api.bilibili.com/")).length;
+  onTabUpdated.listeners[0].fn(38, { status: "complete" });
+  observeBiliTrack("disabled-auto-enrichment", 38, biliAvVideo, "disabled-auto-document");
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  assert.equal(
+    manifestFetches.filter((item) => item.url.startsWith("https://api.bilibili.com/")).length,
+    disabledFetchesBefore,
+    "turning automatic enrichment off blocks both page-completion and trusted-playback API requests"
+  );
+  assert.deepEqual(
+    (await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 38 })).items,
+    [],
+    "one observed track cannot synthesize a quality candidate while automatic enrichment is off"
+  );
+
+  const manualFetchesBefore = manifestFetches.filter((item) => item.url.includes("pagelist?avid=424242")).length;
+  const manualWhileDisabled = await sendRuntimeMessage({ type: "SCAN_TAB", tabId: 38 });
+  assert.equal(manualWhileDisabled.ok, true);
+  assert.equal(
+    manifestFetches.filter((item) => item.url.includes("pagelist?avid=424242")).length,
+    manualFetchesBefore + 1,
+    "an explicit rescan remains available while automatic enrichment is off"
+  );
+
+  const enrichSave = await sendRuntimeMessage({ type: "SAVE_SETTINGS", settings: { autoEnrichSiteQuality: true } });
+  assert.equal(enrichSave.settings.autoEnrichSiteQuality, true);
+  const enabledFetchesBefore = manifestFetches.filter((item) => item.url.includes("playurl?avid=424242")).length;
+  observeBiliTrack("enabled-auto-enrichment", 32, biliAvVideo, "enabled-auto-document");
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const enabledFetches = manifestFetches.filter((item) => item.url.includes("playurl?avid=424242")).length;
+    if (enabledFetches > enabledFetchesBefore) break;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.equal(
+    manifestFetches.filter((item) => item.url.includes("playurl?avid=424242")).length,
+    enabledFetchesBefore + 1,
+    "turning automatic enrichment on lets a trusted playback/preload signal use the fixed endpoint"
   );
   const optedInMedia = await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 32 });
   assert.equal(optedInMedia.items[0]?.kind, "dash_pair");
@@ -1373,16 +1852,23 @@ test("MV3 worker registers network and message listeners during module load", as
   const activatedBefore = badgeCountFor(29);
   onTabActivated.listeners[0].fn({ tabId: 29 });
   await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.ok(badgeCountFor(29) > activatedBefore, "tab activation re-applies the badge from restored state");
+  assert.ok(badgeCountFor(29) > activatedBefore, "tab activation re-applies the badge from current media state");
+  onTabActivated.listeners[0].fn({ tabId: 28 });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(
+    badgeUpdates.filter((item) => item.tabId === 28).at(-1)?.text,
+    "",
+    "activating a tab without media explicitly clears its per-tab badge"
+  );
 
   // ===== YouTube experimental adapter source remains present, but every
-  // setting/candidate/download gate is hard-closed in the 0.2.4 build. =====
+  // setting/candidate/download gate is hard-closed in the 0.2.5 build. =====
   const youtubeDefaultOff = await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 28 });
   assert.deepEqual(youtubeDefaultOff.items, [], "YouTube stays invisible while the experimental toggle is off");
   assert.equal((await sendRuntimeMessage({ type: "GET_SETTINGS" })).settings.youtubeEnabled, false);
   const youtubeSave = await sendRuntimeMessage({ type: "SAVE_SETTINGS", settings: { youtubeEnabled: true } });
   assert.equal(youtubeSave.settings.youtubeEnabled, false,
-    "even an explicitly network-enabled host cannot open the 0.2.4 build gate");
+    "even an explicitly network-enabled host cannot open the 0.2.5 build gate");
   onTabUpdated.listeners[0].fn(28, { status: "complete" });
   await new Promise((resolve) => setTimeout(resolve, 10));
   assert.deepEqual((await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 28 })).items, [],
@@ -1392,7 +1878,7 @@ test("MV3 worker registers network and message listeners during module load", as
   nativeOnMessage.listeners[0].fn({
     type: "pong",
     requestId: "network-disabled-audit",
-    version: "0.2.4",
+    version: "0.2.5",
     protocolVersion: 1,
     capabilityProfileVersion: 1,
     ffmpeg: true,
@@ -1407,7 +1893,7 @@ test("MV3 worker registers network and message listeners during module load", as
   nativeOnMessage.listeners[0].fn({
     type: "pong",
     requestId: "network-enabled-fixture-reset",
-    version: "0.2.4",
+    version: "0.2.5",
     protocolVersion: 1,
     capabilityProfileVersion: 1,
     ffmpeg: true,
@@ -1436,35 +1922,117 @@ test("MV3 worker registers network and message listeners during module load", as
       ]
     });
   };
-  const finishInstagramMedia = (requestId, url) => {
+  const finishInstagramMedia = (requestId, url, contentLength = 4200000) => {
     onHeadersReceived.listeners[0].fn({
       requestId, tabId: 30, url, type: "media", documentId: "ig-document", frameId: 0,
       responseHeaders: [
         { name: "content-type", value: "video/mp4" },
-        { name: "content-length", value: "4200000" },
+        { name: "content-length", value: String(contentLength) },
         { name: "accept-ranges", value: "bytes" }
       ]
     });
   };
-  beginInstagramMedia("ig-media-1", instagramCdnUrl);
-  finishInstagramMedia("ig-media-1", instagramCdnUrl);
-  let instagramMedia = null;
-  for (let attempt = 0; attempt < 30; attempt += 1) {
-    instagramMedia = await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 30 });
-    if (instagramMedia.items.length) break;
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
-  assert.equal(instagramMedia.items.length, 1, "Instagram CDN media becomes a candidate through the generic webRequest path");
-  assert.equal(instagramMedia.items[0].site, "instagram", "the site adapter registry labels the candidate");
+  const browserRequestsBeforeInstagramFragment = browserDownloadRequests.length;
+  const nativeRequestsBeforeInstagramFragment = nativeOutgoing.filter((message) => message.type === "download").length;
+  beginInstagramMedia("ig-fragment-1", instagramFragmentUrl);
+  finishInstagramMedia("ig-fragment-1", instagramFragmentUrl, 3_287_587);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(
+    (await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 30 })).items,
+    [],
+    "Instagram bytestart/byteend MP4 responses remain internal segments rather than downloadable rows"
+  );
+  assert.equal(browserDownloadRequests.length, browserRequestsBeforeInstagramFragment);
+  assert.equal(nativeOutgoing.filter((message) => message.type === "download").length, nativeRequestsBeforeInstagramFragment);
+
+  const instagramPayload = await sendRuntimeMessage({
+    type: "CONTENT_MEDIA",
+    data: { url: instagramCdnUrl, mime: "video/mp4", source: "site-payload", width: 1080, height: 1920, title: "Instagram Fixture" }
+  }, {
+    id: extensionId,
+    url: "https://www.instagram.com/reel/Cxyz1234567/",
+    frameId: 0,
+    tab: { id: 30, url: "https://www.instagram.com/reel/Cxyz1234567/", title: "Instagram Fixture" }
+  });
+  assert.equal(instagramPayload.accepted, true, "a full Instagram URL from the site payload remains eligible");
+  let instagramMedia = await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 30 });
+  assert.equal(instagramMedia.items.length, 1);
+  assert.equal(instagramMedia.items[0].provenance, "site_payload");
+
+  await sendRuntimeMessage({
+    type: "CONTENT_MEDIA",
+    data: { url: instagramRecommendationUrl, mime: "video/mp4", source: "site-payload", width: 2160, height: 3840, title: "Recommendation" }
+  }, {
+    id: extensionId,
+    url: "https://www.instagram.com/reel/Cxyz1234567/",
+    frameId: 0,
+    tab: { id: 30, url: "https://www.instagram.com/reel/Cxyz1234567/", title: "Instagram Fixture" }
+  });
+  assert.equal((await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 30 })).items.length, 2,
+    "generic inline metadata may temporarily contain a recommendation");
+  const instagramApiResponse = await sendRuntimeMessage({
+    type: "CONTENT_MEDIA",
+    data: { url: instagramCdnUrl, mime: "video/mp4", source: "instagram-api-response", width: 1080, height: 1920, title: "Instagram Fixture" }
+  }, {
+    id: extensionId,
+    url: "https://www.instagram.com/reel/Cxyz1234567/",
+    frameId: 0,
+    tab: { id: 30, url: "https://www.instagram.com/reel/Cxyz1234567/", title: "Instagram Fixture" }
+  });
+  assert.equal(instagramApiResponse.accepted, true);
+  instagramMedia = await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 30 });
+  assert.equal(instagramMedia.items.length, 1, "the shortcode-bound response replaces recommendation and stale-signature rows");
+  assert.equal(instagramMedia.items[0].source, "instagram-api-response");
+  await sendRuntimeMessage({
+    type: "CONTENT_MEDIA",
+    data: { url: instagramRecommendationUrl, mime: "video/mp4", source: "metadata", width: 2160, height: 3840 }
+  }, {
+    id: extensionId,
+    url: "https://www.instagram.com/reel/Cxyz1234567/",
+    frameId: 0,
+    tab: { id: 30, url: "https://www.instagram.com/reel/Cxyz1234567/", title: "Instagram Fixture" }
+  });
+  assert.equal((await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 30 })).items.length, 1,
+    "later metadata cannot recreate recommendation rows after the shortcode-bound result wins");
+
+  browserDownloadId = 45;
+  settingsState.settings = { ...(settingsState.settings || {}), showNotifications: true };
+  const instagramNativeCount = nativeOutgoing.filter((message) => message.type === "download").length;
+  const instagramBrowserCount = browserDownloadRequests.length;
   const instagramStart = await sendRuntimeMessage({
     type: "DOWNLOAD",
     tabId: 30,
     candidate: instagramMedia.items[0],
-    options: { filename: "Instagram Reel.mp4", useNativeForDirect: true }
+    options: { filename: "Instagram Reel.mp4", useNativeForDirect: false }
   });
   assert.equal(instagramStart.ok, true);
-  const instagramNativeMessage = nativeOutgoing.find((message) => message.type === "download" && message.jobId === instagramStart.jobId);
-  assert.equal(instagramNativeMessage.headers.cookie, "sessionid=IG_PRIVATE_COOKIE", "the page cookie is replayed to the exact CDN URL that received it");
+  assert.equal(instagramStart.method, "browser",
+    "strict Meta CDN complete MP4 hints stay on Chrome's working proxy/session path");
+  assert.equal(browserDownloadRequests.length, instagramBrowserCount + 1);
+  assert.equal(browserDownloadRequests.at(-1).url, instagramCdnUrl);
+  onDownloadChanged.listeners[0].fn({
+    id: instagramStart.downloadId,
+    state: { current: "complete" },
+    filename: { current: "/Users/private/FluxCatch/Instagram Reel.mp4" },
+    bytesReceived: { current: 2_000_000 },
+    totalBytes: { current: 2_000_000 }
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.ok(notificationRequests.some((entry) => entry.id === `fluxcatch:${instagramStart.jobId}:completed`),
+    "browser completions honor the same notification setting as native jobs");
+  assert.equal(nativeOutgoing.filter((message) => message.type === "download").length, instagramNativeCount,
+    "the default fixed-site path keeps Instagram progressive MP4 on Chrome's working network path");
+
+  beginInstagramMedia("ig-media-1", instagramCdnUrl);
+  finishInstagramMedia("ig-media-1", instagramCdnUrl);
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    instagramMedia = await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 30 });
+    if (instagramMedia.items[0]?.provenance === "observed_response") break;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.equal(instagramMedia.items.length, 1, "Instagram CDN media becomes a candidate through the generic webRequest path");
+  assert.equal(instagramMedia.items[0].site, "instagram", "the site adapter registry labels the candidate");
+  assert.equal(instagramMedia.items[0].provenance, "observed_response", "the observed full response promotes the site-payload candidate");
 
   const xPayload = await sendRuntimeMessage({
     type: "CONTENT_MEDIA",
@@ -1486,15 +2054,113 @@ test("MV3 worker registers network and message listeners during module load", as
   assert.equal(xMedia.items[0].site, "twitter");
   assert.equal(xMedia.items[0].height, 720);
 
+  const xApiResponse = await sendRuntimeMessage({
+    type: "CONTENT_MEDIA",
+    data: { url: twitterCdnUrl, mime: "video/mp4", source: "x-api-response", width: 1280, height: 720, title: "X Fixture" }
+  }, {
+    id: extensionId,
+    url: "https://x.com/fluxcatch/status/1899999999999999999",
+    frameId: 0,
+    tab: { id: 31, url: "https://x.com/fluxcatch/status/1899999999999999999", title: "X Fixture" }
+  });
+  assert.equal(xApiResponse.accepted, true);
+  xMedia = await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 31 });
+  assert.equal(xMedia.items[0].source, "x-api-response");
+  assert.equal(xMedia.items[0].provenance, "site_payload", "a page-world response remains a bounded site hint, not an authenticity boundary");
+
+  onBeforeSendHeaders.listeners[0].fn({
+    requestId: "x-progressive-observed", tabId: 31, url: twitterCdnUrl, type: "media",
+    documentId: "x-document", frameId: 0, requestHeaders: []
+  });
+  onHeadersReceived.listeners[0].fn({
+    requestId: "x-progressive-observed", tabId: 31, url: twitterCdnUrl, type: "media", documentId: "x-document", frameId: 0,
+    responseHeaders: [
+      { name: "content-type", value: "video/mp4" },
+      { name: "content-length", value: "4200000" },
+      { name: "accept-ranges", value: "bytes" }
+    ]
+  });
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    xMedia = await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 31 });
+    if (xMedia.items[0]?.provenance === "observed_response") break;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.equal(xMedia.items[0].source, "webRequest", "a later network observation may become the display source");
+  assert.ok(xMedia.items[0].sources.includes("x-api-response"), "the X response lineage is retained when sources merge");
+  const xBrowserStart = await sendRuntimeMessage({
+    type: "DOWNLOAD",
+    tabId: 31,
+    candidate: xMedia.items[0],
+    options: { filename: "X progressive.mp4", useNativeForDirect: false }
+  });
+  assert.equal(xBrowserStart.ok, true);
+  assert.equal(xBrowserStart.method, "browser", "merged X progressive captures still reuse Chrome's working network path");
+  assert.equal(browserDownloadRequests.at(-1).url, twitterCdnUrl);
+
+  cachedSiteResponses.set(39, [{
+    url: twitterCdnUrl, mime: "video/mp4", source: "x-api-response", width: 1280, height: 720, title: "X Fixture"
+  }]);
+  xMedia = await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 39 });
+  assert.equal(xMedia.items.length, 1, "a restarted worker recovers the current page's bounded in-content cache");
+  assert.equal(xMedia.items[0].source, "x-api-response");
+  const recoveredXStart = await sendRuntimeMessage({
+    type: "DOWNLOAD",
+    tabId: 39,
+    candidate: xMedia.items[0],
+    options: { filename: "X recovered.mp4", useNativeForDirect: false }
+  });
+  assert.equal(recoveredXStart.method, "browser", "recovered signed X candidates do not fall back to the native CDN path");
+  const preferredNativeX = await sendRuntimeMessage({
+    type: "DOWNLOAD",
+    tabId: 39,
+    candidate: xMedia.items[0],
+    options: { filename: "X native preference.mp4", useNativeForDirect: true }
+  });
+  assert.equal(preferredNativeX.method, "native", "the explicit direct-file preference opts fixed browser exceptions into Native");
+  nativeOnMessage.listeners[0].fn({
+    type: "complete",
+    jobId: preferredNativeX.jobId,
+    filename: "X native preference.mp4",
+    status: "completed",
+    progress: 1,
+    size: 2000
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await sendRuntimeMessage({ type: "CLEAR_TAB", tabId: 39 });
+  assert.equal(cachedSiteResponses.has(39), false, "explicit clearing also removes the page-scoped recovery cache");
+  assert.deepEqual((await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 39 })).items, []);
+
+  const rejectedXMainFrame = await sendRuntimeMessage({
+    type: "CONTENT_MEDIA",
+    data: { url: twitterCdnUrl, mime: "video/mp4", source: "x-api-response" }
+  }, {
+    id: extensionId,
+    url: "https://x.com/fluxcatch/status/1899999999999999999",
+    frameId: 2,
+    tab: { id: 32, url: "https://x.com/fluxcatch/status/1899999999999999999", title: "X Fixture" }
+  });
+  assert.equal(rejectedXMainFrame.ignored, true, "subframes cannot mint X API candidates");
+
+  const rejectedXHost = await sendRuntimeMessage({
+    type: "CONTENT_MEDIA",
+    data: { url: "https://video.twimg.com.evil.test/file.mp4", mime: "video/mp4", source: "x-api-response" }
+  }, {
+    id: extensionId,
+    url: "https://x.com/fluxcatch/status/1899999999999999999",
+    frameId: 0,
+    tab: { id: 33, url: "https://x.com/fluxcatch/status/1899999999999999999", title: "X Fixture" }
+  });
+  assert.equal(rejectedXHost.ignored, true, "lookalike X CDN hosts are rejected");
+
   const nativeStart = await new Promise((resolve) => {
     onMessage.listeners[0].fn(
-      { type: "DOWNLOAD", tabId: 9, candidate, options: { filename: "native.mp4", useNativeForDirect: true } },
+      { type: "DOWNLOAD", tabId: 9, candidate, options: { filename: "native.mp4" } },
       trustedSender,
       resolve
     );
   });
   assert.equal(nativeStart.ok, true);
-  assert.equal(nativeStart.method, "native");
+  assert.equal(nativeStart.method, "native", "generic observed direct media defaults to the pinned broker");
   assert.ok(nativeOutgoing.some((message) => message.type === "download" && message.jobId === nativeStart.jobId));
   nativeOnMessage.listeners[0].fn({
     type: "progress",
@@ -1527,6 +2193,21 @@ test("MV3 worker registers network and message listeners during module load", as
   });
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal((await getJobs()).jobs.find((job) => job.jobId === nativeStart.jobId)?.status, "completed");
+  assert.ok(notificationRequests.some((entry) => entry.id === `fluxcatch:${nativeStart.jobId}:completed`),
+    "native completions remain covered by the shared notification path");
+
+  rejectNextNativeDownload = true;
+  const dispatchFailure = await sendRuntimeMessage({
+    type: "DOWNLOAD",
+    tabId: 9,
+    candidate,
+    options: { filename: "dispatch-failed.mp4", useNativeForDirect: true }
+  });
+  assert.equal(dispatchFailure.ok, false);
+  assert.match(dispatchFailure.jobId, opaqueIdPattern, "a synchronous dispatch failure identifies its durable failed job");
+  const dispatchFailureJob = (await getJobs()).jobs.find((job) => job.jobId === dispatchFailure.jobId);
+  assert.equal(dispatchFailureJob?.status, "failed");
+  assert.equal(dispatchFailureJob?.message, "fixture native dispatch failure");
 
   const cleared = await new Promise((resolve) => {
     onMessage.listeners[0].fn(
@@ -1563,9 +2244,13 @@ test("MV3 worker registers network and message listeners during module load", as
 
   const clearTabAndHistory = await sendRuntimeMessage({ type: "CLEAR_TAB", tabId: 9 });
   assert.equal(clearTabAndHistory.ok, true);
-  assert.equal(clearTabAndHistory.removedJobs, 1, "clearing detections also removes ended task rows");
-  assert.equal(clearTabAndHistory.jobs.some((job) => job.jobId === failedBeforeClear.jobId), false);
+  assert.equal(clearTabAndHistory.removedJobs, 0, "clearing detections leaves shared task history unchanged");
+  assert.equal(clearTabAndHistory.jobs.some((job) => job.jobId === failedBeforeClear.jobId), true);
   assert.equal(clearTabAndHistory.jobs.some((job) => job.jobId === activeDuringClear.jobId), true, "clearing detections never cancels an active download");
+  const clearEndedAfterTab = await sendRuntimeMessage({ type: "CLEAR_COMPLETED_JOBS" });
+  assert.equal(clearEndedAfterTab.removed, 1, "ended tasks are removed only by the explicit history action");
+  assert.equal(clearEndedAfterTab.jobs.some((job) => job.jobId === failedBeforeClear.jobId), false);
+  assert.equal(clearEndedAfterTab.jobs.some((job) => job.jobId === activeDuringClear.jobId), true);
   const staleGeneration = await sendRuntimeMessage({
     type: "DOWNLOAD",
     tabId: 9,
@@ -1587,6 +2272,7 @@ test("MV3 worker registers network and message listeners during module load", as
   assert.equal((await getJobs()).jobs.find((job) => job.jobId === activeDuringClear.jobId)?.status, "completed");
 
   const popupDisconnect = event();
+  const badgeEventsBeforePopupLifecycle = badgeCountFor(29);
   onConnect.listeners[0].fn({
     name: "fluxcatch-popup",
     sender: { id: extensionId, url: `chrome-extension://${extensionId}/popup/popup.html` },
@@ -1595,11 +2281,13 @@ test("MV3 worker registers network and message listeners during module load", as
   });
   assert.equal(popupDisconnect.listeners.length, 1);
   popupDisconnect.listeners[0].fn();
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    if (!(await getJobs()).jobs.some((job) => job.jobId === activeDuringClear.jobId)) break;
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  }
-  assert.equal((await getJobs()).jobs.some((job) => job.jobId === activeDuringClear.jobId), false, "closing the last popup clears ended task history");
+  assert.equal((await getJobs()).jobs.some((job) => job.jobId === activeDuringClear.jobId), true, "closing the last popup preserves shared task history");
+  await sendRuntimeMessage({ type: "CLEAR_COMPLETED_JOBS" });
+  assert.equal(
+    badgeCountFor(29),
+    badgeEventsBeforePopupLifecycle,
+    "opening and closing the popup does not drive or repaint media badges"
+  );
 
   const closingSender = {
     id: extensionId,
@@ -1623,6 +2311,150 @@ test("MV3 worker registers network and message listeners during module load", as
   onTabUpdated.listeners[0].fn(9, { status: "loading" });
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.deepEqual((await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 9 })).items, [], "navigation clears media and preview state");
+  assert.equal(
+    badgeUpdates.filter((item) => item.tabId === 9).at(-1)?.text,
+    "",
+    "refresh/navigation clears the prior page badge"
+  );
+
+  settingsState.nativeApiRecovery = {
+    phase: "resumed",
+    requestedAt: Date.now(),
+    retryAt: Date.now(),
+    expiresAt: Date.now() + 60_000
+  };
+  nativePermission = false;
+  onPermissionsRemoved.listeners[0].fn({ permissions: ["nativeMessaging"] });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.ok(nativePortDisconnects >= 1, "removing nativeMessaging immediately closes the live native port");
+  assert.equal(settingsState.nativeApiRecovery, undefined, "permission removal clears recovery state");
+  const permissionRemovedStatus = await sendRuntimeMessage({ type: "PING_HOST" }, trustedSender);
+  assert.equal(permissionRemovedStatus.hostStatus.needsPermission, true);
+  nativePermission = true;
+
+  globalThis.chrome.runtime.connectNative = () => {
+    nativeConnectCalls += 1;
+    const missingOnMessage = event();
+    const missingOnDisconnect = event();
+    return {
+      onMessage: missingOnMessage,
+      onDisconnect: missingOnDisconnect,
+      disconnect() {},
+      postMessage() {
+        queueMicrotask(() => {
+          globalThis.chrome.runtime.lastError = { message: "Specified native messaging host not found." };
+          missingOnDisconnect.listeners[0]?.fn();
+          globalThis.chrome.runtime.lastError = null;
+        });
+      }
+    };
+  };
+  const missingNativeHost = await sendRuntimeMessage({ type: "PING_HOST" }, trustedSender);
+  assert.equal(missingNativeHost.ok, true, "a missing native host is returned as a stable status result");
+  assert.equal(missingNativeHost.hostStatus.connected, false);
+  assert.equal(missingNativeHost.hostStatus.needsPermission, false);
+  assert.equal(missingNativeHost.hostStatus.failureReason, "host_missing",
+    "the async disconnect path preserves host_missing through both error handlers");
+  assert.match(missingNativeHost.hostStatus.lastError, /scripts\/native-install-wrapper\.sh/);
+  assert.match(missingNativeHost.hostStatus.lastError, /Native ZIP.*\.\/install-macos\.sh/);
+  assert.doesNotMatch(JSON.stringify(missingNativeHost), /Specified native messaging host not found|TypeError/i);
+
+  const requestedAt = Date.now() - 40_000;
+  settingsState.nativeApiRecovery = {
+    phase: "waiting",
+    requestedAt,
+    retryAt: requestedAt + 35_000,
+    expiresAt: requestedAt + 120_000
+  };
+  globalThis.chrome.runtime.connectNative = undefined;
+  const listenersBeforeRestart = onMessage.listeners.length;
+  await import(`../extension/background.js?native-recovery=${Date.now()}`);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(settingsState.nativeApiRecovery?.phase, "resumed", "a fresh worker consumes an overdue wait marker");
+  assert.equal(settingsState.nativeApiRecovery?.resumeCount, 1, "the fresh worker records the first failed API resume");
+  const biliBadgeUpdatesBeforeRestartActivation = badgeCountFor(29);
+  onTabActivated.listeners[1].fn({ tabId: 29 });
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    if (badgeCountFor(29) > biliBadgeUpdatesBeforeRestartActivation) break;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  assert.ok(badgeCountFor(29) > biliBadgeUpdatesBeforeRestartActivation,
+    "the restarted worker reapplies the badge from its restored media state");
+  assert.equal(badgeUpdates.filter((item) => item.tabId === 29).at(-1)?.text, "",
+    "a volatile Bilibili pair is cleared after restart instead of leaving a badge with no downloadable candidate");
+  const restartedListener = onMessage.listeners[listenersBeforeRestart].fn;
+  const restartedResponse = await new Promise((resolve) => {
+    restartedListener({ type: "RECOVER_NATIVE_API" }, trustedSender, resolve);
+  });
+  assert.equal(restartedResponse.recoveryBlocked, true, "the second consecutive missing API observation ends automatic retries");
+  assert.equal(restartedResponse.restartRequired, true);
+  assert.equal(restartedResponse.hostStatus.restartRequired, true);
+  assert.equal(restartedResponse.retryAfterMs, 0);
+  assert.equal(settingsState.nativeApiRecovery?.phase, "restart_required");
+  assert.equal(settingsState.nativeApiRecovery?.resumeCount, 2);
+  assert.match(restartedResponse.hostStatus.lastError, /完全退出并重新启动 Chrome/);
+  assert.doesNotMatch(restartedResponse.hostStatus.lastError, /重新加载 FluxCatch/);
+
+  settingsState.nativeApiRecovery = {
+    phase: "resumed",
+    resumeCount: 1,
+    requestedAt,
+    retryAt: requestedAt + 35_000,
+    expiresAt: Date.now() - 1
+  };
+  const expiredResumedResponse = await new Promise((resolve) => {
+    restartedListener({ type: "RECOVER_NATIVE_API" }, trustedSender, resolve);
+  });
+  assert.equal(expiredResumedResponse.restartRequired, true, "an expired resumed marker becomes terminal");
+  assert.equal(settingsState.nativeApiRecovery?.phase, "restart_required");
+  const repeatedTerminalResponse = await new Promise((resolve) => {
+    restartedListener({ type: "RECOVER_NATIVE_API" }, trustedSender, resolve);
+  });
+  assert.equal(repeatedTerminalResponse.restartRequired, true);
+  assert.equal(settingsState.nativeApiRecovery?.phase, "restart_required",
+    "an expired recovery never silently starts another waiting cycle");
+
+  const connectsBeforeRecoveredApi = nativeConnectCalls;
+  globalThis.chrome.runtime.connectNative = () => {
+    nativeConnectCalls += 1;
+    const recoveredOnMessage = event();
+    const recoveredOnDisconnect = event();
+    return {
+      onMessage: recoveredOnMessage,
+      onDisconnect: recoveredOnDisconnect,
+      disconnect() {},
+      postMessage(message) {
+        if (message.type !== "ping") return;
+        queueMicrotask(() => recoveredOnMessage.listeners[0]?.fn({
+          type: "pong",
+          requestId: message.requestId,
+          version: "0.2.5",
+          protocolVersion: 1,
+          capabilityProfileVersion: 1,
+          ffmpeg: true,
+          capabilities: { ffmpeg: { available: true }, ytdlp: { available: true, networkDisabled: false } }
+        }));
+      }
+    };
+  };
+  const restoredApiResponse = await sendRuntimeMessage({ type: "RECOVER_NATIVE_API" }, trustedSender);
+  assert.equal(restoredApiResponse.recoveryBlocked, false);
+  assert.equal(restoredApiResponse.hostStatus.connected, true,
+    "the first recheck connects immediately after Chrome restores the API binding");
+  assert.equal(nativeConnectCalls, connectsBeforeRecoveredApi + 1);
+  assert.equal(settingsState.nativeApiRecovery, undefined,
+    "API recovery clears terminal guidance before connecting");
+
+  delete settingsState.nativeApiRecovery;
+  nativePermission = true;
+  globalThis.chrome.runtime.connectNative = undefined;
+  revokeNativePermissionAfterRecoveryWrite = true;
+  const racedPermissionRemoval = await sendRuntimeMessage({ type: "RECOVER_NATIVE_API" }, trustedSender);
+  assert.equal(racedPermissionRemoval.hostStatus.needsPermission, true, "a permission removal interleaved with marker storage wins the race");
+  assert.equal(racedPermissionRemoval.retryAfterMs, 0);
+  assert.equal(settingsState.nativeApiRecovery, undefined, "the interleaved recovery marker is cleared instead of blocking the next grant");
+  nativePermission = true;
+  globalThis.chrome.runtime.connectNative = nativeConnectFixture;
 });
 
 test("content script discovers page preview metadata while rejecting credentials and fragments", async () => {
@@ -1641,4 +2473,62 @@ test("content script discovers page preview metadata while rejecting credentials
   assert.match(source, /url\.hash\s*=\s*""/);
   assert.match(source, /MAX_PREVIEW_URL_LENGTH\s*=\s*4096/);
   assert.doesNotMatch(source, /\bcookie\b/i);
+});
+
+test("native recovery and shared connections retain fail-closed guards", async () => {
+  const source = await readFile(new URL("../extension/background.js", import.meta.url), "utf8");
+  const sharedStart = source.indexOf("if (nativeConnectPromise) {");
+  assert.ok(sharedStart >= 0, "shared native connection branch is present");
+  const sharedBranch = source.slice(sharedStart, source.indexOf("nativeConnectPromise = openNativePort()", sharedStart));
+  assert.match(sharedBranch, /const port = await nativeConnectPromise/);
+  assert.match(sharedBranch, /if \(requireCompatibility\) requireCompatibleNativeHost\(\)/);
+
+  const startupStart = source.indexOf("async function prepareNativeApiRecoveryAtStartup()");
+  const startupEnd = source.indexOf("async function readNativeApiRecoveryMarker()", startupStart);
+  const startup = source.slice(startupStart, startupEnd);
+  assert.match(startup, /if \(!await hasNativePermission\(\)\)[\s\S]*clearNativeApiRecoveryMarker/);
+  assert.match(startup, /nativeApiRecoveryResumeCount\(current\)[\s\S]*writeNativeApiRecoveryMarker\([\s\S]*phase: resumeCount >= NATIVE_API_RECOVERY_RESUME_LIMIT/);
+
+  const recoveryStart = source.indexOf("async function recoverNativeMessagingApi()");
+  const recoveryEnd = source.indexOf("async function writeNativeApiRecoveryMarker(", recoveryStart);
+  const recovery = source.slice(recoveryStart, recoveryEnd);
+  assert.match(recovery, /typeof chrome\.runtime\.connectNative === "function"[\s\S]*clearNativeApiRecoveryMarker\(\)[\s\S]*ensureNativePort/);
+  assert.match(recovery, /phase === "restart_required"[\s\S]*restartRequired: true/);
+  assert.match(recovery, /nativeApiRecoveryResumeCount\(marker\) \+ 1/);
+
+  const markerReadStart = source.indexOf("async function readNativeApiRecoveryMarker()");
+  const markerReadEnd = source.indexOf("async function clearNativeApiRecoveryMarker()", markerReadStart);
+  const markerRead = source.slice(markerReadStart, markerReadEnd);
+  assert.match(markerRead, /\["waiting", "resumed", "restart_required"\]/);
+  assert.match(markerRead, /stored\.expiresAt > Date\.now\(\)[\s\S]*phase: "restart_required"/);
+
+  const markerWriteStart = source.indexOf("async function writeNativeApiRecoveryMarker(");
+  const markerWriteEnd = source.indexOf("async function prepareNativeApiRecoveryAtStartup()", markerWriteStart);
+  const markerWrite = source.slice(markerWriteStart, markerWriteEnd);
+  assert.match(markerWrite, /chrome\.storage\.local\.set/);
+  assert.match(markerWrite, /if \(await hasNativePermission\(\)\) return true/);
+  assert.match(markerWrite, /clearNativeApiRecoveryMarker\(\)/);
+
+  const failureStart = source.indexOf("function nativeConnectionFailure(");
+  const failureEnd = source.indexOf("function pingNativePort(", failureStart);
+  const failure = source.slice(failureStart, failureEnd);
+  assert.match(failure, /specified native messaging host not found/);
+  assert.doesNotMatch(failure, /failed to start|access to the specified|host manifest/i);
+
+  assert.match(source, /MAX_CAPTURED_HEADERS_GLOBAL_BYTES\s*=\s*4 \* 1024 \* 1024/);
+  assert.match(source, /capturedBytes > MAX_CAPTURED_HEADERS_GLOBAL_BYTES/);
+  assert.match(source, /deferPersistence: message\?\.type === "progress" && status === "downloading"/);
+
+  const trimStart = source.indexOf("function trimJobs()");
+  const trimEnd = source.indexOf("function cleanupJobHeaders", trimStart);
+  const trim = source.slice(trimStart, trimEnd);
+  assert.match(trim, /filter\(\(job\) => TERMINAL_JOB_STATUSES\.has\(job\.status\)\)/);
+  assert.doesNotMatch(trim, /const oldest = \[\.\.\.jobs\.values\(\)\]/,
+    "active jobs are never trimmed as history cache");
+
+  const identityStart = source.indexOf("function manifestIdentityKeys(value)");
+  const identityEnd = source.indexOf("function manifestIdentityUrls", identityStart);
+  assert.doesNotMatch(source.slice(identityStart, identityEnd), /origin-path:/);
+  assert.match(source, /const browserDirectEligible = instagramBrowserDirect \|\| xBrowserDirect/);
+  assert.match(source, /routeGeneration: pending\.routeGeneration/);
 });
