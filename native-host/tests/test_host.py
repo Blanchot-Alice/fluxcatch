@@ -14,6 +14,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import time
 import threading
 import unittest
 from unittest import mock
@@ -2378,6 +2379,80 @@ class HostTests(unittest.TestCase):
             self.assertFalse(launcher.exists())
             self.assertFalse(installed_host.exists())
             self.assertFalse(installed_policy.exists())
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+class ManifestFetchDeadlineTest(unittest.TestCase):
+    """Slow-drip manifests must fail on a total wall-clock deadline."""
+
+    def _run_fetch(self, handler):
+        started = time.monotonic()
+        server = LoopbackServer(("127.0.0.1", 0), handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        url = f"http://127.0.0.1:{server.server_port}/pl.m3u8"
+        token = host.set_current_network_policy(
+            host.NetworkPolicy(allow_private_network_media=True)
+        )
+        try:
+            with self.assertRaises(host.DownloadError) as caught:
+                host.fetch_manifest(url, {"user-agent": "fluxcatch-test"})
+        finally:
+            host.reset_current_network_policy(token)
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+        return time.monotonic() - started, str(caught.exception)
+
+    def test_fully_stalled_manifest_fails_with_explicit_timeout(self):
+        class HoldHandler(http.server.BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def log_message(self, _format, *_args):
+                pass
+
+            def do_GET(self):
+                try:
+                    self.connection.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\n")
+                    threading.Event().wait(120)
+                except Exception:
+                    pass
+
+        elapsed, message = self._run_fetch(HoldHandler)
+        self.assertIn("获取播放列表超时", message)
+        self.assertLess(elapsed, 70.0)
+
+    def test_slow_drip_manifest_cannot_evade_total_deadline(self):
+        class DripHandler(http.server.BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def log_message(self, _format, *_args):
+                pass
+
+            def do_GET(self):
+                length = int(self.headers.get("Content-Length") or 0)
+                if length:
+                    self.rfile.read(length)
+                self.wfile.write(
+                    b"HTTP/1.1 200 OK\r\n"
+                    b"Content-Type: application/vnd.apple.mpegurl\r\n"
+                    b"Transfer-Encoding: chunked\r\n\r\n"
+                )
+                self.wfile.flush()
+                try:
+                    while True:
+                        self.wfile.write(b"1\r\n#\r\n")
+                        self.wfile.flush()
+                        threading.Event().wait(4)
+                except Exception:
+                    pass
+
+        elapsed, message = self._run_fetch(DripHandler)
+        self.assertIn("获取播放列表超时", message)
+        self.assertLess(elapsed, 70.0)
 
 
 if __name__ == "__main__":

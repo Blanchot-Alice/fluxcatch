@@ -22,7 +22,7 @@
 - Kept ended task rows across popup close and detection clearing; terminal history is removed only by the explicit completed-task cleanup action, while current-page detection clearing affects media results only.
 - Added bounded track-type probing for masterless HLS media playlists (fMP4 `moov`/`hdlr` and MPEG-TS stream sniffing) so audio renditions no longer masquerade as downloadable videos; audio-only candidates are labeled 仅音频 and excluded from video variant groups.
 - Grouped same-host rendition media playlists into one card with a resolution dropdown when the site never exposes a master playlist; downloads pair the selected video rendition with the highest-bandwidth audio rendition and merge losslessly through FFmpeg.
-- Bounded native HLS manifest fetching with a 20-second timeout, one retry, and an explicit 获取播放列表超时 failure state plus per-manifest progress messages instead of an indefinite connecting state.
+- Bounded native HLS manifest fetching with a 20-second total wall-clock budget enforced by a watchdog that closes stalled or byte-dribbling connections, one immediate retry, and an explicit 获取播放列表超时 failure state plus per-manifest progress messages instead of an indefinite connecting state.
 
 ## 0.2.4 — 2026-08-23
 

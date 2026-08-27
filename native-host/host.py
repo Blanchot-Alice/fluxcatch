@@ -1479,6 +1479,87 @@ def is_manifest_fetch_timeout(error: BaseException) -> bool:
     return False
 
 
+class ManifestFetchDeadlineExceeded(TimeoutError):
+    """Raised when one manifest attempt outlives its whole-operation budget."""
+
+
+def _manifest_fetch_bounded(
+    url: str,
+    headers: dict[str, str],
+    cancel: threading.Event,
+) -> ManifestFetchResult:
+    """Run a single manifest attempt under a hard wall-clock deadline.
+
+    A per-socket timeout cannot interrupt reads against servers that drip
+    bytes slowly enough to reset every idle window, so a watchdog closes
+    the live response once the total budget expires.
+    """
+    policy = current_network_policy()
+    finished = threading.Event()
+    aborted = threading.Event()
+    holder: dict[str, Any] = {}
+
+    def worker() -> None:
+        token = set_current_network_policy(policy)
+        try:
+            if cancel.is_set():
+                raise Cancelled()
+            try:
+                response = request(url, headers, timeout=MANIFEST_FETCH_TIMEOUT_SECONDS)
+                holder["response"] = response
+                holder["value"] = ManifestFetchResult(
+                    text=read_limited(response, MAX_MANIFEST).decode("utf-8-sig", "replace"),
+                    final_url=valid_url(response.geturl()),
+                    request_headers=dict(getattr(response, "_fluxcatch_request_headers", {})),
+                )
+            finally:
+                streamed = holder.get("response")
+                if streamed is not None:
+                    try:
+                        streamed.close()
+                    except Exception:  # noqa: BLE001 - double close must not mask results
+                        pass
+        except BaseException as error:  # noqa: BLE001 - relayed to the caller below
+            if aborted.is_set():
+                # Closing the response under a blocked reader surfaces as an
+                # arbitrary error (often AttributeError on the cleared fp);
+                # normalize it to the deadline failure callers expect.
+                host_name = urllib.parse.urlsplit(url).hostname or urllib.parse.urlsplit(url).netloc or "unknown"
+                deadline_error = ManifestFetchDeadlineExceeded(
+                    f"获取播放列表超时({MANIFEST_FETCH_TIMEOUT_SECONDS}s): {host_name}"
+                )
+                deadline_error.__cause__ = error
+                holder["error"] = deadline_error
+            else:
+                holder["error"] = error
+        finally:
+            reset_current_network_policy(token)
+            finished.set()
+
+    reader = threading.Thread(target=worker, daemon=True, name="fluxcatch-manifest-fetch")
+    reader.start()
+    host_name = urllib.parse.urlsplit(url).hostname or urllib.parse.urlsplit(url).netloc or "unknown"
+    if not finished.wait(MANIFEST_FETCH_TIMEOUT_SECONDS):
+        stalled = holder.get("response")
+        if stalled is not None:
+            aborted.set()
+            try:
+                stalled.close()
+            except Exception:  # noqa: BLE001 - best-effort abort of the blocked read
+                pass
+        if not finished.wait(5.0):
+            raise ManifestFetchDeadlineExceeded(
+                f"获取播放列表超时({MANIFEST_FETCH_TIMEOUT_SECONDS}s): {host_name}"
+            ) from None
+    error = holder.get("error")
+    if error is not None:
+        raise error
+    value = holder.get("value")
+    if isinstance(value, ManifestFetchResult):
+        return value
+    raise DownloadError("Manifest download failed without a result")
+
+
 def fetch_manifest(
     url: str,
     headers: dict[str, str],
@@ -1490,14 +1571,8 @@ def fetch_manifest(
     for attempt in range(4):
         if cancel.is_set():
             raise Cancelled()
-        response = None
         try:
-            response = request(url, headers, timeout=MANIFEST_FETCH_TIMEOUT_SECONDS)
-            return ManifestFetchResult(
-                text=read_limited(response, MAX_MANIFEST).decode("utf-8-sig", "replace"),
-                final_url=valid_url(response.geturl()),
-                request_headers=dict(getattr(response, "_fluxcatch_request_headers", {})),
-            )
+            return _manifest_fetch_bounded(url, headers, cancel)
         except Cancelled:
             raise
         except NetworkPolicyDownloadError:
@@ -1517,9 +1592,6 @@ def fetch_manifest(
             timeout_streak = 0
             if attempt < 3:
                 _retry_wait(cancel, min(4.0, 0.35 * (2**attempt)))
-        finally:
-            if response is not None:
-                response.close()
     raise DownloadError(f"Manifest download failed after retries: {last_error}")
 
 
