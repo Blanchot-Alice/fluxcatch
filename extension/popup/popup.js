@@ -3,6 +3,9 @@ import { loadPrivacySafeThumbnail } from "../lib/thumbnail.js";
 import { BUILD_PROFILE, HOST_MISMATCH_MESSAGE } from "../lib/build-profile.js";
 import { friendlyDashMessage } from "../lib/job-presentation.js";
 import { createToastController, isActionPending, restoreFocus, withPendingAction } from "../ui/interactions.js";
+import { bindUiI18n } from "../ui/i18n.js";
+
+await bindUiI18n();
 
 const SITE_LABELS = { instagram: "Instagram", twitter: "X" };
 const state = { tabId: null, windowId: null, items: [], settings: {}, hostStatus: {}, jobs: new Map(), selected: null, probes: new Map(), filter: "all", refreshSequence: 0, dialogTrigger: null, lastJobAnnouncementKey: "", probeError: "" };

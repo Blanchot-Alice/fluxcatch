@@ -3,6 +3,9 @@ import { insertTemplateToken, normalizeFormState, notificationStatusText, reconc
 import { waitForNativeRecovery } from "./native-recovery.js";
 import { isActionPending, restoreFocus, runKeyedAction, withPendingAction } from "../ui/interactions.js";
 import { bindUiCustomization } from "../ui/customization.js";
+import { bindUiI18n, changeUiLanguage, loadUiLanguage } from "../ui/i18n.js";
+
+await bindUiI18n();
 
 const form = document.querySelector("#settingsForm");
 const saveButton = form.querySelector(".save-btn");
@@ -895,4 +898,10 @@ function clearStatus() {
   statusTimer = null;
   status.textContent = "";
   delete status.dataset.statusType;
+}
+
+const uiLanguageSelect = document.querySelector("#uiLanguageSelect");
+if (uiLanguageSelect) {
+  loadUiLanguage().then((value) => { uiLanguageSelect.value = value; }).catch(() => {});
+  uiLanguageSelect.addEventListener("change", () => { void changeUiLanguage(uiLanguageSelect.value); });
 }

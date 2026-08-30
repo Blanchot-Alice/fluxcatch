@@ -4,6 +4,9 @@ import { BUILD_PROFILE, HOST_MISMATCH_MESSAGE } from "../lib/build-profile.js";
 import { friendlyDashMessage } from "../lib/job-presentation.js";
 import { createToastController, restoreFocus, withPendingAction } from "../ui/interactions.js";
 import { captureMediaRefresh, isMediaRefreshCurrent } from "./refresh-guard.js";
+import { bindUiI18n } from "../ui/i18n.js";
+
+await bindUiI18n();
 
 const state = {
   tabId: null,

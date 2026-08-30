@@ -19,6 +19,20 @@ import { candidateForPersistence, candidateForUi, previewForPersistence } from "
 import { CANDIDATE_PROVENANCES, evaluateNetworkRequest, requireNetworkRequest } from "./lib/network-policy.js";
 import { hostEventForUi, hostStatusForUi } from "./lib/host-public.js";
 import { BUILD_PROFILE, HOST_MISMATCH_MESSAGE, buildDiagnostics, hostCompatibility } from "./lib/build-profile.js";
+import { UI_LANGUAGE_STORAGE_KEY, loadUiLanguage, resolveUiLanguage, setUiLanguage, t as tr } from "./ui/i18n.js";
+
+// Notifications and action titles render outside any extension page, so the
+// service worker keeps its own copy of the UI language preference in sync.
+void (async () => {
+  try {
+    setUiLanguage(resolveUiLanguage(await loadUiLanguage()));
+  } catch { /* zh fallback until the preference is readable */ }
+})();
+chrome.storage?.onChanged?.addListener((changes, area) => {
+  if (area === "local" && changes[UI_LANGUAGE_STORAGE_KEY]) {
+    setUiLanguage(resolveUiLanguage(changes[UI_LANGUAGE_STORAGE_KEY].newValue));
+  }
+});
 
 const HOST_NAME = "io.github.blanchot_alice.fluxcatch";
 const NATIVE_API_BINDING_WAIT_MS = 500;
@@ -3517,8 +3531,8 @@ async function maybeNotifyJob(job) {
     await chrome.notifications.create(`fluxcatch:${job.jobId}:${status}`, {
       type: "basic",
       iconUrl: chrome.runtime.getURL("icons/icon128.png"),
-      title: status === "completed" ? "FluxCatch 下载完成" : "FluxCatch 下载失败",
-      message: detail
+      title: status === "completed" ? tr("FluxCatch 下载完成") : tr("FluxCatch 下载失败"),
+      message: tr(detail)
     });
   } catch {
     // Notifications can be disabled by browser policy.
@@ -3538,7 +3552,7 @@ async function updateBadge(tabId) {
     await Promise.allSettled([
       chrome.action.setBadgeBackgroundColor({ tabId, color: count ? "#7C6FA3" : "#66716D" }),
       chrome.action.setBadgeTextColor?.({ tabId, color: "#FFFFFF" }),
-      chrome.action.setTitle({ tabId, title: count ? `FluxCatch — 检测到 ${count} 个媒体` : "FluxCatch — 暂未检测到媒体" })
+      chrome.action.setTitle({ tabId, title: tr(count ? `FluxCatch — 检测到 ${count} 个媒体` : "FluxCatch — 暂未检测到媒体") })
     ]);
   } catch {
     // The tab may have closed.

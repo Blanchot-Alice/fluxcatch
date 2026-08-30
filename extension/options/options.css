@@ -242,3 +242,8 @@ body::before{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;ba
 @media(prefers-reduced-motion:reduce){
   html{scroll-behavior:auto}
 }
+
+.topbar-actions{display:flex;align-items:center;justify-content:flex-end;gap:10px;flex:none}
+.language-picker{display:grid;gap:4px}
+.language-label{color:var(--muted);font-size:12px;font-weight:600}
+#uiLanguageSelect{min-height:40px;padding:6px 10px;font-size:13px}
