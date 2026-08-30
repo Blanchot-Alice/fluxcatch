@@ -577,6 +577,11 @@ const SKIP_TAGS = new Set(["SCRIPT", "STYLE", "CODE", "PRE", "TEXTAREA", "INPUT"
 
 let activeLanguage = "zh";
 let observer = null;
+// First-seen source text per node/attribute. Translation is one-way (zh → en)
+// per string, so re-applying another language must translate from the recorded
+// source, not from whatever the DOM currently shows.
+const sourceText = new WeakMap();
+const sourceAttr = new WeakMap();
 
 function hasCjk(text) {
   return /[\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]/.test(text);
@@ -640,18 +645,32 @@ export async function saveUiLanguage(pref, storage) {
 }
 
 function translateAttribute(attr) {
-  if (!attr?.value || !hasCjk(attr.value)) return;
-  const translated = translateMessage(attr.value);
-  if (translated !== attr.value) attr.value = translated;
+  const current = attr.value;
+  const stored = sourceAttr.get(attr);
+  if (stored === undefined) {
+    if (!hasCjk(current)) return;
+    sourceAttr.set(attr, current);
+  } else if (current !== stored && hasCjk(current)) {
+    sourceAttr.set(attr, current);
+  }
+  const translated = translateMessage(sourceAttr.get(attr));
+  if (translated !== current) attr.value = translated;
 }
 
 function translateTextNode(node) {
   const parent = node.parentElement;
   if (!parent || SKIP_TAGS.has(parent.tagName)) return;
   if (parent.closest?.(DO_NOT_TRANSLATE)) return;
-  if (!hasCjk(node.data)) return;
-  const translated = translateMessage(node.data);
-  if (translated !== node.data) node.data = translated;
+  const current = node.data;
+  const stored = sourceText.get(node);
+  if (stored === undefined) {
+    if (!hasCjk(current)) return;
+    sourceText.set(node, current);
+  } else if (current !== stored && hasCjk(current)) {
+    sourceText.set(node, current);
+  }
+  const translated = translateMessage(sourceText.get(node));
+  if (translated !== current) node.data = translated;
 }
 
 function translateElementAttributes(element) {
@@ -669,11 +688,9 @@ export function applyDomI18n(root = globalThis.document) {
     : null;
   if (walker) {
     for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-      const parent = node.parentElement;
-      if (!parent || SKIP_TAGS.has(parent.tagName) || parent.closest?.(DO_NOT_TRANSLATE)) continue;
-      if (!hasCjk(node.data)) continue;
-      const translated = translateMessage(node.data);
-      if (translated !== node.data) { node.data = translated; count += 1; }
+      const before = node.data;
+      translateTextNode(node);
+      if (node.data !== before) count += 1;
     }
   } else if (root.querySelectorAll) {
     for (const element of root.querySelectorAll("*")) {
