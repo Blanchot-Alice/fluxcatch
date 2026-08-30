@@ -1078,7 +1078,12 @@ async function waitForOptionsReady(client) {
       uiLang: chrome.i18n?.getUILanguage?.(),
       storedLang: (await chrome.storage?.local?.get?.("fluxcatch.uiLanguage.v1"))?.["fluxcatch.uiLanguage.v1"],
       htmlLang: document.documentElement.lang,
-      bodySample: document.body?.innerText?.replace(/\s+/g, " ").slice(0, 240)
+      settingsReply: await Promise.race([
+        chrome.runtime.sendMessage({ type: "GET_SETTINGS" }).then((r) => JSON.stringify(r)?.slice(0, 200)),
+        new Promise((resolve) => setTimeout(() => resolve("GET_SETTINGS-TIMEOUT-3S"), 3000))
+      ]),
+      pageErrors: window.__pageErrors || [],
+      bodySample: document.body?.innerText?.replace(/\s+/g, " ").slice(0, 200)
     }))()`).catch((diagError) => ({ diagError: String(diagError) }));
     throw new Error(`${error.message} | page snapshot: ${JSON.stringify(snapshot)}`);
   }
@@ -1129,6 +1134,7 @@ async function openExtensionTarget(relativePath, devtoolsOrigin, label) {
   // The suite asserts the Chinese UI copy; pin the extension UI language so the
   // runner's Chrome locale cannot flip it to English (bindUiI18n applies live).
   await evaluate(client, `chrome.storage?.local?.set?.({ "fluxcatch.uiLanguage.v1": "zh" })`);
+  await evaluate(client, `window.addEventListener("error", (event) => { (window.__pageErrors = window.__pageErrors || []).push(String(event.message)); }); window.addEventListener("unhandledrejection", (event) => { (window.__pageErrors = window.__pageErrors || []).push("unhandled: " + String(event.reason)); });`)
   return { targetId, client };
 }
 
