@@ -1061,14 +1061,27 @@ async function measureFinalFieldAgainstSaveBar(client, label) {
 }
 
 async function waitForOptionsReady(client) {
-  return poll(async () => {
-    const value = await evaluate(client, `(() => ({
-      ready: document.readyState === "complete",
+  try {
+    return await poll(async () => {
+      const value = await evaluate(client, `(() => ({
+        ready: document.readyState === "complete",
+        dirty: document.querySelector("#settingsForm")?.dataset.dirty,
+        saveText: document.querySelector(".save-btn")?.textContent.trim()
+      }))()`);
+      return value.ready && value.dirty === "false" && value.saveText === "保存设置" ? value : null;
+    }, CASE_TIMEOUT_MS, "Options normalized form baseline");
+  } catch (error) {
+    const snapshot = await evaluate(client, `(async () => ({
+      readyState: document.readyState,
       dirty: document.querySelector("#settingsForm")?.dataset.dirty,
-      saveText: document.querySelector(".save-btn")?.textContent.trim()
-    }))()`);
-    return value.ready && value.dirty === "false" && value.saveText === "保存设置" ? value : null;
-  }, CASE_TIMEOUT_MS, "Options normalized form baseline");
+      saveText: document.querySelector(".save-btn")?.textContent.trim(),
+      uiLang: chrome.i18n?.getUILanguage?.(),
+      storedLang: (await chrome.storage?.local?.get?.("fluxcatch.uiLanguage.v1"))?.["fluxcatch.uiLanguage.v1"],
+      htmlLang: document.documentElement.lang,
+      bodySample: document.body?.innerText?.replace(/\s+/g, " ").slice(0, 240)
+    }))()`).catch((diagError) => ({ diagError: String(diagError) }));
+    throw new Error(`${error.message} | page snapshot: ${JSON.stringify(snapshot)}`);
+  }
 }
 
 async function reloadExtensionPage(client) {
