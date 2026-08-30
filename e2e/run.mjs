@@ -2104,6 +2104,7 @@ function walk(root, maxDepth) {
 function launchChrome(executable, profile) {
   const args = [
     "--headless=new",
+    "--lang=zh-CN",
     `--screen-info={${E2E_WINDOW_SIZE.width}x${E2E_WINDOW_SIZE.height}}`,
     `--window-size=${E2E_WINDOW_SIZE.width},${E2E_WINDOW_SIZE.height}`,
     "--remote-debugging-port=0",
