@@ -1113,6 +1113,9 @@ async function openExtensionTarget(relativePath, devtoolsOrigin, label) {
   await client.send("Page.enable");
   await client.send("Emulation.setFocusEmulationEnabled", { enabled: true });
   await poll(async () => await evaluate(client, `document.readyState === "complete"`), CASE_TIMEOUT_MS, `${label} DOM ready`);
+  // The suite asserts the Chinese UI copy; pin the extension UI language so the
+  // runner's Chrome locale cannot flip it to English (bindUiI18n applies live).
+  await evaluate(client, `chrome.storage?.local?.set?.({ "fluxcatch.uiLanguage.v1": "zh" })`);
   return { targetId, client };
 }
 
