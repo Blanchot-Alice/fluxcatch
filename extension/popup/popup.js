@@ -5,6 +5,8 @@ import { friendlyDashMessage } from "../lib/job-presentation.js";
 import { createToastController, isActionPending, restoreFocus, withPendingAction } from "../ui/interactions.js";
 import { bindUiI18n } from "../ui/i18n.js";
 
+let domContentLoadedSeen = document.readyState !== "loading";
+document.addEventListener("DOMContentLoaded", () => { domContentLoadedSeen = true; }, { once: true });
 await bindUiI18n();
 
 const SITE_LABELS = { instagram: "Instagram", twitter: "X" };
@@ -390,7 +392,6 @@ function setManifestLoadingForItem(item, loading) {
 function manifestDownloadBlockReason(probe) {
   if (probe?.kind === "hls") {
     if (probe.protection === "drm" || probe.protected) return "检测到 DRM/SAMPLE-AES 内容保护，仅显示媒体信息。";
-    if (probe.protection === "aes128" || probe.encrypted) return "当前版本暂不支持 AES-128 加密的 HLS 下载。";
     if (probe.type === "media" && probe.live) return "当前版本暂不支持 HLS 直播录制。";
     if (probe.discontinuity) return "当前版本暂不支持包含时间线切换的 HLS 下载。";
   }
@@ -760,6 +761,7 @@ async function call(message) {
 function mediaChips(item) {
   const stream = isStreamKind(item);
   const values = [{ text: streamTypeLabel(item), cls: stream ? "hls" : "fmt" }];
+  if (item.recommended) values.push({ text: "推荐", cls: "live" });
   if (item.site && SITE_LABELS[item.site]) values.push({ text: SITE_LABELS[item.site], cls: "fmt" });
   if (item.height) values.push({ text: `${item.height}p`, cls: "hd" });
   if (item.trackHints
@@ -936,3 +938,7 @@ function showToast(message, type = "error") {
   const method = ["success", "warning", "error"].includes(type) ? type : "error";
   return toastController[method](String(message || "操作失败"));
 }
+
+// bindUiI18n's top-level await can let DOMContentLoaded slip past the late
+// listener registration above in some Chrome locales; initialize now if it did.
+if (domContentLoadedSeen) void init();

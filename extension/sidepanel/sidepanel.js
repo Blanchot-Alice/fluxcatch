@@ -6,6 +6,8 @@ import { createToastController, restoreFocus, withPendingAction } from "../ui/in
 import { captureMediaRefresh, isMediaRefreshCurrent } from "./refresh-guard.js";
 import { bindUiI18n } from "../ui/i18n.js";
 
+let domContentLoadedSeen = document.readyState !== "loading";
+document.addEventListener("DOMContentLoaded", () => { domContentLoadedSeen = true; }, { once: true });
 await bindUiI18n();
 
 const state = {
@@ -545,6 +547,7 @@ function announceJobChange(previous, current) {
 function mediaChips(item) {
   const stream = isStreamKind(item);
   const chips = [{ label: streamTypeLabel(item), className: stream ? "stream" : "" }];
+  if (item.recommended) chips.push({ label: "推荐", className: "quality" });
   if (item.height) chips.push({ label: `${item.height}p`, className: "quality" });
   const grouped = Array.isArray(item.variants) && item.variants.length > 0;
   if (item.trackHints
@@ -689,3 +692,7 @@ function friendlyErrorMessage(message) {
   }
   return raw.replace(/高速下载功能|本地(?:高速|下载)?引擎/g, "本地下载引擎");
 }
+
+// bindUiI18n's top-level await can let DOMContentLoaded slip past the late
+// listener registration above in some Chrome locales; initialize now if it did.
+if (domContentLoadedSeen) void init();
