@@ -1452,7 +1452,16 @@ async function auditHlsDownloadDialog(tabId, expectedUrl, expectedTitle) {
       };
     })()`);
     item.result = result;
-    assert.equal(result.cardCount, 1, "popup rendered duplicate cards for one HLS master");
+    if (result.cardCount !== 1) {
+      const popupState = await evaluate(client, `(() => ({
+        readyState: document.readyState,
+        cards: document.querySelectorAll(".media-card").length,
+        loading: document.querySelector("#mediaLoading")?.hidden,
+        empty: document.querySelector("#emptyState")?.hidden,
+        body: document.body?.innerText?.replace(/\s+/g, " ").slice(0, 200)
+      }))()`).catch(() => ({}));
+      throw new Error(`popup rendered ${result.cardCount} cards for one HLS master | state: ${JSON.stringify(popupState)}`);
+    }
     assert.equal(result.candidateUrl, expectedUrl, "popup rendered the wrong HLS representative");
     assert.deepEqual(result.secondaryActions, [], "stream cards still expose a duplicate parse action");
     assert.equal(result.dialogOpen, true, "Download did not open the HLS settings dialog");

@@ -5,8 +5,7 @@ import { friendlyDashMessage } from "../lib/job-presentation.js";
 import { createToastController, isActionPending, restoreFocus, withPendingAction } from "../ui/interactions.js";
 import { bindUiI18n } from "../ui/i18n.js";
 
-let domContentLoadedFired = false;
-document.addEventListener("DOMContentLoaded", () => { domContentLoadedFired = true; }, { once: true });
+let initStarted = false;
 await bindUiI18n();
 
 const SITE_LABELS = { instagram: "Instagram", twitter: "X" };
@@ -83,6 +82,8 @@ port.onDisconnect.addListener(() => updateHost(nativeStatusFromError(chrome.runt
 document.addEventListener("DOMContentLoaded", init);
 
 async function init() {
+  if (initStarted) return;
+  initStarted = true;
   bindEvents();
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -939,6 +940,8 @@ function showToast(message, type = "error") {
   return toastController[method](String(message || "操作失败"));
 }
 
-// A module script normally finishes before DOMContentLoaded, but the await above
-// can suspend evaluation past the event; run initialization now only if it fired.
-if (domContentLoadedFired) void init();
+// Module scripts normally finish while readyState is "interactive" and before
+// DOMContentLoaded, but the await above can suspend evaluation past the event on
+// slow starts, leaving the late listener registration missed. Initialize now
+// whenever parsing has finished; the guard inside keeps it to a single run.
+if (document.readyState !== "loading") void init();

@@ -6,8 +6,7 @@ import { createToastController, restoreFocus, withPendingAction } from "../ui/in
 import { captureMediaRefresh, isMediaRefreshCurrent } from "./refresh-guard.js";
 import { bindUiI18n } from "../ui/i18n.js";
 
-let domContentLoadedFired = false;
-document.addEventListener("DOMContentLoaded", () => { domContentLoadedFired = true; }, { once: true });
+let initStarted = false;
 await bindUiI18n();
 
 const state = {
@@ -96,6 +95,8 @@ port.onDisconnect.addListener(() => {
 document.addEventListener("DOMContentLoaded", init);
 
 async function init() {
+  if (initStarted) return;
+  initStarted = true;
   bindEvents();
   await refreshAll();
 }
@@ -692,6 +693,8 @@ function friendlyErrorMessage(message) {
   return raw.replace(/高速下载功能|本地(?:高速|下载)?引擎/g, "本地下载引擎");
 }
 
-// A module script normally finishes before DOMContentLoaded, but the await above
-// can suspend evaluation past the event; run initialization now only if it fired.
-if (domContentLoadedFired) void init();
+// Module scripts normally finish while readyState is "interactive" and before
+// DOMContentLoaded, but the await above can suspend evaluation past the event on
+// slow starts, leaving the late listener registration missed. Initialize now
+// whenever parsing has finished; the guard inside keeps it to a single run.
+if (document.readyState !== "loading") void init();

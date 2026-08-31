@@ -5,8 +5,7 @@ import { isActionPending, restoreFocus, runKeyedAction, withPendingAction } from
 import { bindUiCustomization } from "../ui/customization.js";
 import { bindUiI18n, changeUiLanguage, loadUiLanguage } from "../ui/i18n.js";
 
-let domContentLoadedFired = false;
-document.addEventListener("DOMContentLoaded", () => { domContentLoadedFired = true; }, { once: true });
+let initializeStarted = false;
 await bindUiI18n();
 
 const form = document.querySelector("#settingsForm");
@@ -67,6 +66,8 @@ let templateSelection = { start: 0, end: 0 };
 document.addEventListener("DOMContentLoaded", initialize, { once: true });
 
 function initialize() {
+  if (initializeStarted) return;
+  initializeStarted = true;
   void bindUiCustomization();
   renderCapabilities();
   renderLabStates();
@@ -908,6 +909,8 @@ if (uiLanguageSelect) {
   uiLanguageSelect.addEventListener("change", () => { void changeUiLanguage(uiLanguageSelect.value); });
 }
 
-// A module script normally finishes before DOMContentLoaded, but the await above
-// can suspend evaluation past the event; run initialization now only if it fired.
-if (domContentLoadedFired) void initialize();
+// Module scripts normally finish while readyState is "interactive" and before
+// DOMContentLoaded, but the await above can suspend evaluation past the event on
+// slow starts, leaving the late listener registration missed. Initialize now
+// whenever parsing has finished; the guard inside keeps it to a single run.
+if (document.readyState !== "loading") void initialize();
