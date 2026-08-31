@@ -2,7 +2,7 @@
 
 <img src="docs/assets/icon.png" width="110" alt="FluxCatch logo" />
 
-# FluxCatch - A Local Download Helper
+# FluxCatch
 
 **Keep What You See.**
 
@@ -63,9 +63,9 @@ identity, privacy boundaries and local capabilities in one honest reading flow.
 
 | Popup | Side Panel | Download dialog |
 | :---: | :---: | :---: |
-| ![popup](docs/assets/en/popup.png) | ![sidepanel](docs/assets/en/sidepanel.png) | ![dialog](docs/assets/en/hls-download-dialog.png) |
+| <img src="docs/assets/en/popup.png" height="440" alt="Popup"> | <img src="docs/assets/en/sidepanel.png" height="440" alt="Side Panel"> | <img src="docs/assets/en/hls-download-dialog.png" height="440" alt="Download dialog"> |
 
-![FluxCatch Settings](docs/assets/en/options.png)
+<p align="center"><img src="docs/assets/en/options.png" width="720" alt="FluxCatch Settings"></p>
 
 All three surfaces share packaged design tokens with keyboard operation,
 visible focus, dark mode, narrow widths, and `prefers-reduced-motion`.

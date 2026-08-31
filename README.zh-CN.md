@@ -58,9 +58,9 @@
 
 | Popup | Side Panel | 下载对话框 |
 | :---: | :---: | :---: |
-| ![popup](docs/assets/popup.png) | ![sidepanel](docs/assets/sidepanel.png) | ![dialog](docs/assets/hls-download-dialog.png) |
+| <img src="docs/assets/popup.png" height="440" alt="弹窗"> | <img src="docs/assets/sidepanel.png" height="440" alt="侧栏工作台"> | <img src="docs/assets/hls-download-dialog.png" height="440" alt="下载对话框"> |
 
-![FluxCatch 设置页](docs/assets/options.png)
+<p align="center"><img src="docs/assets/options.png" width="720" alt="FluxCatch 设置页"></p>
 
 三个界面共享同一套设计令牌，支持键盘操作、可见焦点、深色模式、窄窗口与
 `prefers-reduced-motion`。
