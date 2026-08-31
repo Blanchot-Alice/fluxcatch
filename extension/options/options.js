@@ -5,8 +5,8 @@ import { isActionPending, restoreFocus, runKeyedAction, withPendingAction } from
 import { bindUiCustomization } from "../ui/customization.js";
 import { bindUiI18n, changeUiLanguage, loadUiLanguage } from "../ui/i18n.js";
 
-let domContentLoadedSeen = document.readyState !== "loading";
-document.addEventListener("DOMContentLoaded", () => { domContentLoadedSeen = true; }, { once: true });
+let domContentLoadedFired = false;
+document.addEventListener("DOMContentLoaded", () => { domContentLoadedFired = true; }, { once: true });
 await bindUiI18n();
 
 const form = document.querySelector("#settingsForm");
@@ -908,6 +908,6 @@ if (uiLanguageSelect) {
   uiLanguageSelect.addEventListener("change", () => { void changeUiLanguage(uiLanguageSelect.value); });
 }
 
-// bindUiI18n's top-level await can let DOMContentLoaded slip past the late
-// listener registration above in some Chrome locales; initialize now if it did.
-if (domContentLoadedSeen) void initialize();
+// A module script normally finishes before DOMContentLoaded, but the await above
+// can suspend evaluation past the event; run initialization now only if it fired.
+if (domContentLoadedFired) void initialize();
