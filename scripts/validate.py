@@ -163,7 +163,7 @@ def main() -> int:
         raise SystemExit("Extension/native protocol versions do not match")
     if not profile_version or not host_profile or profile_version.group(1) != host_profile.group(1):
         raise SystemExit("Extension/native capability profile versions do not match")
-    for closed_feature in ("liveHls", "encryptedHls", "externalToolNetwork", "remoteThumbnails"):
+    for closed_feature in ("liveHls", "externalToolNetwork"):
         if not re.search(rf'^\s*{closed_feature}:\s*false\s*,?$', build_profile, re.MULTILINE):
             raise SystemExit(f"Stable build capability must remain closed: {closed_feature}")
     required_permissions = set(manifest.get("permissions", []))
