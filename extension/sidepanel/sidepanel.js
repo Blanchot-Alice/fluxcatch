@@ -547,7 +547,6 @@ function announceJobChange(previous, current) {
 function mediaChips(item) {
   const stream = isStreamKind(item);
   const chips = [{ label: streamTypeLabel(item), className: stream ? "stream" : "" }];
-  if (item.recommended) chips.push({ label: "推荐", className: "quality" });
   if (item.height) chips.push({ label: `${item.height}p`, className: "quality" });
   const grouped = Array.isArray(item.variants) && item.variants.length > 0;
   if (item.trackHints

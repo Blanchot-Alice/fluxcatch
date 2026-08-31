@@ -392,6 +392,7 @@ function setManifestLoadingForItem(item, loading) {
 function manifestDownloadBlockReason(probe) {
   if (probe?.kind === "hls") {
     if (probe.protection === "drm" || probe.protected) return "检测到 DRM/SAMPLE-AES 内容保护，仅显示媒体信息。";
+    if (probe.protection === "aes128" || probe.encrypted) return "当前版本暂不支持 AES-128 加密的 HLS 下载。";
     if (probe.type === "media" && probe.live) return "当前版本暂不支持 HLS 直播录制。";
     if (probe.discontinuity) return "当前版本暂不支持包含时间线切换的 HLS 下载。";
   }
@@ -761,7 +762,6 @@ async function call(message) {
 function mediaChips(item) {
   const stream = isStreamKind(item);
   const values = [{ text: streamTypeLabel(item), cls: stream ? "hls" : "fmt" }];
-  if (item.recommended) values.push({ text: "推荐", cls: "live" });
   if (item.site && SITE_LABELS[item.site]) values.push({ text: SITE_LABELS[item.site], cls: "fmt" });
   if (item.height) values.push({ text: `${item.height}p`, cls: "hd" });
   if (item.trackHints
