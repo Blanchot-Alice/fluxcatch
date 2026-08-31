@@ -9,7 +9,9 @@
 *本地优先的媒体检测与获取引擎 · macOS + Chrome*
 
 一款基于 Manifest V3 的静默观察者。
+
 顺着页面自身的呼吸，捕获自然流淌的直链、HLS 与 DASH；借由策略受控的本地引擎，将流动的光影沉淀为确定的实体。
+
 无云端驻留，无中继介入。除却你目光停留的原点，你的字节不渡他方。
 
 [![Version](https://img.shields.io/badge/version-0.2.5-5E8F84?style=flat-square)](https://github.com/Blanchot-Alice/fluxcatch/releases)
