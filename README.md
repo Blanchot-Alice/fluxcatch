@@ -63,9 +63,9 @@ identity, privacy boundaries and local capabilities in one honest reading flow.
 
 | Popup | Side Panel | Download dialog |
 | :---: | :---: | :---: |
-| ![popup](docs/assets/popup.png) | ![sidepanel](docs/assets/sidepanel.png) | ![dialog](docs/assets/hls-download-dialog.png) |
+| ![popup](docs/assets/en/popup.png) | ![sidepanel](docs/assets/en/sidepanel.png) | ![dialog](docs/assets/en/hls-download-dialog.png) |
 
-![FluxCatch Settings](docs/assets/options.png)
+![FluxCatch Settings](docs/assets/en/options.png)
 
 All three surfaces share packaged design tokens with keyboard operation,
 visible focus, dark mode, narrow widths, and `prefers-reduced-motion`.
