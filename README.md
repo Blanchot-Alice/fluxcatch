@@ -2,7 +2,7 @@
 
 <img src="docs/assets/icon.png" width="110" alt="FluxCatch logo" />
 
-# FluxCatch
+# FluxCatch - A Local Download Helper
 
 **Keep What You See.**
 
