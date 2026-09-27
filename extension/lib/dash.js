@@ -12,6 +12,7 @@ export function parseDash(text, manifestUrl) {
   const rootBase = doc.querySelector(":scope > BaseURL")?.textContent?.trim();
   const baseUrl = rootBase ? resolveUrl(rootBase, manifestUrl) : manifestUrl;
   const representations = [];
+  let representationIndex = 0;
   for (const adaptation of doc.querySelectorAll("AdaptationSet")) {
     const adaptationMime = adaptation.getAttribute("mimeType") || "";
     const adaptationCodecs = adaptation.getAttribute("codecs") || "";
@@ -20,6 +21,7 @@ export function parseDash(text, manifestUrl) {
     for (const rep of adaptation.querySelectorAll(":scope > Representation")) {
       const repBase = rep.querySelector(":scope > BaseURL")?.textContent?.trim();
       representations.push({
+        index: representationIndex++,
         id: rep.getAttribute("id") || "",
         mime: rep.getAttribute("mimeType") || adaptationMime,
         codecs: rep.getAttribute("codecs") || adaptationCodecs,
@@ -44,11 +46,13 @@ function parseDashPortable(text, manifestUrl) {
   if (!/<MPD\b/i.test(source)) throw new Error("这不是有效的 DASH MPD");
   const representations = [];
   const repRe = /<Representation\b([^>]*)>([\s\S]*?)<\/Representation>|<Representation\b([^>]*)\/>/gi;
+  let representationIndex = 0;
   for (const match of source.matchAll(repRe)) {
     const attrs = attributes(match[1] || match[3] || "");
     const body = match[2] || "";
     const base = body.match(/<BaseURL[^>]*>([^<]+)<\/BaseURL>/i)?.[1]?.trim();
     representations.push({
+      index: representationIndex++,
       id: attrs.id || "",
       mime: attrs.mimeType || "",
       codecs: attrs.codecs || "",

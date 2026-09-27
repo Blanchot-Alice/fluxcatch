@@ -270,6 +270,8 @@ const EN_CATALOG = {
   "媒体清单超出大小限制": "The media manifest exceeds the size limit",
   "所选清晰度已失效，请重新读取清晰度": "The selected quality is stale; read the qualities again",
   "所选清晰度无效，请重新读取清晰度": "Invalid quality selection; read the qualities again",
+  "所选 DASH 清晰度无效，请重新读取清晰度": "Invalid DASH quality selection; read the qualities again",
+  "所选 DASH 清晰度已失效，请重新读取清晰度": "The selected DASH quality is stale; read the qualities again",
   "所选清晰度无效，请重新选择": "Invalid quality selection; choose again",
   "所选清晰度已更新，请重新开始下载": "The selected quality changed; start the download again",
   "视频清晰度地址已过期，请重新扫描页面": "The video quality address expired; rescan the page",
