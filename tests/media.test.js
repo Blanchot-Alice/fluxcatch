@@ -183,6 +183,7 @@ test("portable DASH parser extracts representations", () => {
   const parsed = parseDash(`<?xml version="1.0"?><MPD type="static"><Period><AdaptationSet mimeType="video/mp4"><Representation id="v1" mimeType="video/mp4" codecs="avc1.4d401f" bandwidth="2200000" width="1280" height="720"><BaseURL>video.mp4</BaseURL></Representation></AdaptationSet></Period></MPD>`, "https://cdn.test/manifest.mpd");
   assert.equal(parsed.type, "static");
   assert.equal(parsed.representations.length, 1);
+  assert.equal(parsed.representations[0].index, 0);
   assert.equal(parsed.representations[0].height, 720);
   assert.equal(parsed.representations[0].url, "https://cdn.test/video.mp4");
 });

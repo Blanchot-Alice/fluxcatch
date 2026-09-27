@@ -986,6 +986,27 @@ class HostTests(unittest.TestCase):
         repeated_video = next(track for track in host.plan_static_dash(repeated, f"{self.base}/dash/out.mpd") if track.kind == "video")
         self.assertEqual(len(repeated_video.resources), 4)  # init plus three seconds.
 
+    def test_static_dash_planner_honors_selected_video_representation(self):
+        selected_mpd = DASH_MPD.decode().replace(
+            '    </AdaptationSet>\n    <AdaptationSet contentType="audio">',
+            '''      <Representation id="2" bandwidth="120000" width="1280" height="720">
+        <SegmentTemplate timescale="12288" initialization="init-stream$RepresentationID$.m4s" media="chunk-stream$RepresentationID$-$Number%05d$.m4s" startNumber="1">
+          <SegmentTimeline><S t="0" d="36864"/></SegmentTimeline>
+        </SegmentTemplate>
+      </Representation>
+    </AdaptationSet>
+    <AdaptationSet contentType="audio">''',
+        )
+        video = next(
+            track for track in host.plan_static_dash(
+                selected_mpd,
+                f"{self.base}/dash/out.mpd",
+                selected_representation_index=1,
+            ) if track.kind == "video"
+        )
+        self.assertTrue(all("stream2" in resource.url for resource in video.resources))
+        self.assertEqual(video.height, 720)
+
     def test_static_dash_segment_list_and_drm_fail_closed(self):
         segment_list = '''<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static" mediaPresentationDuration="PT2S"><Period><AdaptationSet contentType="video"><SegmentList><Initialization sourceURL="init.mp4"/><SegmentURL media="one.m4s"/><SegmentURL media="two.m4s" mediaRange="10-19"/></SegmentList><Representation id="v" bandwidth="100"/></AdaptationSet></Period></MPD>'''
         track = host.plan_static_dash(segment_list, f"{self.base}/dash/list.mpd")[0]

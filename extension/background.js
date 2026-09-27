@@ -1623,6 +1623,7 @@ async function addCandidate(tabId, input, commitGuard = null) {
     variantGroupInto: old?.variantGroupInto || null,
     manifestVariantSelectors: old?.manifestVariantSelectors instanceof Map ? old.manifestVariantSelectors : new Map(),
     manifestVariantSelectorsByUrl: old?.manifestVariantSelectorsByUrl instanceof Map ? old.manifestVariantSelectorsByUrl : new Map(),
+    dashRepresentationSelectors: old?.dashRepresentationSelectors instanceof Map ? old.dashRepresentationSelectors : new Map(),
     aliases: Array.isArray(old?.aliases) ? old.aliases : [],
     manifestText: typeof input.manifestText === "string" && input.manifestText.length <= 1_500_000 ? input.manifestText : old?.manifestText || null,
     pairedAudioUrl,
@@ -2588,7 +2589,7 @@ async function readResponseTextLimited(response, maxBytes) {
   const reader = response.body?.getReader?.();
   if (!reader) {
     const text = await response.text();
-    if (text.length > maxBytes) throw new Error("媒体清单超出大小限制");
+    if (new TextEncoder().encode(text).byteLength > maxBytes) throw new Error("媒体清单超出大小限制");
     return text;
   }
   const decoder = new TextDecoder();
@@ -2647,6 +2648,44 @@ function resolveManifestVariantSelector(candidate, value) {
   return selected;
 }
 
+function dashRepresentationSelector(candidate, representation) {
+  const candidateId = cleanText(candidate?.id, 64);
+  const index = Number(representation?.index);
+  if (!candidateId || !Number.isSafeInteger(index) || index < 0) return null;
+  if (!(candidate.dashRepresentationSelectors instanceof Map)) {
+    candidate.dashRepresentationSelectors = new Map();
+  }
+  const existing = [...candidate.dashRepresentationSelectors.entries()]
+    .find(([, value]) => value === index)?.[0];
+  if (existing) return existing;
+  let selector;
+  do {
+    selector = `${MANIFEST_SELECTOR_ORIGIN}/dash/${encodeURIComponent(candidateId)}/${randomOpaqueId()}`;
+  } while (candidate.dashRepresentationSelectors.has(selector));
+  candidate.dashRepresentationSelectors.set(selector, index);
+  while (candidate.dashRepresentationSelectors.size > MAX_MANIFEST_SELECTOR_MAPPINGS) {
+    const oldSelector = candidate.dashRepresentationSelectors.keys().next().value;
+    if (!oldSelector) break;
+    candidate.dashRepresentationSelectors.delete(oldSelector);
+  }
+  return selector;
+}
+
+function resolveDashRepresentationSelector(candidate, value) {
+  if (typeof value !== "string" || !value.trim()) return null;
+  const selector = canonicalizeUrl(value);
+  if (!selector || !selector.startsWith(`${MANIFEST_SELECTOR_ORIGIN}/dash/`)) {
+    throw new Error("所选 DASH 清晰度无效，请重新读取清晰度");
+  }
+  const index = candidate?.dashRepresentationSelectors instanceof Map
+    ? candidate.dashRepresentationSelectors.get(selector)
+    : null;
+  if (!Number.isSafeInteger(index) || index < 0) {
+    throw new Error("所选 DASH 清晰度已失效，请重新读取清晰度");
+  }
+  return index;
+}
+
 function probeForUi(probe, candidate) {
   if (probe.kind === "hls") {
     const variants = (probe.variants || []).slice(0, 200).map((item) => ({
@@ -2695,21 +2734,29 @@ function probeForUi(probe, candidate) {
     }
     return result;
   }
+  const representations = (probe.representations || [])
+    .filter((item) => String(item.mime || "").toLowerCase().startsWith("video/") || positive(item.height))
+    .slice(0, 300).map((item) => ({
+    id: cleanText(item.id, 120),
+    mime: cleanText(item.mime, 180),
+    codecs: cleanText(item.codecs, 180),
+    bandwidth: positive(item.bandwidth) || 0,
+    width: positive(item.width),
+    height: positive(item.height),
+    frameRate: cleanText(item.frameRate, 80),
+    url: dashRepresentationSelector(candidate, item)
+    })).filter((item) => item.url);
   return {
     kind: "dash",
     type: cleanText(probe.type, 32) || "static",
     duration: cleanText(probe.duration, 80) || null,
     protected: Boolean(probe.protected),
-    representations: (probe.representations || []).slice(0, 300).map((item) => ({
-      id: cleanText(item.id, 120),
-      mime: cleanText(item.mime, 180),
-      codecs: cleanText(item.codecs, 180),
-      bandwidth: positive(item.bandwidth) || 0,
-      width: positive(item.width),
-      height: positive(item.height),
-      frameRate: cleanText(item.frameRate, 80),
-      url: manifestVariantSelector(candidate, item.url)
-    }))
+    // The popup uses the same quality selector for HLS and DASH. The native
+    // host receives the opaque representation selector and resolves it against
+    // the freshly fetched MPD, so no segment URL or signed BaseURL crosses the
+    // extension/UI boundary.
+    variants: representations,
+    representations
   };
 }
 
@@ -2874,7 +2921,12 @@ async function startDownload(candidate, options, tabId) {
   // opt those final browser exceptions into the pinned native path as well.
   const advanced = candidate.kind === "hls" || candidate.kind === "dash" || candidate.kind === "dash_pair" || candidate.kind === "youtube"
     || opts.extractAudio || opts.convert || opts.useNativeForDirect || !browserDirectEligible;
-  const requestedVariantUrl = dashPair ? null : resolveManifestVariantSelector(candidate, options.variantUrl);
+  const requestedVariantUrl = dashPair || candidate.kind === "dash"
+    ? null
+    : resolveManifestVariantSelector(candidate, options.variantUrl);
+  const requestedDashRepresentationIndex = dashPair || candidate.kind !== "dash"
+    ? null
+    : resolveDashRepresentationSelector(candidate, options.variantUrl);
   if (requestedVariantUrl) {
     requireNetworkRequest({
       url: requestedVariantUrl,
@@ -3042,6 +3094,7 @@ async function startDownload(candidate, options, tabId) {
         convert: Boolean(opts.convert),
         liveDuration: Number(opts.liveDuration || 0),
         variantUrl: nativeVariantUrl,
+        representationIndex: requestedDashRepresentationIndex,
         audioUrl: nativeAudioUrl,
         audioHeaders,
         expiresAt: dashPair?.expiresAt || null,

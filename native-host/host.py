@@ -2051,7 +2051,12 @@ def _dash_representation_track(
     )
 
 
-def plan_static_dash(text: str, manifest_url: str) -> list[DashTrack]:
+def plan_static_dash(
+    text: str,
+    manifest_url: str,
+    *,
+    selected_representation_index: int | None = None,
+) -> list[DashTrack]:
     root = _parse_dash_root(text)
     if any(_xml_name(element) == "ContentProtection" for element in root.iter()):
         raise DownloadError("Protected DASH is metadata-only")
@@ -2067,7 +2072,7 @@ def plan_static_dash(text: str, manifest_url: str) -> list[DashTrack]:
     adaptations = _xml_children(period, "AdaptationSet")
     if len(adaptations) > MAX_DASH_ADAPTATION_SETS:
         raise UnsupportedDashError("DASH MPD exceeds the AdaptationSet limit")
-    candidates: dict[str, list[tuple[ET.Element, ET.Element]]] = {"video": [], "audio": []}
+    candidates: dict[str, list[tuple[ET.Element, ET.Element, int]]] = {"video": [], "audio": []}
     errors: dict[str, list[str]] = {"video": [], "audio": [], "unknown": []}
     declared_kinds: set[str] = set()
     representation_count = 0
@@ -2076,12 +2081,13 @@ def plan_static_dash(text: str, manifest_url: str) -> list[DashTrack]:
         representation_count += len(representations)
         if representation_count > MAX_DASH_REPRESENTATIONS:
             raise UnsupportedDashError("DASH MPD exceeds the Representation limit")
-        for representation in representations:
+        for local_index, representation in enumerate(representations):
+            current_index = representation_count - len(representations) + local_index
             mime = (representation.get("mimeType") or adaptation.get("mimeType") or "").lower()
             declared_kind = (adaptation.get("contentType") or mime.split("/", 1)[0]).lower()
             if declared_kind in {"video", "audio"}:
                 declared_kinds.add(declared_kind)
-                candidates[declared_kind].append((adaptation, representation))
+                candidates[declared_kind].append((adaptation, representation, current_index))
             else:
                 errors["unknown"].append(f"unsupported DASH representation type: {declared_kind or 'unknown'}")
 
@@ -2102,8 +2108,13 @@ def plan_static_dash(text: str, manifest_url: str) -> list[DashTrack]:
         if kind not in declared_kinds:
             continue
         ordered = sorted(candidates[kind], key=lambda item: score(kind, item[1]), reverse=True)
+        if kind == "video" and selected_representation_index is not None:
+            requested = [item for item in ordered if item[2] == selected_representation_index]
+            if not requested:
+                raise UnsupportedDashError("selected DASH video Representation is no longer present")
+            ordered = requested
         selected_track: DashTrack | None = None
-        for adaptation, representation in ordered:
+        for adaptation, representation, _representation_index in ordered:
             try:
                 selected_track = _dash_representation_track(
                     manifest_url,
@@ -2283,8 +2294,13 @@ def dash_static_download(
     ffmpeg: str,
     *,
     extract_audio: bool = False,
+    selected_representation_index: int | None = None,
 ) -> Path:
-    tracks = plan_static_dash(manifest, manifest_url)
+    tracks = plan_static_dash(
+        manifest,
+        manifest_url,
+        selected_representation_index=selected_representation_index,
+    )
     authorize_network_urls(
         (resource.url for track in tracks for resource in track.resources),
         purpose="DASH manifest child",
@@ -3461,6 +3477,16 @@ class Host:
                 if dash_is_protected(dash_manifest.text):
                     raise DownloadError("Protected DASH is metadata-only")
                 try:
+                    requested_representation_index = None
+                    if options.get("representationIndex") is not None:
+                        bounded_index = bounded_int(
+                            options.get("representationIndex"),
+                            0,
+                            MAX_DASH_REPRESENTATIONS - 1,
+                            -1,
+                        )
+                        if bounded_index >= 0:
+                            requested_representation_index = bounded_index
                     # Always download MPD children through the pinned native
                     # client, then give FFmpeg local files only.  Availability
                     # of FFmpeg's own DASH demuxer never weakens this boundary.
@@ -3474,6 +3500,7 @@ class Host:
                         progress,
                         self.ffmpeg,
                         extract_audio=extract_audio,
+                        selected_representation_index=requested_representation_index,
                     )
                 except UnsupportedDashError as error:
                     raise _dash_demuxer_error(self.ffmpeg_capabilities, str(error)) from error
