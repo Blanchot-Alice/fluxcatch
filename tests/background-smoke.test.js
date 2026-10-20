@@ -332,6 +332,22 @@ test("MV3 worker registers network and message listeners during module load", as
             throw new Error("fixture native dispatch failure");
           }
           nativeOutgoing.push(message);
+          // The real engine answers every file action with a correlated
+          // result; the fixture confirms them so the worker's promise settles.
+          if (["reveal", "open", "open_folder", "trash", "stat"].includes(message.type)) queueMicrotask(() => nativeOnMessage.listeners[0]?.fn({
+            type: "file_action_result",
+            requestId: message.requestId,
+            action: message.type,
+            ok: true,
+            items: message.type === "stat" ? (message.paths || []).map((item) => ({ path: item, exists: true, size: 1, mtime: 0 })) : undefined
+          }));
+          if (message.type === "choose_folder") queueMicrotask(() => nativeOnMessage.listeners[0]?.fn({
+            type: "file_action_result",
+            requestId: message.requestId,
+            action: "choose_folder",
+            ok: true,
+            downloadDir: message.reset ? "/Users/private/Downloads/FluxCatch" : "/Users/private/Movies/FluxCatch"
+          }));
           if (message.type === "ping") queueMicrotask(() => nativeOnMessage.listeners[0]?.fn({
             type: "pong",
             requestId: message.requestId,
@@ -353,6 +369,7 @@ test("MV3 worker registers network and message listeners during module load", as
               ytdlp: { available: true, networkDisabled: false, path: "/Users/private/YTDLP_PATH", version: "2026.08", probeError: "YTDLP_PROBE_SECRET" },
               dashPlanner: "static-v1",
               dashPair: "direct-v1",
+              pause: "resume-v1",
               future: "HOST_CAPABILITY_FUTURE"
             },
             future: "HOST_PONG_FUTURE"
@@ -965,6 +982,24 @@ test("MV3 worker registers network and message listeners during module load", as
   const existingDash = (await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 11 })).items.find((item) => item.kind === "dash");
   assert.equal(existingDash?.thumbnailUrl, "https://page.example.test/existing-dash.jpg", "existing DASH candidates receive later page previews");
 
+  // A page's own URL is a document, never a media object: players and page
+  // metadata occasionally point there (embed fallback, pre-MSE src), and
+  // saving that response writes the HTML page out as a media file.
+  tabFixtures.set(52, { id: 52, title: "Self URL Fixture", url: "https://self.example.test/watch/52" });
+  const selfUrlSender = {
+    id: extensionId,
+    url: "https://self.example.test/watch/52",
+    frameId: 0,
+    tab: { id: 52, url: "https://self.example.test/watch/52", title: "Self URL Fixture" }
+  };
+  const selfUrlReport = await sendRuntimeMessage({
+    type: "CONTENT_MEDIA",
+    data: { url: "https://self.example.test/watch/52", mime: "video/mp4", contentLength: 5_000_000, source: "metadata" }
+  }, selfUrlSender);
+  assert.equal(selfUrlReport.ignored, true, "a candidate whose URL is the page itself is never accepted");
+  assert.deepEqual((await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 52 })).items, [],
+    "no self-referential page card appears in the media list");
+
   await sendRuntimeMessage({
     type: "PAGE_PREVIEW",
     data: { thumbnailUrl: "https://page.example.test/twitter.jpg", source: "twitter:image" }
@@ -1320,9 +1355,10 @@ test("MV3 worker registers network and message listeners during module load", as
   }
   const aesProbe = await sendRuntimeMessage({ type: "PROBE_MANIFEST", tabId: 14, candidate: aesCandidate });
   assert.equal(aesProbe.probe.protection, "aes128");
-  const aesDownload = await sendRuntimeMessage({ type: "DOWNLOAD", tabId: 14, candidate: aesCandidate, options: {} });
-  assert.equal(aesDownload.ok, false, "AES-128 HLS is metadata-only in 0.2.5");
-  assert.match(aesDownload.error, /0\.2\.5.*AES-128/);
+  assert.equal(aesProbe.probe.encrypted, true);
+  // AES-128 is ordinary transport encryption: it downloads like any other
+  // media playlist instead of being metadata-only. The download itself is
+  // exercised after the native engine is fully authorized further below.
 
   const redirectManifest = "https://security.example.test/private-redirect.m3u8";
   manifestFixtures.set(redirectManifest, {
@@ -1535,6 +1571,7 @@ test("MV3 worker registers network and message listeners during module load", as
 
   const trustedSender = { id: extensionId, url: `chrome-extension://${extensionId}/sidepanel/sidepanel.html` };
   nativePermission = true;
+  const connectCallsBeforeApiAbsence = nativeConnectCalls;
   globalThis.chrome.runtime.connectNative = undefined;
   const unavailableNativeApi = await sendRuntimeMessage({ type: "PING_HOST" }, trustedSender);
   assert.equal(unavailableNativeApi.ok, true, "PING_HOST reports an unavailable Chrome API as status instead of a raw exception");
@@ -1545,7 +1582,7 @@ test("MV3 worker registers network and message listeners during module load", as
   assert.match(unavailableNativeApi.hostStatus.lastError, /正在初始化连接接口/);
   assert.doesNotMatch(unavailableNativeApi.hostStatus.lastError, /重新加载 FluxCatch|完全退出/);
   assert.doesNotMatch(JSON.stringify(unavailableNativeApi), /TypeError|connectNative is not a function/i);
-  assert.equal(nativeConnectCalls, 0, "an absent nativeMessaging API never attempts a native connection");
+  assert.equal(nativeConnectCalls, connectCallsBeforeApiAbsence, "an absent nativeMessaging API never attempts a native connection");
 
   const recovery = await sendRuntimeMessage({ type: "RECOVER_NATIVE_API" }, trustedSender);
   assert.equal(recovery.ok, true);
@@ -1559,11 +1596,12 @@ test("MV3 worker registers network and message listeners during module load", as
   const restoreNativeBinding = setTimeout(() => {
     globalThis.chrome.runtime.connectNative = nativeConnectFixture;
   }, 75);
+  const connectCallsBeforeRebind = nativeConnectCalls;
   const pingResponses = await Promise.all([1, 2].map(() => new Promise((resolve) => {
     onMessage.listeners[0].fn({ type: "PING_HOST" }, trustedSender, resolve);
   })));
   clearTimeout(restoreNativeBinding);
-  assert.equal(nativeConnectCalls, 1, "concurrent PING_HOST requests share one native connection");
+  assert.equal(nativeConnectCalls, connectCallsBeforeRebind + 1, "concurrent PING_HOST requests share one native connection");
   assert.equal(globalThis.chrome.runtime.connectNative, nativeConnectFixture, "a delayed native API binding becomes usable without a second user action");
   assert.ok(pingResponses.every((response) => response.ok && response.hostStatus.connected), "PING_HOST waits for pong before reporting status");
   assert.ok(pingResponses.every((response) => response.hostStatus.capabilities?.ffmpeg?.available));
@@ -1671,34 +1709,57 @@ test("MV3 worker registers network and message listeners during module load", as
   assert.doesNotMatch(JSON.stringify(uiMessages), /COMPLETE_PATH_SECRET|COMPLETE_FUTURE_SECRET|\/Users\/private/,
     "native completion paths and future fields never reach popup or side panel ports");
 
-  // ===== Default-on enrichment still requires a trusted Bilibili media
-  // request. Page completion stays passive; playback/preload starts one
-  // cooldown-limited fixed-site attempt and completes the badge. =====
+  // The AES-128 candidate downloads once the native engine is authorized:
+  // probe accepted it (only DRM/SAMPLE-AES stays closed), the dispatch is a
+  // plain HLS job, and the signed playlist reaches the pinned engine.
+  const aesDownload = await sendRuntimeMessage({ type: "DOWNLOAD", tabId: 14, candidate: aesCandidate, options: { filename: "aes-vod.mp4" } });
+  assert.equal(aesDownload.ok, true, `AES-128 HLS downloads through the native engine: ${aesDownload.error}`);
+  assert.equal(aesDownload.method, "native");
+  const aesNativeMessage = nativeOutgoing.find((message) => message.type === "download" && message.jobId === aesDownload.jobId);
+  assert.equal(aesNativeMessage.mediaKind, "hls");
+  assert.equal(aesNativeMessage.url, aesManifest);
+  nativeOnMessage.listeners[0].fn({
+    type: "complete",
+    jobId: aesDownload.jobId,
+    filename: "/Users/private/aes-vod.mp4",
+    status: "completed",
+    progress: 1,
+    size: 1_000_000
+  });
+
+  // ===== Opening a Bilibili video page lights the badge right away (product
+  // behavior). Page completion starts one cookie-scoped, cooldown-limited
+  // playurl lookup, and a later playback request must be merged by the
+  // success TTL instead of hitting the fixed API a second time. =====
   const badgeCountFor = (tabId) => badgeUpdates.filter((item) => item.tabId === tabId).length;
   const badgeBefore = badgeCountFor(29);
-  const metadataFetchesBefore = manifestFetches.filter((item) => item.url.startsWith("https://api.bilibili.com/")).length;
-  onTabUpdated.listeners[0].fn(29, { status: "complete" });
-  await new Promise((resolve) => setTimeout(resolve, 10));
-  assert.equal(badgeCountFor(29), badgeBefore, "page completion alone does not synthesize an enriched candidate");
-  assert.equal(
-    manifestFetches.filter((item) => item.url.startsWith("https://api.bilibili.com/")).length,
-    metadataFetchesBefore,
-    "default-on enrichment waits for a trusted media request"
-  );
+  assert.equal(badgeBefore, 0, "the fixture tab starts with an unpainted badge");
   automaticBiliFetchDelayMs = 1_500;
-  const automaticBadgeStartedAt = Date.now();
-  observeBiliTrack("auto-badge-playback", 29, biliAvVideo, "auto-badge-document");
+  const pageCompleteStartedAt = Date.now();
+  onTabUpdated.listeners[0].fn(29, { status: "complete" });
   for (let attempt = 0; attempt < 650; attempt += 1) {
-    const badge = badgeUpdates.filter((item) => item.tabId === 29).at(-1);
-    const fetchedPlayback = manifestFetches.some((item) => item.url.includes("playurl?avid=99999"));
-    if (badge?.text === "1" && fetchedPlayback) break;
+    if (badgeUpdates.filter((item) => item.tabId === 29).at(-1)?.text === "1") break;
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
-  assert.ok(Date.now() - automaticBadgeStartedAt <= 3_000, "the delayed Bilibili metadata fixture still paints its badge within three seconds");
+  assert.ok(Date.now() - pageCompleteStartedAt <= 3_000, "opening a Bilibili video page paints its badge within three seconds");
   assert.ok(
-    !manifestFetches.some((item) => item.url.includes("pagelist?avid=99999"))
+    manifestFetches.some((item) => item.url.includes("pagelist?avid=99999"))
       && manifestFetches.some((item) => item.url.includes("playurl?avid=99999&cid=88001")),
-    "a trusted Bilibili media request derives its cid locally and uses one fixed playback metadata request"
+    "page completion performs one read-only cookie-scoped ladder lookup"
+  );
+  assert.equal(
+    manifestFetches.filter((item) => item.url.startsWith("https://api.bilibili.com/")).every((item) => item.credentials === "include"),
+    true,
+    "the page-complete lookup still only uses the page's own cookie jar"
+  );
+  assert.equal(badgeUpdates.filter((item) => item.tabId === 29).at(-1)?.text, "1");
+  const playbackFetchesBefore = manifestFetches.filter((item) => item.url.startsWith("https://api.bilibili.com/")).length;
+  observeBiliTrack("auto-badge-playback", 29, biliAvVideo, "auto-badge-document");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(
+    manifestFetches.filter((item) => item.url.startsWith("https://api.bilibili.com/")).length,
+    playbackFetchesBefore,
+    "playback after a page-complete discovery is merged by the success TTL, not re-queried"
   );
   assert.equal(
     badgeUpdates.filter((item) => item.tabId === 29).at(-1)?.text,
@@ -1746,6 +1807,593 @@ test("MV3 worker registers network and message listeners during module load", as
     staleAutomaticFetchesBefore,
     "a trusted request from the prior SPA generation cannot trigger metadata discovery for the next page"
   );
+
+  // ===== Generic stream aggregation (the VDH-style layer): two large
+  // same-document MSE segments from an unknown site pair into one
+  // downloadable candidate purely from runtime signals — no site naming
+  // contract, no fixed-site API. =====
+  tabFixtures.set(45, { id: 45, title: "Generic Stream Fixture", url: "https://stream.example.test/watch/45" });
+  const genericVideoUrl = "https://cdn.stream.example.test/videos/45/1080.m4s?sig=GENERIC_VIDEO_SIG";
+  const genericVideo1440Url = "https://cdn.stream.example.test/videos/45/1440.m4s?sig=GENERIC_1440_SIG";
+  const genericAudioUrl = "https://cdn.stream.example.test/videos/45/audio.m4s?sig=GENERIC_AUDIO_SIG";
+  const genericSmallUrl = "https://cdn.stream.example.test/videos/45/thumbnail.m4s?sig=GENERIC_SMALL_SIG";
+  const genericRequest = (requestId, url, mime, size, { requestRange = false } = {}) => {
+    onBeforeSendHeaders.listeners[0].fn({
+      requestId, tabId: 45, url, type: "xmlhttprequest", documentId: "generic-doc-45", frameId: 0,
+      initiator: "https://stream.example.test",
+      requestHeaders: [
+        { name: "Referer", value: "https://stream.example.test/watch/45" },
+        { name: "User-Agent", value: "FluxCatch fixture UA" },
+        ...(requestRange ? [{ name: "Range", value: "bytes=0-" }] : [])
+      ]
+    });
+    onHeadersReceived.listeners[0].fn({
+      requestId, tabId: 45, url, type: "xmlhttprequest", documentId: "generic-doc-45", frameId: 0,
+      responseHeaders: [
+        { name: "content-type", value: mime },
+        { name: "content-length", value: String(size) },
+        { name: "accept-ranges", value: "bytes" },
+        // Whole-object evidence: a ranged slice naming the full object size.
+        ...(requestRange ? [] : [{ name: "content-range", value: `bytes 0-${size - 1}/${size}` }])
+      ]
+    });
+  };
+  genericRequest("gen-small", genericSmallUrl, "video/mp4", 12_000);
+  genericRequest("gen-v", genericVideoUrl, "video/mp4", 24_000_000);
+  genericRequest("gen-a", genericAudioUrl, "audio/mp4", 3_500_000, { requestRange: true });
+  genericRequest("gen-v-1440", genericVideo1440Url, "video/mp4", 42_000_000);
+  let genericMedia = null;
+  for (let attempt = 0; attempt < 160; attempt += 1) {
+    genericMedia = await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 45 });
+    if (genericMedia.items.length) break;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.equal(genericMedia.items.length, 1, "every same-document rendition pairs into one generic candidate card");
+  const genericCandidate = genericMedia.items[0];
+  assert.equal(genericCandidate.kind, "dash_pair");
+  assert.equal(genericCandidate.site, "generic");
+  assert.equal(genericCandidate.available, true);
+  assert.equal(genericCandidate.videoTrackCount, 2, "both streamed renditions live on one card as quality choices");
+  assert.equal(genericCandidate.audioTrackCount, 1);
+  assert.equal(genericCandidate.displayUrl, "https://stream.example.test/watch/45",
+    "the public candidate address is the page URL, never a signed CDN track");
+  assert.doesNotMatch(JSON.stringify(genericMedia), /GENERIC_VIDEO_SIG|GENERIC_AUDIO_SIG|GENERIC_SMALL_SIG/,
+    "signed generic track URLs stay out of the UI payload exactly like Bilibili's");
+  assert.doesNotMatch(JSON.stringify(sessionState.tabMedia), /GENERIC_VIDEO_SIG|GENERIC_AUDIO_SIG/,
+    "generic stream URLs are memory-only, never storage.session");
+  assert.equal(badgeUpdates.filter((item) => item.tabId === 45).at(-1)?.text, "1",
+    "the generic pair paints the badge with the downloadable count");
+  assert.ok(!badgeUpdates.filter((item) => item.tabId === 45).at(-1)?.text?.includes("0"),
+    "a generic pair never paints a zero-count badge");
+
+  // Default = the rendition the player streamed last (what the user watches).
+  const genericDownload = await sendRuntimeMessage({
+    type: "DOWNLOAD",
+    tabId: 45,
+    candidate: genericCandidate,
+    options: { filename: "generic-stream.mp4" }
+  });
+  assert.equal(genericDownload.ok, true, "a generic aggregated pair downloads through the native engine");
+  assert.equal(genericDownload.method, "native");
+  const genericNativeMessage = nativeOutgoing.find((message) => message.type === "download" && message.jobId === genericDownload.jobId);
+  assert.equal(genericNativeMessage.mediaKind, "dash_pair");
+  assert.equal(genericNativeMessage.url, genericVideo1440Url,
+    "the newest observed rendition is the default quality");
+  assert.equal(genericNativeMessage.options.audioUrl, genericAudioUrl);
+  assert.equal(genericNativeMessage.headers.referer, "https://stream.example.test/watch/45",
+    "generic downloads replay the page's own referer instead of a Bilibili one");
+  assert.equal(genericNativeMessage.options.audioHeaders.referer, "https://stream.example.test/watch/45");
+  assert.doesNotMatch(JSON.stringify({ headers: genericNativeMessage.headers, audioHeaders: genericNativeMessage.options.audioHeaders }),
+    /cookie|authorization|GENERIC_VIDEO_SIG|GENERIC_AUDIO_SIG|GENERIC_1440_SIG/i);
+  nativeOnMessage.listeners[0].fn({
+    type: "complete",
+    jobId: genericDownload.jobId,
+    filename: "/Users/private/generic-stream.mp4",
+    status: "completed",
+    progress: 1,
+    size: 45_500_000
+  });
+
+  // The quality dropdown: the probe exposes every streamed rendition as an
+  // opaque selector with a readable label, and choosing one redirects the
+  // transfer to that exact track.
+  const genericProbe = await sendRuntimeMessage({ type: "PROBE_MANIFEST", tabId: 45, candidate: genericCandidate });
+  assert.equal(genericProbe.ok, true);
+  assert.equal(genericProbe.probe.kind, "dash_pair");
+  assert.deepEqual(genericProbe.probe.variants.map((variant) => variant.name),
+    ["画质 1 · 40.1 MiB", "画质 2 · 22.9 MiB"],
+    "generic renditions are ranked by object size with readable labels");
+  assert.doesNotMatch(JSON.stringify(genericProbe), /GENERIC_VIDEO_SIG|GENERIC_AUDIO_SIG|GENERIC_1440_SIG/,
+    "probe selectors never disclose signed track URLs");
+  const genericPickedDownload = await sendRuntimeMessage({
+    type: "DOWNLOAD",
+    tabId: 45,
+    candidate: genericCandidate,
+    options: { filename: "generic-1080p.mp4", variantUrl: genericProbe.probe.variants[1].url }
+  });
+  assert.equal(genericPickedDownload.ok, true);
+  const genericPickedMessage = nativeOutgoing.find((message) => message.type === "download" && message.jobId === genericPickedDownload.jobId);
+  assert.equal(genericPickedMessage.url, genericVideoUrl,
+    "picking a quality in the dialog downloads that exact rendition");
+  assert.equal(genericPickedMessage.options.audioUrl, genericAudioUrl);
+  nativeOnMessage.listeners[0].fn({
+    type: "complete",
+    jobId: genericPickedDownload.jobId,
+    filename: "/Users/private/generic-1080p.mp4",
+    status: "completed",
+    progress: 1,
+    size: 27_500_000
+  });
+
+  // A video segment from a different document cannot pair with the first
+  // document's audio: it joins its own group, finds no audio, and the
+  // published candidate count stays at one.
+  onBeforeSendHeaders.listeners[0].fn({
+    requestId: "gen-v2", tabId: 45, url: "https://cdn.stream.example.test/videos/46/720.m4s?sig=OTHER_DOC_SIG",
+    type: "xmlhttprequest", documentId: "generic-doc-46", frameId: 0, initiator: "https://stream.example.test",
+    requestHeaders: []
+  });
+  onHeadersReceived.listeners[0].fn({
+    requestId: "gen-v2", tabId: 45, url: "https://cdn.stream.example.test/videos/46/720.m4s?sig=OTHER_DOC_SIG",
+    type: "xmlhttprequest", documentId: "generic-doc-46", frameId: 0,
+    responseHeaders: [
+      { name: "content-type", value: "video/mp4" },
+      { name: "content-length", value: "18000000" },
+      { name: "content-range", value: "bytes 0-17999999/18000000" }
+    ]
+  });
+  await new Promise((resolve) => setTimeout(resolve, 450));
+  assert.equal((await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 45 })).items.length, 1,
+    "a cross-document video never pairs with another document's audio");
+
+  // Once every video observation has expired (no refresh for two minutes),
+  // the published pair is withdrawn and the badge clears. Refreshing only the
+  // audio keeps the republish running under the shifted clock, where the
+  // video tracks are all past their TTL — a video-only republish.
+  const genericRealDateNow = Date.now;
+  Date.now = () => genericRealDateNow() + 3 * 60_000;
+  try {
+    onBeforeSendHeaders.listeners[0].fn({
+      requestId: "gen-audio-refresh", tabId: 45, url: genericAudioUrl,
+      type: "xmlhttprequest", documentId: "generic-doc-45", frameId: 0, initiator: "https://stream.example.test",
+      requestHeaders: []
+    });
+    onHeadersReceived.listeners[0].fn({
+      requestId: "gen-audio-refresh", tabId: 45, url: genericAudioUrl,
+      type: "xmlhttprequest", documentId: "generic-doc-45", frameId: 0,
+      responseHeaders: [
+        { name: "content-type", value: "audio/mp4" },
+        { name: "content-length", value: "3500000" },
+        { name: "content-range", value: "bytes 0-3499999/3500000" }
+      ]
+    });
+    await new Promise((resolve) => setTimeout(resolve, 450));
+  } finally {
+    Date.now = genericRealDateNow;
+  }
+  assert.equal((await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 45 })).items.length, 0,
+    "a video-only republish after the videos expired withdraws the stale pair");
+  assert.equal(badgeUpdates.filter((item) => item.tabId === 45).at(-1)?.text || "", "",
+    "withdrawing the last generic pair clears the badge count");
+
+  // ===== Segment-template players never become cards: thousands of distinct
+  // numbered files arrive as plain 200 GETs with no ranged evidence, so the
+  // aggregator's whole-object gate must refuse every one of them. =====
+  tabFixtures.set(46, { id: 46, title: "Segment Flood Fixture", url: "https://seg.example.test/watch/46" });
+  for (let index = 1; index <= 6; index += 1) {
+    const segUrl = `https://cdn.seg.example.test/dash/seg-${index}.m4s?token=SEG_${index}_SIG`;
+    onBeforeSendHeaders.listeners[0].fn({
+      requestId: `seg-flood-${index}`, tabId: 46, url: segUrl, type: "xmlhttprequest",
+      documentId: "seg-doc-46", frameId: 0, initiator: "https://seg.example.test",
+      requestHeaders: [{ name: "Referer", value: "https://seg.example.test/watch/46" }]
+    });
+    onHeadersReceived.listeners[0].fn({
+      requestId: `seg-flood-${index}`, tabId: 46, url: segUrl, type: "xmlhttprequest",
+      documentId: "seg-doc-46", frameId: 0,
+      responseHeaders: [
+        { name: "content-type", value: "video/mp4" },
+        { name: "content-length", value: "3000000" },
+        { name: "accept-ranges", value: "bytes" }
+      ]
+    });
+  }
+  await new Promise((resolve) => setTimeout(resolve, 450));
+  assert.deepEqual((await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 46 })).items, [],
+    "numbered segment files without ranged evidence never pose as renditions");
+
+  // ===== Strong inference: an opaque octet-stream object streamed beside a
+  // declared audio track (and no declared video) is the document's video
+  // track — the whole-object shape several DASH sites serve. =====
+  tabFixtures.set(47, { id: 47, title: "Opaque Video Fixture", url: "https://opaque.example.test/watch/47" });
+  const opaqueVideoUrl = "https://cdn.opaque.example.test/videos/47/video.m4s?sig=OPAQUE_VIDEO_SIG";
+  const opaqueAudioUrl = "https://cdn.opaque.example.test/videos/47/audio.m4s?sig=OPAQUE_AUDIO_SIG";
+  onBeforeSendHeaders.listeners[0].fn({
+    requestId: "opaque-v", tabId: 47, url: opaqueVideoUrl, type: "xmlhttprequest",
+    documentId: "opaque-doc-47", frameId: 0, initiator: "https://opaque.example.test",
+    requestHeaders: [{ name: "Referer", value: "https://opaque.example.test/watch/47" }]
+  });
+  onHeadersReceived.listeners[0].fn({
+    requestId: "opaque-v", tabId: 47, url: opaqueVideoUrl, type: "xmlhttprequest",
+    documentId: "opaque-doc-47", frameId: 0,
+    responseHeaders: [
+      { name: "content-type", value: "application/octet-stream" },
+      { name: "content-length", value: "60000000" },
+      { name: "content-range", value: "bytes 0-59999999/60000000" }
+    ]
+  });
+  onBeforeSendHeaders.listeners[0].fn({
+    requestId: "opaque-a", tabId: 47, url: opaqueAudioUrl, type: "xmlhttprequest",
+    documentId: "opaque-doc-47", frameId: 0, initiator: "https://opaque.example.test",
+    requestHeaders: [{ name: "Referer", value: "https://opaque.example.test/watch/47" }]
+  });
+  onHeadersReceived.listeners[0].fn({
+    requestId: "opaque-a", tabId: 47, url: opaqueAudioUrl, type: "xmlhttprequest",
+    documentId: "opaque-doc-47", frameId: 0,
+    responseHeaders: [
+      { name: "content-type", value: "audio/mp4" },
+      { name: "content-length", value: "4200000" },
+      { name: "content-range", value: "bytes 0-4199999/4200000" }
+    ]
+  });
+  let opaqueMedia = null;
+  for (let attempt = 0; attempt < 160; attempt += 1) {
+    opaqueMedia = await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 47 });
+    if (opaqueMedia.items.length) break;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.equal(opaqueMedia.items.length, 1, "an octet-stream video beside a declared audio track still pairs");
+  assert.equal(opaqueMedia.items[0].kind, "dash_pair");
+  assert.equal(opaqueMedia.items[0].videoTrackCount, 1);
+  assert.equal(opaqueMedia.items[0].audioTrackCount, 1);
+  assert.equal(badgeUpdates.filter((item) => item.tabId === 47).at(-1)?.text, "1");
+  const opaqueDownload = await sendRuntimeMessage({
+    type: "DOWNLOAD",
+    tabId: 47,
+    candidate: opaqueMedia.items[0],
+    options: { filename: "opaque.mp4" }
+  });
+  assert.equal(opaqueDownload.ok, true);
+  const opaqueNativeMessage = nativeOutgoing.find((message) => message.type === "download" && message.jobId === opaqueDownload.jobId);
+  assert.equal(opaqueNativeMessage.url, opaqueVideoUrl, "the inferred video track is the transferred URL");
+  assert.equal(opaqueNativeMessage.options.audioUrl, opaqueAudioUrl);
+
+  // ===== Without a declared audio track nothing is guessed, even with
+  // perfect ranged evidence: sizes alone must never invent a pairing. =====
+  tabFixtures.set(48, { id: 48, title: "No Signal Fixture", url: "https://nosignal.example.test/watch/48" });
+  for (const [name, size] of [["big", 80_000_000], ["small", 4_000_000]]) {
+    const url = `https://cdn.nosignal.example.test/videos/48/${name}.m4s?sig=NOSIGNAL_${name.toUpperCase()}_SIG`;
+    onBeforeSendHeaders.listeners[0].fn({
+      requestId: `nosignal-${name}`, tabId: 48, url, type: "xmlhttprequest",
+      documentId: "nosignal-doc-48", frameId: 0, initiator: "https://nosignal.example.test",
+      requestHeaders: []
+    });
+    onHeadersReceived.listeners[0].fn({
+      requestId: `nosignal-${name}`, tabId: 48, url, type: "xmlhttprequest",
+      documentId: "nosignal-doc-48", frameId: 0,
+      responseHeaders: [
+        { name: "content-type", value: "application/octet-stream" },
+        { name: "content-length", value: String(size) },
+        { name: "content-range", value: `bytes 0-${size - 1}/${size}` }
+      ]
+    });
+  }
+  await new Promise((resolve) => setTimeout(resolve, 450));
+  assert.deepEqual((await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 48 })).items, [],
+    "octet-stream objects with no declared audio track never pair by size alone");
+
+  // ===== DASH manifests align with the HLS flow end to end: detection,
+  // probe variants in the dialog's quality dropdown, and a chosen
+  // representation reaching the native planner as the preferred object. =====
+  tabFixtures.set(50, { id: 50, title: "MPD Fixture", url: "https://mpd.example.test/watch/50" });
+  const mpdUrl = "https://dash.example.test/stream.mpd";
+  manifestFixtures.set(mpdUrl, {
+    text: `<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static" mediaPresentationDuration="PT12S">
+ <Period>
+  <AdaptationSet mimeType="video/mp4">
+   <Representation id="v1080" codecs="avc1.640028" bandwidth="5000000" width="1920" height="1080"><BaseURL>v1080.m4s</BaseURL></Representation>
+   <Representation id="v720" codecs="avc1.64001f" bandwidth="2500000" width="1280" height="720"><BaseURL>v720.m4s</BaseURL></Representation>
+  </AdaptationSet>
+  <AdaptationSet mimeType="audio/mp4">
+   <Representation id="a128" codecs="mp4a.40.2" bandwidth="128000"><BaseURL>a128.m4s</BaseURL></Representation>
+  </AdaptationSet>
+ </Period>
+</MPD>`
+  });
+  onBeforeSendHeaders.listeners[0].fn({
+    requestId: "mpd-req", tabId: 50, url: mpdUrl, type: "xmlhttprequest",
+    documentId: "mpd-doc-50", frameId: 0, initiator: "https://mpd.example.test",
+    requestHeaders: [{ name: "Referer", value: "https://mpd.example.test/watch/50" }]
+  });
+  onHeadersReceived.listeners[0].fn({
+    requestId: "mpd-req", tabId: 50, url: mpdUrl, type: "xmlhttprequest",
+    documentId: "mpd-doc-50", frameId: 0,
+    responseHeaders: [{ name: "content-type", value: "application/dash+xml" }]
+  });
+  let mpdMedia = null;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    mpdMedia = await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 50 });
+    if (mpdMedia.items.length) break;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.equal(mpdMedia.items.length, 1);
+  assert.equal(mpdMedia.items[0].kind, "dash", "an .mpd response becomes a DASH candidate");
+  // The MPD is inspected automatically, like an HLS playlist: the card learns
+  // its best height without waiting for a download click, which is also what
+  // lets same-CDN segment files fold away.
+  let inspectedMpd = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    inspectedMpd = (await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 50 })).items[0];
+    if (inspectedMpd?.manifestProbeStatus === "parsed") break;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.equal(inspectedMpd?.manifestProbeStatus, "parsed", "DASH manifests are inspected automatically on detection");
+  assert.equal(inspectedMpd?.height, 1080, "the DASH card carries the ladder's best height");
+  const mpdProbe = await sendRuntimeMessage({ type: "PROBE_MANIFEST", tabId: 50, candidate: mpdMedia.items[0] });
+  assert.equal(mpdProbe.ok, true);
+  assert.equal(mpdProbe.probe.kind, "dash");
+  assert.deepEqual(mpdProbe.probe.variants.map((variant) => variant.height), [1080, 720],
+    "the DASH probe exposes the representation ladder to the dialog's quality dropdown");
+  assert.ok(mpdProbe.probe.variants.every((variant) => variant.url.startsWith("https://fluxcatch.invalid/manifest/") || variant.url.startsWith("https://fluxcatch.invalid/dash/")),
+    "DASH quality choices use opaque selectors (never signed BaseURLs) like HLS");
+  const mpdDownload720 = await sendRuntimeMessage({
+    type: "DOWNLOAD",
+    tabId: 50,
+    candidate: mpdMedia.items[0],
+    options: { filename: "mpd-720.mp4", variantUrl: mpdProbe.probe.variants[1].url }
+  });
+  assert.equal(mpdDownload720.ok, true);
+  const mpdNativeMessage = nativeOutgoing.find((message) => message.type === "download" && message.jobId === mpdDownload720.jobId);
+  assert.equal(mpdNativeMessage.url, mpdUrl, "the native planner still receives the manifest itself");
+  assert.equal(mpdNativeMessage.options.variantUrl, null, "DASH never forwards a signed BaseURL as a variant URL");
+  assert.equal(mpdNativeMessage.options.representationIndex, 1,
+    "the chosen quality reaches the native planner as the selected Representation index, resolved from the opaque selector");
+  nativeOnMessage.listeners[0].fn({
+    type: "complete",
+    jobId: mpdDownload720.jobId,
+    filename: "/Users/private/mpd-720.mp4",
+    status: "completed",
+    progress: 1,
+    size: 1_000_000,
+    path: "/Users/private/Downloads/FluxCatch/mpd-720.mp4",
+    downloadDir: "/Users/private/Downloads/FluxCatch",
+    media: { duration: 93.5, width: 1280, height: 720, container: "mov", videoCodec: "h264", audioCodec: "aac", probeError: "SECRET" },
+    thumbnail: "data:image/jpeg;base64,/9j/4AAQ",
+    elapsedMs: 4200
+  });
+  // ===== Durable history: an ended job is recorded with its media facts and
+  // poster frame, the local path stays worker-private, and the record can be
+  // removed again. =====
+  let historyAfterMpd = null;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    historyAfterMpd = await sendRuntimeMessage({ type: "GET_HISTORY" });
+    if ((historyAfterMpd.items || []).some((item) => item.jobId === mpdDownload720.jobId && item.status === "completed")) break;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  const mpdRecord = historyAfterMpd.items.find((item) => item.jobId === mpdDownload720.jobId);
+  assert.ok(mpdRecord, "a completed native job becomes a durable history record");
+  assert.equal(mpdRecord.filename, "mpd-720.mp4");
+  assert.equal(mpdRecord.size, 1_000_000);
+  assert.equal(mpdRecord.hasFile, true, "the record knows a file can be revealed");
+  assert.equal(mpdRecord.fileMissing, false);
+  assert.deepEqual(mpdRecord.media, { duration: 93.5, width: 1280, height: 720, container: "mov", videoCodec: "h264", audioCodec: "aac" }, "unknown media fields are dropped");
+  assert.equal(mpdRecord.thumbnail, "data:image/jpeg;base64,/9j/4AAQ");
+  assert.equal(mpdRecord.sourceHost, "mpd.example.test");
+  assert.equal(mpdRecord.message, "已保存到 FluxCatch 文件夹", "completion carries a user-facing message instead of a stale progress line");
+  assert.doesNotMatch(JSON.stringify(historyAfterMpd.items), /\/Users\/private/, "local file paths never reach UI records");
+  assert.equal(historyAfterMpd.downloadDir, "/Users/private/Downloads/FluxCatch", "only the engine's folder itself is shown, as the user's own setting");
+  assert.doesNotMatch(JSON.stringify(await sendRuntimeMessage({ type: "GET_JOBS" })), /\/Users\/private/, "job rows never carry the published path either");
+  const storedHistory = settingsState["downloadHistory.v1"];
+  assert.ok(Array.isArray(storedHistory) && storedHistory.some((item) => item.jobId === mpdDownload720.jobId && item.path === "/Users/private/Downloads/FluxCatch/mpd-720.mp4"),
+    "the path is persisted in extension-private storage so Finder actions work after a restart");
+  const mpdJobRow = (await sendRuntimeMessage({ type: "GET_JOBS" })).jobs.find((job) => job.jobId === mpdDownload720.jobId);
+  assert.equal(mpdJobRow.hasFile, true);
+  assert.equal(mpdJobRow.thumbnail, "data:image/jpeg;base64,/9j/4AAQ", "the popup row shows the poster frame");
+  const openWithoutPermission = await sendRuntimeMessage({ type: "FILE_ACTION", action: "open", jobId: mpdDownload720.jobId });
+  assert.equal(openWithoutPermission.ok, true, "with native permission granted the file action is forwarded to the engine");
+  assert.ok(nativeOutgoing.some((message) => message.type === "open" && message.path === "/Users/private/Downloads/FluxCatch/mpd-720.mp4"),
+    "the engine receives the exact published path");
+  const chosenFolder = await sendRuntimeMessage({ type: "CHOOSE_DOWNLOAD_FOLDER" });
+  assert.equal(chosenFolder.ok, true, chosenFolder.error);
+  assert.equal(chosenFolder.downloadDir, "/Users/private/Movies/FluxCatch", "the engine's picker result becomes the save location");
+  assert.ok(nativeOutgoing.some((message) => message.type === "choose_folder" && !message.reset));
+  assert.equal(chosenFolder.hostStatus.downloadDir, "/Users/private/Movies/FluxCatch",
+    "the public host status mirrors the new folder without waiting for the next pong");
+  const resetFolder = await sendRuntimeMessage({ type: "CHOOSE_DOWNLOAD_FOLDER", reset: true });
+  assert.equal(resetFolder.downloadDir, "/Users/private/Downloads/FluxCatch");
+  assert.ok(nativeOutgoing.some((message) => message.type === "choose_folder" && message.reset === true));
+  const removed = await sendRuntimeMessage({ type: "REMOVE_HISTORY", jobId: mpdDownload720.jobId });
+  assert.equal(removed.ok, true);
+  assert.equal(removed.removed, 1);
+  assert.ok(!(await sendRuntimeMessage({ type: "GET_HISTORY" })).items.some((item) => item.jobId === mpdDownload720.jobId), "removed records stay removed");
+  assert.ok(!(await sendRuntimeMessage({ type: "GET_JOBS" })).jobs.some((job) => job.jobId === mpdDownload720.jobId), "removing the record also drops the ended session row");
+
+  // ===== One playable video per page: hover-preview loops never list, and
+  // once a probed ladder exists, same-CDN metadata MP4s and standalone media
+  // playlists fold away so the ladder card is the single entry point. =====
+  tabFixtures.set(53, { id: 53, title: "Preview Loop Fixture", url: "https://preview.example.test/watch/53" });
+  const previewReport = await sendRuntimeMessage({
+    type: "CONTENT_MEDIA",
+    data: { url: "https://ev.preview.example.test/videos/hover-loop.mp4", mime: "video/mp4", duration: 0.9, source: "dom" }
+  }, {
+    id: extensionId,
+    url: "https://preview.example.test/watch/53",
+    frameId: 0,
+    tab: { id: 53, url: "https://preview.example.test/watch/53", title: "Preview Loop Fixture" }
+  });
+  assert.equal(previewReport.accepted, true, "the preview observation itself is valid");
+  assert.deepEqual((await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 53 })).items, [],
+    "a sub-five-second hover-preview loop never appears in the media list");
+
+  tabFixtures.set(54, { id: 54, title: "Ladder Dedup Fixture", url: "https://ladder.example.test/watch/54" });
+  const ladderMasterUrl = "https://hv.ladder.example.test/hls/master.m3u8";
+  const ladderMediaUrl = "https://hv.ladder.example.test/hls/media720.m3u8";
+  const ladderDirectUrl = "https://ev.ladder.example.test/videos/720p.mp4";
+  manifestFixtures.set(ladderMasterUrl, {
+    text: "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=2500000,RESOLUTION=1280x720\nmedia720.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=5000000,RESOLUTION=1920x1080\nmedia1080.m3u8\n"
+  });
+  manifestFixtures.set(ladderMediaUrl, {
+    text: "#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXTINF:4,\nseg0.ts\n#EXT-X-ENDLIST\n"
+  });
+  const ladderObserve = (requestId, url, mime) => {
+    onBeforeSendHeaders.listeners[0].fn({
+      requestId, tabId: 54, url, type: "xmlhttprequest", documentId: "ladder-doc-54", frameId: 0,
+      initiator: "https://ladder.example.test", requestHeaders: []
+    });
+    onHeadersReceived.listeners[0].fn({
+      requestId, tabId: 54, url, type: "xmlhttprequest", documentId: "ladder-doc-54", frameId: 0,
+      responseHeaders: [{ name: "content-type", value: mime }]
+    });
+  };
+  ladderObserve("ladder-master", ladderMasterUrl, "application/vnd.apple.mpegurl");
+  ladderObserve("ladder-media", ladderMediaUrl, "application/vnd.apple.mpegurl");
+  await sendRuntimeMessage({
+    type: "CONTENT_MEDIA",
+    data: { url: ladderDirectUrl, mime: "video/mp4", source: "metadata" }
+  }, {
+    id: extensionId,
+    url: "https://ladder.example.test/watch/54",
+    frameId: 0,
+    tab: { id: 54, url: "https://ladder.example.test/watch/54", title: "Ladder Dedup Fixture" }
+  });
+  // Automatic manifest inspection probes the master shortly after detection;
+  // once that ladder exists the media playlist and the metadata MP4 fold away.
+  let collapsed = null;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    collapsed = await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 54 });
+    if (collapsed.items.length === 1) break;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.equal(collapsed.items.length, 1, "a probed ladder collapses master, media playlist and direct MP4 into one card");
+  assert.equal(collapsed.items[0].displayUrl, ladderMasterUrl);
+  assert.equal(collapsed.items[0].manifestType, "master");
+  assert.equal(badgeUpdates.filter((item) => item.tabId === 54).at(-1)?.text, "1",
+    "the badge counts only the surviving ladder card");
+
+  // Masterless rendition family (the Pornhub shape): the player pulls
+  // per-quality media playlists directly and the CDN refuses the extension's
+  // probe fetches, so nothing is ever "parsed". Shared directory still folds
+  // them into one card with a dropdown, and the signed og:video MP4 from the
+  // same CDN folds away as the fragile fallback it is.
+  tabFixtures.set(56, { id: 56, title: "Masterless Fixture", url: "https://bare.example.test/watch/56" });
+  const bareMedia720 = "https://hv.bare.example.test/hls/c6251/videos/56/720P_4000K_56.m3u8";
+  const bareMedia1080 = "https://hv.bare.example.test/hls/c6251/videos/56/1080P_4000K_56.m3u8";
+  const bareDirectUrl = "https://ev.bare.example.test/videos/56/240P_1000K_56.mp4";
+  const bareObserve = (requestId, url, mime) => {
+    onBeforeSendHeaders.listeners[0].fn({
+      requestId, tabId: 56, url, type: "xmlhttprequest", documentId: "bare-doc-56", frameId: 0,
+      initiator: "https://bare.example.test", requestHeaders: []
+    });
+    onHeadersReceived.listeners[0].fn({
+      requestId, tabId: 56, url, type: "xmlhttprequest", documentId: "bare-doc-56", frameId: 0,
+      responseHeaders: [{ name: "content-type", value: mime }]
+    });
+  };
+  bareObserve("bare-720", bareMedia720, "application/vnd.apple.mpegurl");
+  bareObserve("bare-1080", bareMedia1080, "application/vnd.apple.mpegurl");
+  await sendRuntimeMessage({
+    type: "CONTENT_MEDIA",
+    data: { url: bareDirectUrl, mime: "video/mp4", source: "metadata" }
+  }, {
+    id: extensionId,
+    url: "https://bare.example.test/watch/56",
+    frameId: 0,
+    tab: { id: 56, url: "https://bare.example.test/watch/56", title: "Masterless Fixture" }
+  });
+  let bare = null;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    bare = await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 56 });
+    if (bare.items.length === 1) break;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.equal(bare.items.length, 1, "masterless directory siblings collapse into one card without any probe");
+  assert.match(bare.items[0].displayUrl, /1080P_4000K_56\.m3u8$/, "the highest rendition filename leads the family");
+  assert.deepEqual(bare.items[0].variants.map((variant) => variant.height), [1080, 720],
+    "rendition heights come from the site's own filenames when probes are refused");
+  assert.equal(badgeUpdates.filter((item) => item.tabId === 56).at(-1)?.text, "1");
+  const bareProbe = await sendRuntimeMessage({ type: "PROBE_MANIFEST", tabId: 56, candidate: bare.items[0] });
+  assert.equal(bareProbe.ok, true);
+  assert.equal(bareProbe.probe.variantSource, "rendition_group");
+  const barePick = await sendRuntimeMessage({
+    type: "DOWNLOAD",
+    tabId: 56,
+    candidate: bare.items[0],
+    options: { filename: "bare-720.mp4", variantUrl: bareProbe.probe.variants.find((variant) => variant.height === 720)?.url }
+  });
+  assert.equal(barePick.ok, true);
+  const bareNativeMessage = nativeOutgoing.find((message) => message.type === "download" && message.jobId === barePick.jobId);
+  assert.equal(bareNativeMessage.url, bareMedia720, "picking a quality downloads that rendition playlist");
+
+  // ===== Single-playlist pages get full metadata at detection time: the
+  // one bounded inspection runs immediately, the parsed ladder folds every
+  // same-site direct MP4 away, the playback hint labels the resolution, and
+  // the surviving card is marked as the recommendation. =====
+  tabFixtures.set(57, { id: 57, title: "Solo Ladder Fixture", url: "https://solo.example.test/watch/57" });
+  const soloMediaUrl = "https://cdn.solo.example.test/hls/index.m3u8?token=SOLO_SIG";
+  manifestFixtures.set(soloMediaUrl, {
+    text: "#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXTINF:6,\nseg0.ts\n#EXTINF:6,\nseg1.ts\n#EXT-X-ENDLIST\n"
+  });
+  const soloObserve = (requestId, url, mime) => {
+    onBeforeSendHeaders.listeners[0].fn({
+      requestId, tabId: 57, url, type: "xmlhttprequest", documentId: "solo-doc-57", frameId: 0,
+      initiator: "https://solo.example.test", requestHeaders: []
+    });
+    onHeadersReceived.listeners[0].fn({
+      requestId, tabId: 57, url, type: "xmlhttprequest", documentId: "solo-doc-57", frameId: 0,
+      responseHeaders: [{ name: "content-type", value: mime }]
+    });
+  };
+  soloObserve("solo-media", soloMediaUrl, "application/vnd.apple.mpegurl");
+  await sendRuntimeMessage({
+    type: "CONTENT_MEDIA",
+    data: { url: "https://cdn.solo.example.test/videos/preview.mp4", mime: "video/mp4", duration: 8, source: "dom" }
+  }, {
+    id: extensionId,
+    url: "https://solo.example.test/watch/57",
+    frameId: 0,
+    tab: { id: 57, url: "https://solo.example.test/watch/57", title: "Solo Ladder Fixture" }
+  });
+  await sendRuntimeMessage({
+    type: "CONTENT_PLAYBACK_HINT",
+    data: { height: 1080, width: 1920, duration: 12 }
+  }, {
+    id: extensionId,
+    url: "https://solo.example.test/watch/57",
+    frameId: 0,
+    tab: { id: 57, url: "https://solo.example.test/watch/57", title: "Solo Ladder Fixture" }
+  });
+  let solo = null;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    solo = await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 57 });
+    if (solo.items.length === 1 && solo.items[0].duration) break;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.equal(solo.items.length, 1, "the parsed ladder folds the same-site preview MP4 away");
+  assert.equal(solo.items[0].kind, "hls");
+  assert.equal(solo.items[0].duration, 12, "the card carries the playlist runtime");
+  assert.equal(solo.items[0].height, 1080, "the MSE player's videoHeight labels the resolution");
+  assert.equal(solo.items[0].recommended, true, "the ladder card is marked as the recommendation");
+  assert.equal(badgeUpdates.filter((item) => item.tabId === 57).at(-1)?.text, "1");
+
+  // Without any ladder on the page, a plain direct MP4 stays visible — only
+  // duplicates of a probed ladder hide, never a page's only media.
+  tabFixtures.set(55, { id: 55, title: "No Ladder Fixture", url: "https://plain.example.test/watch/55" });
+  await sendRuntimeMessage({
+    type: "CONTENT_MEDIA",
+    data: { url: "https://cdn.plain.example.test/videos/720p.mp4", mime: "video/mp4", source: "metadata" }
+  }, {
+    id: extensionId,
+    url: "https://plain.example.test/watch/55",
+    frameId: 0,
+    tab: { id: 55, url: "https://plain.example.test/watch/55", title: "No Ladder Fixture" }
+  });
+  let plainMedia = null;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    plainMedia = await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 55 });
+    if (plainMedia.items.length) break;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.equal(plainMedia.items.length, 1, "a direct MP4 on a page with no ladder remains the visible card");
+  assert.equal(plainMedia.items[0].kind, "video");
 
   const failedPlaybackUrl = "https://api.bilibili.com/x/player/playurl?avid=13579&cid=88001&qn=127&fnval=16&fourk=1";
   const failedFetchCount = () => manifestFetches.filter((item) => item.url === failedPlaybackUrl).length;
@@ -2454,6 +3102,229 @@ test("MV3 worker registers network and message listeners during module load", as
   assert.equal(racedPermissionRemoval.retryAfterMs, 0);
   assert.equal(settingsState.nativeApiRecovery, undefined, "the interleaved recovery marker is cleared instead of blocking the next grant");
   nativePermission = true;
+  globalThis.chrome.runtime.connectNative = nativeConnectFixture;
+
+  // ---- Self-heal: a worker that outlived the permission grant reloads the
+  // extension once, replays its session afterwards and finishes the action.
+  const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+  const settle = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  let latestHealedPort = null;
+  const healedNativeConnect = () => {
+    nativeConnectCalls += 1;
+    const healedOnMessage = event();
+    const healedOnDisconnect = event();
+    latestHealedPort = { onMessage: healedOnMessage, onDisconnect: healedOnDisconnect };
+    return {
+      onMessage: healedOnMessage,
+      onDisconnect: healedOnDisconnect,
+      disconnect() {},
+      postMessage(message) {
+        nativeOutgoing.push(message);
+        if (message.type !== "ping") return;
+        queueMicrotask(() => healedOnMessage.listeners[0]?.fn({
+          type: "pong",
+          requestId: message.requestId,
+          version: "0.2.5",
+          protocolVersion: 1,
+          capabilityProfileVersion: 1,
+          ffmpeg: true,
+          capabilities: { ffmpeg: { available: true }, ytdlp: { available: true, networkDisabled: false }, pause: "resume-v1" }
+        }));
+      }
+    };
+  };
+  delete settingsState.nativeApiRecovery;
+  delete settingsState.nativeApiSelfHeal;
+  let runtimeReloads = 0;
+  let optionsPageOpens = 0;
+  let popupOpens = 0;
+  globalThis.chrome.runtime.reload = () => { runtimeReloads += 1; };
+  globalThis.chrome.runtime.openOptionsPage = async () => { optionsPageOpens += 1; };
+  globalThis.chrome.tabs.query = async () => [];
+  globalThis.chrome.action.openPopup = async () => { popupOpens += 1; };
+  globalThis.chrome.runtime.connectNative = undefined;
+  const optionsSender = { id: extensionId, url: `chrome-extension://${extensionId}/options/options.html` };
+  const popupSender = { id: extensionId, url: `chrome-extension://${extensionId}/popup/popup.html` };
+  const healingPing = await new Promise((resolve) => restartedListener({ type: "PING_HOST" }, optionsSender, resolve));
+  assert.equal(healingPing.ok, true);
+  assert.equal(healingPing.hostStatus.failureReason, "api_unavailable");
+  assert.equal(healingPing.hostStatus.selfHealing, true, "the first missing-binding observation after a grant schedules a self-heal reload");
+  assert.match(healingPing.hostStatus.lastError, /自动重新加载/);
+  assert.doesNotMatch(healingPing.hostStatus.lastError, /完全退出|重新检查/);
+  assert.equal(settingsState.nativeApiSelfHeal?.surface, "options", "the marker remembers which surface asked");
+  assert.ok(Number.isFinite(settingsState.nativeApiSelfHeal?.attemptedAt));
+  assert.ok(settingsState.nativeApiSelfHeal?.session && typeof settingsState.nativeApiSelfHeal.session.tabMedia === "object",
+    "the marker carries the storage.session snapshot that the reload will drop");
+  assert.equal(settingsState.nativeApiSelfHeal?.pendingDownload, null);
+  assert.equal(runtimeReloads, 0, "the reload waits for the reply to flush");
+  await settle(230);
+  assert.equal(runtimeReloads, 1, "the worker reloads the extension exactly once");
+  const repeatedHealingPing = await new Promise((resolve) => restartedListener({ type: "PING_HOST" }, optionsSender, resolve));
+  assert.equal(repeatedHealingPing.hostStatus.selfHealing, true, "callers that arrive while the reload is pending get the same answer");
+  await settle(230);
+  assert.equal(runtimeReloads, 1, "a scheduled self-heal is never duplicated");
+
+  // chrome.runtime.reload() empties storage.session; the replacement worker starts from the marker.
+  const snapshotIncludesTab34 = JSON.stringify(settingsState.nativeApiSelfHeal.session.tabMedia).includes("public-video.mp4");
+  for (const key of Object.keys(sessionState)) delete sessionState[key];
+  globalThis.chrome.runtime.connectNative = healedNativeConnect;
+  const connectsBeforeHealedWorker = nativeConnectCalls;
+  const listenersBeforeHealedWorker = onMessage.listeners.length;
+  await import(`../extension/background.js?self-heal=${Date.now()}`);
+  for (let attempt = 0; attempt < 100 && optionsPageOpens === 0; attempt += 1) await tick();
+  assert.ok(Object.keys(sessionState.tabMedia || {}).length >= 1, "the replacement worker replays the detected media that the reload dropped");
+  assert.equal(JSON.stringify(sessionState.tabMedia).includes("public-video.mp4"), snapshotIncludesTab34);
+  assert.equal(settingsState.nativeApiSelfHeal?.session, undefined, "the snapshot is replayed once and then dropped");
+  assert.ok(Number.isFinite(settingsState.nativeApiSelfHeal?.restoredAt));
+  assert.equal(optionsPageOpens, 1, "the settings page that triggered the reload is reopened");
+  assert.equal(nativeConnectCalls, connectsBeforeHealedWorker + 1, "the replacement worker connects the engine eagerly");
+  const healedListener = onMessage.listeners[listenersBeforeHealedWorker].fn;
+  const healedPing = await new Promise((resolve) => healedListener({ type: "PING_HOST" }, optionsSender, resolve));
+  assert.equal(healedPing.hostStatus.connected, true, "the first recheck after the self-heal reload reports a live engine");
+  assert.equal(healedPing.hostStatus.selfHealing, false);
+
+  // Inside the cooldown a still-missing binding falls back to the measured recovery flow instead of a reload loop.
+  globalThis.chrome.runtime.connectNative = undefined;
+  const listenersBeforeCooldownWorker = onMessage.listeners.length;
+  await import(`../extension/background.js?self-heal-cooldown=${Date.now()}`);
+  await tick();
+  const cooldownListener = onMessage.listeners[listenersBeforeCooldownWorker].fn;
+  const cooledPing = await new Promise((resolve) => cooldownListener({ type: "PING_HOST" }, optionsSender, resolve));
+  assert.equal(cooledPing.hostStatus.failureReason, "api_unavailable");
+  assert.equal(cooledPing.hostStatus.selfHealing, false, "a second missing binding inside the cooldown does not reload again");
+  assert.match(cooledPing.hostStatus.lastError, /自动重试/);
+  await settle(230);
+  assert.equal(runtimeReloads, 1, "no reload loop");
+
+  // A download that met the missing binding continues by itself after the reload.
+  delete settingsState.nativeApiSelfHeal;
+  delete settingsState.nativeApiRecovery;
+  let [pendingCandidate] = (await new Promise((resolve) => cooldownListener({ type: "GET_TAB_MEDIA", tabId: 34 }, popupSender, resolve))).items;
+  if (!pendingCandidate) {
+    await new Promise((resolve) => cooldownListener({
+      type: "CONTENT_MEDIA",
+      data: { url: "https://redirect.example.test/public-video.mp4", mime: "video/mp4", contentLength: 2_000_000, source: "dom" }
+    }, { id: extensionId, url: "https://page.example.test/hint", frameId: 0, tab: tabFixtures.get(34) }, resolve));
+    [pendingCandidate] = (await new Promise((resolve) => cooldownListener({ type: "GET_TAB_MEDIA", tabId: 34 }, popupSender, resolve))).items;
+  }
+  assert.ok(pendingCandidate, "tab 34 lists its native-routed direct video");
+  const healingDownload = await new Promise((resolve) => cooldownListener({
+    type: "DOWNLOAD",
+    tabId: 34,
+    candidate: { id: pendingCandidate.id, kind: pendingCandidate.kind, generation: pendingCandidate.generation },
+    options: { filename: "healed.mp4" }
+  }, popupSender, resolve));
+  assert.equal(healingDownload.ok, false);
+  assert.match(healingDownload.error, /自动重新加载/);
+  assert.equal(settingsState.nativeApiSelfHeal?.surface, "popup");
+  assert.equal(settingsState.nativeApiSelfHeal?.pendingDownload?.tabId, 34);
+  assert.equal(settingsState.nativeApiSelfHeal?.pendingDownload?.kind, "video");
+  assert.equal(settingsState.nativeApiSelfHeal?.pendingDownload?.url, "https://redirect.example.test/public-video.mp4");
+  assert.equal(settingsState.nativeApiSelfHeal?.pendingDownload?.options?.filename, "healed.mp4");
+  await settle(230);
+  assert.equal(runtimeReloads, 2);
+  for (const key of Object.keys(sessionState)) delete sessionState[key];
+  globalThis.chrome.runtime.connectNative = healedNativeConnect;
+  const notificationsBeforeResume = notificationRequests.length;
+  const outgoingBeforeResume = nativeOutgoing.length;
+  const listenersBeforeResumeWorker = onMessage.listeners.length;
+  await import(`../extension/background.js?self-heal-resume=${Date.now()}`);
+  for (let attempt = 0; attempt < 200 && notificationRequests.length === notificationsBeforeResume; attempt += 1) await tick();
+  const resumeListener = onMessage.listeners[listenersBeforeResumeWorker].fn;
+  const resumedJobs = await new Promise((resolve) => resumeListener({ type: "GET_JOBS" }, popupSender, resolve));
+  assert.ok(resumedJobs.jobs.some((job) => job.filename === "healed.mp4" && job.method === "native"),
+    "the interrupted download restarts in the replacement worker without another click");
+  assert.ok(nativeOutgoing.slice(outgoingBeforeResume).some((message) => message.type === "download"), "the engine receives the replayed job");
+  assert.equal(popupOpens, 1, "the popup that asked is reopened when Chrome allows it");
+  const resumeNotice = notificationRequests.at(-1);
+  assert.ok(resumeNotice && notificationRequests.length === notificationsBeforeResume + 1, "one notification explains what happened");
+  assert.match(resumeNotice.options.title, /已连接/);
+  assert.match(resumeNotice.options.message, /已自动继续/);
+  assert.match(resumeNotice.options.message, /healed\.mp4/);
+  assert.equal(settingsState.nativeApiSelfHeal?.pendingDownload, undefined, "the pending download is replayed once");
+
+  // ---- Pause / resume: the worker keeps a recipe (never a URL) and the
+  // engine hands the resumed job the same output name.
+  const pauseTarget = resumedJobs.jobs.find((job) => job.filename === "healed.mp4");
+  assert.equal(pauseTarget.pausable, true, "a queued native job can be paused when the engine supports it");
+  assert.equal(pauseTarget.resume, undefined, "the resume recipe never reaches the UI");
+  const pauseResponse = await new Promise((resolve) => resumeListener({ type: "PAUSE_JOB", jobId: pauseTarget.jobId }, popupSender, resolve));
+  assert.equal(pauseResponse.ok, true, pauseResponse.error);
+  assert.equal(pauseResponse.status, "pausing");
+  assert.ok(nativeOutgoing.some((message) => message.type === "pause" && message.jobId === pauseTarget.jobId), "the engine receives the pause request");
+  let pausing = (await new Promise((resolve) => resumeListener({ type: "GET_JOBS" }, popupSender, resolve))).jobs.find((job) => job.jobId === pauseTarget.jobId);
+  assert.equal(pausing.status, "pausing");
+  assert.equal(pausing.pausable, false);
+  latestHealedPort.onMessage.listeners[0].fn({ type: "paused", jobId: pauseTarget.jobId, status: "paused", filename: "healed.mp4", targetName: "healed (1).mp4", message: "已暂停，可随时继续" });
+  await tick();
+  const pausedJob = (await new Promise((resolve) => resumeListener({ type: "GET_JOBS" }, popupSender, resolve))).jobs.find((job) => job.jobId === pauseTarget.jobId);
+  assert.equal(pausedJob.status, "paused");
+  assert.equal(pausedJob.resumable, true);
+  assert.equal(pausedJob.speed, 0);
+  const storedPaused = sessionState.jobs.find((job) => job.jobId === pauseTarget.jobId);
+  assert.equal(storedPaused.resume.filename, "healed (1).mp4", "the engine's final output name is what the resume asks for");
+  assert.match(storedPaused.resume.keySha256, /^[a-f0-9]{64}$/);
+  assert.doesNotMatch(JSON.stringify(sessionState.jobs), /public-video\.mp4|redirect\.example/, "the persisted recipe carries a digest, not the media URL");
+  const resumeResponse = await new Promise((resolve) => resumeListener({ type: "RESUME_JOB", jobId: pauseTarget.jobId }, popupSender, resolve));
+  assert.equal(resumeResponse.ok, true, resumeResponse.error);
+  assert.equal(resumeResponse.method, "native");
+  assert.equal(resumeResponse.replaced, pauseTarget.jobId);
+  const resumedMessage = nativeOutgoing.filter((message) => message.type === "download").at(-1);
+  assert.equal(resumedMessage.jobId, resumeResponse.jobId);
+  assert.equal(resumedMessage.filename, "healed (1).mp4", "the resumed job asks the engine for the paused output name");
+  const afterResume = (await new Promise((resolve) => resumeListener({ type: "GET_JOBS" }, popupSender, resolve))).jobs;
+  assert.ok(!afterResume.some((job) => job.jobId === pauseTarget.jobId), "the paused row is replaced by the resumed transfer");
+  assert.equal(afterResume.find((job) => job.jobId === resumeResponse.jobId)?.status, "queued");
+
+  // Cancelling a paused job discards the engine's leftovers for that name.
+  await new Promise((resolve) => resumeListener({ type: "PAUSE_JOB", jobId: resumeResponse.jobId }, popupSender, resolve));
+  latestHealedPort.onMessage.listeners[0].fn({ type: "paused", jobId: resumeResponse.jobId, status: "paused", filename: "healed (1).mp4", targetName: "healed (1).mp4", message: "已暂停，可随时继续" });
+  await tick();
+  const cancelPaused = await new Promise((resolve) => resumeListener({ type: "CANCEL_JOB", jobId: resumeResponse.jobId }, popupSender, resolve));
+  assert.equal(cancelPaused.ok, true, cancelPaused.error);
+  await tick();
+  assert.equal((await new Promise((resolve) => resumeListener({ type: "GET_JOBS" }, popupSender, resolve))).jobs.find((job) => job.jobId === resumeResponse.jobId)?.status, "cancelled");
+  const discardMessage = nativeOutgoing.find((message) => message.type === "discard");
+  assert.equal(discardMessage?.filename, "healed (1).mp4", "the engine is asked to drop the paused part, checkpoint and staged segments");
+  assert.ok(!nativeOutgoing.some((message) => message.type === "cancel" && message.jobId === resumeResponse.jobId), "a paused job has no live engine job to cancel");
+  assert.equal(resumedMessage.options.concurrentJobs, 3, "every native job carries the user's concurrency setting for the engine queue");
+
+  // ---- Batch and pasted-address downloads share the ordinary download path.
+  const batchCandidates = (await new Promise((resolve) => resumeListener({ type: "GET_TAB_MEDIA", tabId: 34 }, popupSender, resolve))).items;
+  assert.ok(batchCandidates.length >= 1);
+  const downloadsBeforeBatch = nativeOutgoing.filter((message) => message.type === "download").length;
+  const batch = await new Promise((resolve) => resumeListener({
+    type: "DOWNLOAD_BATCH",
+    tabId: 34,
+    candidates: [...batchCandidates.map((item) => ({ id: item.id, kind: item.kind, generation: item.generation })), { id: "forged", kind: "video", generation: "stale" }],
+    options: {}
+  }, popupSender, resolve));
+  assert.equal(batch.ok, true, batch.error);
+  assert.equal(batch.started, batchCandidates.length, "every visible card starts");
+  assert.equal(batch.failed, 1, "a stale reference fails on its own without aborting the batch");
+  assert.equal(nativeOutgoing.filter((message) => message.type === "download").length, downloadsBeforeBatch + batchCandidates.length);
+
+  const pastedDirect = await new Promise((resolve) => resumeListener({ type: "DOWNLOAD_URL", tabId: 34, url: "https://user.example.test/Talk Clip.mp4", options: {} }, popupSender, resolve));
+  assert.equal(pastedDirect.ok, true, pastedDirect.error);
+  assert.equal(pastedDirect.method, "native", "a pasted address is never trusted for Chrome's own downloader");
+  const pastedMessage = nativeOutgoing.filter((message) => message.type === "download").at(-1);
+  assert.equal(pastedMessage.url, "https://user.example.test/Talk%20Clip.mp4");
+  assert.equal(pastedMessage.mediaKind, "video");
+  const pastedCard = (await new Promise((resolve) => resumeListener({ type: "GET_TAB_MEDIA", tabId: 34 }, popupSender, resolve))).items
+    .find((item) => item.displayUrl === "https://user.example.test/Talk%20Clip.mp4");
+  assert.ok(pastedCard, "the pasted address becomes a card of the current tab, so retry and resume work");
+  assert.equal(pastedCard.provenance, "user_supplied");
+  const pastedPage = await new Promise((resolve) => resumeListener({ type: "DOWNLOAD_URL", tabId: 34, url: "https://user.example.test/article", options: {} }, popupSender, resolve));
+  assert.equal(pastedPage.ok, false);
+  assert.match(pastedPage.error, /不是可下载的媒体|无法读取这个地址的类型/);
+  const pastedScheme = await new Promise((resolve) => resumeListener({ type: "DOWNLOAD_URL", tabId: 34, url: "file:///Users/private/secret.mp4", options: {} }, popupSender, resolve));
+  assert.equal(pastedScheme.ok, false);
+  assert.match(pastedScheme.error, /http 或 https/);
+  delete settingsState.nativeApiSelfHeal;
+  delete globalThis.chrome.runtime.reload;
+  delete globalThis.chrome.runtime.openOptionsPage;
+  delete globalThis.chrome.tabs.query;
+  delete globalThis.chrome.action.openPopup;
   globalThis.chrome.runtime.connectNative = nativeConnectFixture;
 });
 

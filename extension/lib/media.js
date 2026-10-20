@@ -28,9 +28,19 @@ const BILIBILI_PAGE_HOSTS = new Set(["www.bilibili.com", "m.bilibili.com"]);
 const BILIBILI_MEDIA_HOST_RE = /(?:^|\.)(?:bilivideo\.com|bilivideo\.cn)$/i;
 const BILIBILI_PARTNER_MEDIA_HOST_RE = /(?:^|\.)mountaintoys\.cn$/i;
 const INSTAGRAM_MEDIA_HOST_RE = /(?:^|\.)(?:cdninstagram\.com|fbcdn\.net)$/i;
+// Bilibili DASH object names end in a representation id: the classic video
+// ladder uses 30000-30199 (AVC) and 30200-30299 (audio). Since 2026-08 some
+// re-transcoded assets ship HEVC objects in a new 100100-100199 range with a
+// `_da2x1` infix before the rendition (observed `{cid}_da2x1-1-100110.m4s`).
+const BILIBILI_REPRESENTATION_RE = /(?:^|[-_/])(?:30[0-2]\d{2}|1001\d{2})\.(?:m4s|cmfv|cmfa)$/i;
+// Height mapping is keyed by representation % 1000. 109/110 were measured
+// against the live playurl API (100109 = quality 16 / 360p, 100110 = quality
+// 32 / 480p); other new-range renditions stay unmapped and rely on the
+// fixed-site API leg for labels.
 const BILIBILI_VIDEO_HEIGHTS = new Map([
   [6, 240], [16, 360], [32, 480], [64, 720], [74, 720], [80, 1080],
-  [112, 1080], [116, 1080], [120, 2160], [125, 2160], [126, 2160], [127, 4320]
+  [109, 360], [110, 480], [112, 1080], [116, 1080], [120, 2160],
+  [125, 2160], [126, 2160], [127, 4320]
 ]);
 
 export function isBilibiliVideoPage(value) {
@@ -50,7 +60,7 @@ export function isBilibiliMediaUrl(value) {
     const trustedHost = BILIBILI_MEDIA_HOST_RE.test(url.hostname) || BILIBILI_PARTNER_MEDIA_HOST_RE.test(url.hostname);
     // The partner CDN is accepted only for Bilibili's immutable upgcxcode DASH
     // object shape, not as a blanket trust of the whole domain.
-    const trackPath = /(?:^|\/)upgcxcode\/.*(?:^|[-_/])(30[0-2]\d{2})\.(?:m4s|cmfv|cmfa)$/i.test(url.pathname);
+    const trackPath = /(?:^|\/)upgcxcode\/.*(?:^|[-_/])(?:30[0-2]\d{2}|1001\d{2})\.(?:m4s|cmfv|cmfa)$/i.test(url.pathname);
     return url.protocol === "https:" && trustedHost && trackPath;
   } catch {
     return false;
@@ -69,8 +79,36 @@ export function bilibiliDashAssetFamily(value) {
     // final filename cannot be paired.
     const marker = pathname.toLowerCase().lastIndexOf("/upgcxcode/");
     const scopedPath = marker >= 0 ? pathname.slice(marker) : pathname;
-    const family = scopedPath.replace(/30[0-2]\d{2}\.(?:m4s|cmfv|cmfa)$/i, "{track}");
+    // The `_da2`/`_da2x1` infix names the codec stream inside one playback
+    // (video HEVC objects carry `_da2x1`, its AAC audio partner carries
+    // `_da2`). Erasing it lets the HEVC video track pair with the audio track
+    // of the same asset; the cid directory plus cid basename keep unrelated
+    // objects separate.
+    const family = scopedPath
+      .replace(/(?:30[0-2]\d{2}|1001\d{2})\.(?:m4s|cmfv|cmfa)$/i, "{track}")
+      .replace(/_(?:da\d+x?\d*)/i, "");
     return family === scopedPath ? "" : family;
+  } catch {
+    return "";
+  }
+}
+
+// Site-agnostic opaque selector: two independent 32-bit accumulators keep the
+// selector compact and avoid exposing the media path while still
+// distinguishing identical paths on different CDN hosts. Query values are
+// deliberately excluded.
+export function opaqueTrackId(value, trackType = "") {
+  try {
+    const url = value instanceof URL ? value : new URL(value);
+    const source = `${trackType}|${url.hostname.toLowerCase()}${url.pathname}`;
+    let first = 2166136261;
+    let second = 0x9e3779b9;
+    for (let index = 0; index < source.length; index += 1) {
+      const code = source.charCodeAt(index);
+      first = Math.imul(first ^ code, 16777619);
+      second = Math.imul(second ^ (code + index), 2246822519);
+    }
+    return `bt-${(first >>> 0).toString(36)}-${(second >>> 0).toString(36)}`;
   } catch {
     return "";
   }
@@ -80,18 +118,7 @@ export function bilibiliDashTrackId(value, trackType = "") {
   try {
     const url = value instanceof URL ? value : new URL(value);
     if (!isBilibiliMediaUrl(url.href)) return "";
-    const source = `${trackType}|${url.hostname.toLowerCase()}${url.pathname}`;
-    // Two independent 32-bit accumulators keep the selector compact and avoid
-    // exposing the media path while still distinguishing identical paths on
-    // different CDN hosts. Query signatures are deliberately excluded.
-    let first = 2166136261;
-    let second = 0x9e3779b9;
-    for (let index = 0; index < source.length; index += 1) {
-      const code = source.charCodeAt(index);
-      first = Math.imul(first ^ code, 16777619);
-      second = Math.imul(second ^ (code + index), 2246822519);
-    }
-    return `bt-${(first >>> 0).toString(36)}-${(second >>> 0).toString(36)}`;
+    return opaqueTrackId(url, trackType);
   } catch {
     return "";
   }
@@ -113,7 +140,8 @@ export function classifyBilibiliDashTrack({ url, mime = "", contentLength = 0 })
     const representationId = representationMatch ? Number.parseInt(representationMatch[1], 10) : 0;
     let trackType = "";
     if (ext === "cmfa" || (representationId >= 30200 && representationId < 30300)) trackType = "audio";
-    else if (ext === "cmfv" || (representationId >= 30000 && representationId < 30200)) trackType = "video";
+    else if (ext === "cmfv" || (representationId >= 30000 && representationId < 30200)
+      || (representationId >= 100100 && representationId < 100200)) trackType = "video";
     else if (normalizedMime.startsWith("audio/")) trackType = "audio";
     else if (normalizedMime.startsWith("video/")) trackType = "video";
     if (!trackType) return null;

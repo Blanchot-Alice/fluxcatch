@@ -6,6 +6,7 @@
   <title>FluxCatch 工作台</title>
   <link rel="stylesheet" href="../ui/tokens.css">
   <link rel="stylesheet" href="../ui/components.css">
+  <link rel="stylesheet" href="../ui/atmosphere.css">
   <link rel="stylesheet" href="sidepanel.css">
 </head>
 <body>
@@ -13,9 +14,12 @@
     <div class="brand">
       <span class="mark" aria-hidden="true">
         <svg viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
-          <rect x="10" y="10" width="108" height="108" rx="30" class="s-ink" fill="none" stroke-width="11"/>
-          <rect x="56" y="24" width="16" height="42" rx="8" class="c-accent"/>
-          <path d="M32 56 L64 88 L96 56 Z" class="c-primary"/>
+          <circle cx="64" cy="64" r="60" class="c-cream"/>
+          <circle cx="64" cy="64" r="58.5" fill="none" class="s-pond" stroke-opacity=".35" stroke-width="3"/>
+          <path d="M22 100q42-13 84 0" fill="none" class="s-pond" stroke-width="5" stroke-linecap="round"/>
+          <path d="M34 112q30-9 60 0" fill="none" class="s-pond" stroke-opacity=".5" stroke-width="4" stroke-linecap="round"/>
+          <path d="M52.4 26A34 34 0 1 1 32 46.4L64 58Z" class="c-celadon"/>
+          <circle cx="92" cy="36" r="9" class="c-rose"/>
         </svg>
       </span>
       <span class="brand-copy"><strong>FluxCatch</strong><small>媒体工作台</small></span>
@@ -62,8 +66,17 @@
           <h2 id="mediaHeading">当前页面媒体</h2>
           <p>检测到的可下载视频、音频与流媒体</p>
         </div>
-        <span id="mediaCount" class="count" aria-label="0 个媒体">0</span>
+        <div class="section-actions">
+          <button id="downloadAllButton" class="quiet-button" type="button" title="按默认设置下载当前页面的全部媒体" hidden>全部下载</button>
+          <button id="urlDownloadButton" class="quiet-button" type="button" aria-expanded="false" aria-controls="urlForm">链接下载</button>
+          <span id="mediaCount" class="count" aria-label="0 个媒体">0</span>
+        </div>
       </header>
+      <form id="urlForm" class="url-form" hidden>
+        <label class="sr-only" for="urlInput">媒体地址</label>
+        <input id="urlInput" type="url" autocomplete="off" spellcheck="false" placeholder="粘贴视频、音频或播放列表地址" maxlength="4096" required>
+        <button type="submit" class="secondary-btn url-submit">下载</button>
+      </form>
 
       <div id="mediaLoading" class="loading-state" aria-live="polite">
         <span class="spinner" aria-hidden="true"></span><span>正在整理媒体…</span>
@@ -82,7 +95,10 @@
           <h2 id="jobsHeading">下载任务</h2>
           <p><span id="activeJobCount">0</span> 个任务正在进行</p>
         </div>
-        <button id="clearCompletedButton" class="quiet-button" type="button" aria-label="清理已结束的下载任务" disabled>清理已结束任务</button>
+        <div class="section-actions">
+          <button id="historyButton" class="quiet-button" type="button" title="打开完整的下载记录页面">全部记录</button>
+          <button id="clearCompletedButton" class="quiet-button" type="button" aria-label="清理已结束的下载任务" disabled>清理已结束任务</button>
+        </div>
       </header>
 
       <div id="jobsLoading" class="loading-state" aria-live="polite">

@@ -12,3 +12,6 @@ e2e/.tmp/
 design/brand-v1/
 .alma-snapshots
 .alma/
+
+# Live harness output (screenshots, downloaded test files, profiles)
+tools/live/out/

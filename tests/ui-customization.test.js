@@ -65,7 +65,7 @@ test("UI customization applies CSS variables and editable Options copy", () => {
   applyUiCustomization({ ...DEFAULT_UI_CUSTOMIZATION, sectionGap: 25, accentColor: "#F4D35E", pageTitle: "自定义标题", pageDescription: "自定义说明", runtimeTitle: "自定义运行状态" }, { root, copyRoot });
   assert.equal(properties.get("--ui-section-gap"), "25px");
   assert.equal(properties.get("--primary-action"), "#F4D35E");
-  assert.equal(properties.get("--on-primary"), "#000000");
+  assert.equal(properties.get("--on-primary"), "#2B2E4A", "text on a bright accent is the palette indigo, never pure black");
   assert.equal(title.textContent, "自定义标题");
   assert.equal(description.textContent, "自定义说明");
   assert.equal(runtimeTitle.textContent, "自定义运行状态");

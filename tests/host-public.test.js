@@ -31,10 +31,19 @@ test("host status exposes capabilities without executable paths, probe errors or
     future: "STATUS_FUTURE"
   });
   assert.deepEqual(Object.keys(status).sort(), [
-    "capabilities", "capabilityProfileCompatible", "capabilityProfileVersion", "compatible", "connected", "ffmpeg",
-    "failureReason", "lastError", "needsPermission", "protocolCompatible", "protocolVersion", "restartRequired", "version", "versionCompatible"
+    "capabilities", "capabilityProfileCompatible", "capabilityProfileVersion", "compatible", "connected", "downloadDir", "ffmpeg",
+    "failureReason", "lastError", "needsPermission", "protocolCompatible", "protocolVersion", "restartRequired", "selfHealing", "version", "versionCompatible"
   ].sort());
-  assert.deepEqual(Object.keys(status.capabilities).sort(), ["dashPair", "dashPlanner", "ffmpeg", "ytdlp"].sort());
+  assert.equal(status.selfHealing, false);
+  assert.equal(hostStatusForUi({ failureReason: "api_unavailable", selfHealing: true }).selfHealing, true);
+  assert.deepEqual(Object.keys(status.capabilities).sort(), ["dashPair", "dashPlanner", "ffmpeg", "fileActions", "pause", "ytdlp"].sort());
+  assert.equal(hostStatusForUi({ connected: true, capabilities: { pause: "resume-v1" } }).capabilities.pause, "resume-v1");
+  assert.equal(hostStatusForUi({ connected: true, capabilities: { pause: "/usr/bin/pause" } }).capabilities.pause, null);
+  assert.equal(status.downloadDir, null, "a host without a reported folder exposes no path");
+  assert.equal(hostStatusForUi({ connected: true, downloadDir: "/Users/private/Downloads/FluxCatch" }).downloadDir, "/Users/private/Downloads/FluxCatch");
+  assert.equal(hostStatusForUi({ connected: true, downloadDir: "relative/FluxCatch" }).downloadDir, null, "only absolute folders are shown");
+  assert.equal(hostStatusForUi({ connected: true, capabilities: { fileActions: "finder-v1" } }).capabilities.fileActions, "finder-v1");
+  assert.equal(hostStatusForUi({ connected: true, capabilities: { fileActions: "/usr/bin/open" } }).capabilities.fileActions, null);
   assert.deepEqual(Object.keys(status.capabilities.ffmpeg).sort(), ["available", "demuxers", "encoders", "networkInput", "version"].sort());
   assert.equal(status.capabilities.ffmpeg.networkInput, false);
   assert.deepEqual(Object.keys(status.capabilities.ytdlp).sort(), ["available", "installed", "networkDisabled", "version"].sort());

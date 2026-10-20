@@ -169,12 +169,11 @@ test("popup and side panel report native build mismatches without hiding ordinar
 });
 
 test("HLS UI exposes the clear static VOD boundary and blocks unsupported modes", () => {
-  for (const marker of ["aes128", "probe.type === \"media\" && probe.live", "probe.discontinuity"]) {
+  for (const marker of ["probe.protection === \"drm\"", "probe.type === \"media\" && probe.live", "probe.discontinuity"]) {
     assert.match(popupJs, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
   assert.match(popupJs, /manifestDownloadBlockReason\(probe\)/);
   assert.match(popupJs, /state\.probes\.get\(mediaKey\(item\)\)/);
-  assert.match(popupJs, /当前版本暂不支持 AES-128 加密的 HLS 下载/);
   assert.match(popupJs, /separateAudioHls/);
   assert.match(popupJs, /在本地分别下载画面和声音并自动合并/);
   const blockReason = popupJs.slice(
@@ -213,10 +212,13 @@ test("dynamic status, task history and progress are exposed without duplicate ro
 test("popup task cards keep long filenames, terminal states and counts readable", () => {
   assert.match(popupJs, /\$\("#jobCount"\)\.textContent = jobs\.length/);
   assert.match(popupJs, /name\.title = name\.textContent/);
-  assert.match(popupJs, /terminal \? statusLabel\(job\.status\) : `\$\{progressPercent\}%`/);
+  assert.match(popupJs, /`\$\{progressPercent\}%`/);
   assert.match(popupJs, /completed: "已完成"/);
   assert.match(popupJs, /cancelled: "已取消"/);
-  assert.match(popupJs, /if \(terminal\) card\.classList\.add\("terminal"\)/);
+  assert.match(popupJs, /card\.classList\.add\("terminal", job\.status\)/);
+  assert.match(popupJs, /function createFinishedRow\(job\)/, "ended rows get the poster tile, facts line and file actions");
+  assert.match(popupJs, /createJobActions\(job, handleJobAction\)/);
+  assert.match(popupJs, /const jobs = \[\.\.\.state\.jobs\.values\(\)\]\.sort\(compareJobs\)/, "active rows first, then the newest finished file");
   const nameRule = popupCss.match(/\.job-line strong\{([^}]+)\}/)?.[1] || "";
   assert.match(nameRule, /min-width:0/);
   assert.match(nameRule, /width:100%/);
@@ -226,7 +228,8 @@ test("popup task cards keep long filenames, terminal states and counts readable"
   assert.match(popupCss, /\.job-card\{[^}]*width:100%[^}]*max-width:100%[^}]*min-width:0[^}]*overflow:hidden/);
   assert.match(popupCss, /\.job-line\{[^}]*grid-template-columns:minmax\(0,1fr\) max-content[^}]*width:100%[^}]*max-width:100%/);
   assert.match(popupCss, /\.job-line \.job-state\{[^}]*min-width:max-content[^}]*white-space:nowrap/);
-  assert.match(popupCss, /\.job-card\.terminal\{[^}]*padding:9px 12px[^}]*gap:5px/);
+  assert.match(popupCss, /\.job-card\.terminal\{[^}]*padding:10px 12px/);
+  assert.match(popupCss, /\.job-head-line \.job-title\{[^}]*min-width:0[^}]*text-overflow:ellipsis/);
   assert.match(popupCss, /\.job-meta>span:first-child\{[^}]*min-width:0[^}]*flex:1[^}]*text-overflow:ellipsis/);
 });
 
@@ -293,7 +296,9 @@ test("popup offers one parsed download flow with format-driven filenames", () =>
 });
 
 test("popup clear action names and explains its combined history scope", () => {
-  assert.match(popupHtml, /id="clearButton"[^>]*title="清空当前页媒体检测结果与已结束任务，保留进行中任务"[^>]*>清空媒体与历史<\/button>/);
+  assert.match(popupHtml, /id="clearButton"[^>]*title="清空当前页媒体检测结果与已结束任务行；下载记录不受影响，进行中任务保留"[^>]*>清空结果<\/button>/);
+  assert.match(popupHtml, /id="historyButton"[^>]*>下载记录<\/button>/, "the popup links to the full downloads page");
+  assert.match(popupHtml, /id="folderButton"[^>]*title="打开 FluxCatch 下载文件夹；[^"]*"[^>]*>下载文件夹<\/button>/, "the folder button opens the engine's own folder");
   assert.match(popupJs, /window\.confirm\("清空当前页媒体检测结果与已结束任务/);
   assert.match(popupJs, /type: "CLEAR_TAB"/);
   assert.match(popupJs, /type: "CLEAR_COMPLETED_JOBS"/);
@@ -343,7 +348,7 @@ test("light and dark UI tokens meet text and control contrast floors", () => {
   const light = parseVariables(tokensCss.match(/:root\s*\{([\s\S]*?)\}/)?.[1] || "");
   const dark = parseVariables(tokensCss.match(/\[data-theme="dark"\]\s*\{([\s\S]*?)\}/)?.[1] || "");
   for (const [mode, variables] of [["light", light], ["dark", dark]]) {
-    assert.ok(contrast("#FFFFFF", variables["--primary-action"]) >= 4.5, `${mode} primary action text contrast`);
+    assert.ok(contrast(variables["--on-primary"], variables["--primary-action"]) >= 4.5, `${mode} primary action text contrast`);
     assert.ok(contrast(variables["--on-success"], variables["--success-action"]) >= 4.5, `${mode} success action text contrast`);
     assert.ok(contrast(variables["--muted"], variables["--surface"]) >= 4.5, `${mode} muted text contrast`);
     assert.ok(contrast(variables["--control-border"], variables["--surface"]) >= 3, `${mode} control boundary contrast`);
@@ -351,22 +356,22 @@ test("light and dark UI tokens meet text and control contrast floors", () => {
   assert.match(sidepanelJs, /setAttribute\("aria-valuetext"/);
 });
 
-test("all exported PNG icons preserve transparency and the neutral frame", () => {
+test("all exported PNG icons preserve transparency and the celadon lily pad", () => {
   for (const size of [16, 32, 48, 128]) {
     const png = decodeRgbaPng(readFileSync(new URL(`../extension/icons/icon${size}.png`, import.meta.url)));
     assert.equal(png.width, size);
     assert.equal(png.height, size);
     assert.ok(png.pixels.some((_, index) => index % 4 === 3 && png.pixels[index] === 0), `icon${size} has transparent pixels`);
     assert.ok(png.pixels.some((_, index) => index % 4 === 3 && png.pixels[index] === 255), `icon${size} has opaque pixels`);
-    let hasNeutralFrame = false;
+    let hasLilyPad = false;
     for (let index = 0; index < png.pixels.length; index += 4) {
       const [r, g, b, a] = png.pixels.slice(index, index + 4);
-      if (a > 150 && Math.abs(r - 102) < 20 && Math.abs(g - 113) < 20 && Math.abs(b - 109) < 20) {
-        hasNeutralFrame = true;
+      if (a > 150 && Math.abs(r - 143) < 20 && Math.abs(g - 184) < 20 && Math.abs(b - 163) < 20) {
+        hasLilyPad = true;
         break;
       }
     }
-    assert.equal(hasNeutralFrame, true, `icon${size} retains a visible neutral frame`);
+    assert.equal(hasLilyPad, true, `icon${size} retains the celadon lily pad`);
   }
 });
 

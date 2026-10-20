@@ -6,6 +6,7 @@
   <title>FluxCatch 设置</title>
   <link rel="stylesheet" href="../ui/tokens.css">
   <link rel="stylesheet" href="../ui/components.css">
+  <link rel="stylesheet" href="../ui/atmosphere.css">
   <link rel="stylesheet" href="options.css">
 </head>
 <body>
@@ -15,13 +16,16 @@
       <div class="brand">
         <div class="mark" aria-hidden="true">
           <svg viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
-            <rect x="10" y="10" width="108" height="108" rx="30" class="s-ink" fill="none" stroke-width="11"/>
-            <rect x="56" y="24" width="16" height="42" rx="8" class="c-accent"/>
-            <path d="M32 56 L64 88 L96 56 Z" class="c-primary"/>
+            <circle cx="64" cy="64" r="60" class="c-cream"/>
+            <circle cx="64" cy="64" r="58.5" fill="none" class="s-pond" stroke-opacity=".35" stroke-width="3"/>
+            <path d="M22 100q42-13 84 0" fill="none" class="s-pond" stroke-width="5" stroke-linecap="round"/>
+            <path d="M34 112q30-9 60 0" fill="none" class="s-pond" stroke-opacity=".5" stroke-width="4" stroke-linecap="round"/>
+            <path d="M52.4 26A34 34 0 1 1 32 46.4L64 58Z" class="c-celadon"/>
+            <circle cx="92" cy="36" r="9" class="c-rose"/>
           </svg>
         </div>
         <div>
-          <p class="eyebrow">LOCAL-FIRST MEDIA INSTRUMENT</p>
+          <p class="eyebrow">Local-first media instrument</p>
           <h1 data-ui-copy="options-title">FluxCatch 设置</h1>
           <p data-ui-copy="options-description">调整下载体验，并确认当前构建真正可用的能力。</p>
         </div>
@@ -70,6 +74,7 @@
             <p><strong>保存路径：</strong>多数媒体保存通过本地下载引擎安全处理；只有严格匹配的 Instagram/X 固定来源可直接交给 Chrome 下载。</p>
             <p><strong>B 站画质：</strong>默认开启同站媒体信息补全，使用当前页面的同站 Cookie，不上传到云服务，可在“隐私与网络”中关闭。</p>
             <p><strong>权限：</strong>本地下载引擎、通知和局域网访问都只会在你点击相应操作后请求或确认。</p>
+            <p><strong>快捷键：</strong>⌥⇧F 打开弹窗，⌥⇧D 打开下载记录，⌥⇧W 打开工作台；可在 chrome://extensions/shortcuts 修改。</p>
           </div>
         </details>
 
@@ -135,6 +140,21 @@
               <span><strong data-ui-copy="basic-title">基础下载</strong><small data-ui-copy="basic-description">普通用户最常用的保存方式。</small></span>
             </legend>
             <div class="section-content">
+              <div class="location-row" aria-labelledby="downloadLocationLabel">
+                <div class="location-copy">
+                  <span id="downloadLocationLabel" class="location-label">保存位置</span>
+                  <code id="downloadLocationPath" class="location-path" data-no-i18n>~/Downloads/FluxCatch</code>
+                  <small id="downloadLocationHelp">本地引擎保存到这里；Chrome 自己的下载列表不会显示这些文件，完整记录在“下载记录”页。</small>
+                  <small id="downloadLocationStatus" class="inline-status" role="status" aria-live="polite"></small>
+                </div>
+                <div class="location-actions">
+                  <button id="chooseDownloadFolderButton" type="button" class="secondary-btn">更改位置…</button>
+                  <button id="resetDownloadFolderButton" type="button" class="secondary-btn" hidden>恢复默认</button>
+                  <button id="openDownloadFolderButton" type="button" class="secondary-btn">打开文件夹</button>
+                  <button id="openHistoryButton" type="button" class="secondary-btn">下载记录</button>
+                </div>
+              </div>
+
               <div class="opt-field">
                 <label for="outputContainer">默认保存格式</label>
                 <select id="outputContainer" name="outputContainer" aria-describedby="outputContainerHelp outputContainerError">
@@ -186,6 +206,12 @@
                   <input id="concurrentRanges" name="concurrentRanges" type="number" min="1" max="24" inputmode="numeric" aria-describedby="concurrentRangesHelp concurrentRangesError">
                   <p id="concurrentRangesHelp" class="field-help">大文件分段同时获取的数量，允许 1–24。</p>
                   <p id="concurrentRangesError" class="field-error" role="alert" hidden></p>
+                </div>
+                <div class="opt-field">
+                  <label for="concurrentJobs">同时进行的下载数</label>
+                  <input id="concurrentJobs" name="concurrentJobs" type="number" min="1" max="6" inputmode="numeric" aria-describedby="concurrentJobsHelp concurrentJobsError">
+                  <p id="concurrentJobsHelp" class="field-help">超过这个数量的任务会排队等待，允许 1–6；网络不稳时用 1 或 2。</p>
+                  <p id="concurrentJobsError" class="field-error" role="alert" hidden></p>
                 </div>
               </div>
 

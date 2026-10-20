@@ -211,6 +211,7 @@ export function candidateForUi(candidate, dashPair = null) {
     duration: numberOrNull(candidate?.duration),
     codecs: string(candidate?.codecs),
     site: string(candidate?.site),
+    recommended: Boolean(candidate?.recommended),
     confidence: numberOrNull(candidate?.confidence) || 0,
     source: string(candidate?.source),
     sources: strings(candidate?.sources),

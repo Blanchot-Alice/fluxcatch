@@ -5,11 +5,14 @@ import {
   classifyBilibiliDashTrack,
   classifyMedia,
   filenameFromCandidate,
+  getExtension,
+  humanBytes,
   isBilibiliMediaUrl,
   isBilibiliVideoPage,
   isInstagramByteRangeFragment,
   isLikelySubtitleResource,
   normalizeMime,
+  opaqueTrackId,
   sanitizeFilename
 } from "./lib/media.js";
 import { parseHls, sortHlsVariants } from "./lib/hls.js";
@@ -42,6 +45,14 @@ const NATIVE_API_RECOVERY_TTL_MS = 2 * 60_000;
 const NATIVE_API_RECOVERY_RESUME_LIMIT = 2;
 const NATIVE_API_UNAVAILABLE_MESSAGE = "本地下载引擎权限已开启，Chrome 正在初始化连接接口。FluxCatch 将自动重试。";
 const NATIVE_API_RESTART_MESSAGE = "本地下载引擎权限已开启，但 Chrome 的连接接口长期未恢复。请完全退出并重新启动 Chrome，返回后点击“重新检查”。";
+// Self-heal: a worker that outlived the optional-permission grant never gets
+// the connectNative binding. One extension reload replaces it; the marker keeps
+// the cooldown, the session snapshot and the action to finish afterwards.
+const NATIVE_API_SELF_HEAL_KEY = "nativeApiSelfHeal";
+const NATIVE_API_SELF_HEAL_COOLDOWN_MS = 5 * 60_000;
+const NATIVE_API_SELF_HEAL_RESTORE_TTL_MS = 2 * 60_000;
+const NATIVE_API_SELF_HEAL_RELOAD_DELAY_MS = 150;
+const NATIVE_API_SELF_HEAL_MESSAGE = "本地下载引擎权限已开启，FluxCatch 正在自动重新加载以完成连接，几秒后即可使用。";
 const NATIVE_HOST_MISSING_MESSAGE = "本地下载引擎尚未安装或未注册。从源码使用时请运行 ./scripts/native-install-wrapper.sh；从 Native ZIP 使用时请运行 ./install-macos.sh。";
 const NATIVE_CONNECTION_FAILED_MESSAGE = "暂时未能连接本地引擎。请稍后点击“重新检查”；若持续失败，请在 chrome://extensions 中查看 FluxCatch 的错误。";
 const EXTENSION_ORIGIN = chrome.runtime.getURL("");
@@ -64,6 +75,20 @@ const MAX_HLS_GROUP_VARIANTS = 16;
 const TRACK_HINT_PROBE_BYTES = 64 * 1024;
 const MAX_STORED_JOBS = 200;
 const JOB_PROGRESS_PERSIST_INTERVAL_MS = 1_000;
+// Durable download history (chrome.storage.local). Finished, failed and
+// cancelled jobs survive worker restarts, browser restarts and extension
+// reloads; the session job list stays the live control surface.
+const HISTORY_STORAGE_KEY = "downloadHistory.v1";
+const MAX_HISTORY_RECORDS = 400;
+const MAX_HISTORY_THUMBNAILS = 120;
+const MAX_HISTORY_THUMBNAIL_CHARS = 70_000;
+const MAX_JOB_DETAILS = 600;
+const DOWNLOAD_BADGE_REFRESH_MS = 700;
+const FILE_ACTIONS = new Set(["reveal", "open", "trash"]);
+const NATIVE_COMPLETE_MESSAGE = "已保存到 FluxCatch 文件夹";
+const MAX_BATCH_DOWNLOADS = 50;
+const USER_URL_PROBE_TIMEOUT_MS = 10_000;
+const DOWNLOADS_PAGE_PATH = "downloads/downloads.html";
 const MAX_THUMBNAIL_URL_LENGTH = 4096;
 const BILIBILI_DISCOVERY_TTL_MS = 45_000;
 const BILIBILI_AUTOMATIC_RETRY_COOLDOWN_MS = 5_000;
@@ -71,20 +96,31 @@ const BILIBILI_OBSERVED_METADATA_TIMEOUT_MS = 2_000;
 const BILIBILI_TRACK_TTL_MS = 2 * 60_000;
 const BILIBILI_PAIR_WINDOW_MS = 30_000;
 const BILIBILI_SAFE_REFERER = "https://www.bilibili.com/";
+// Generic MSE stream aggregation (the VDH-style fallback layer). Tracks are
+// paired purely from runtime behavior — same document, complementary MIME,
+// large whole-object responses seen repeatedly — never from site naming.
+const GENERIC_STREAM_EXTENSIONS = new Set(["m4s", "cmfv", "cmfa"]);
+const GENERIC_STREAM_MIN_BYTES = 1_000_000;
+const GENERIC_STREAM_TTL_MS = 2 * 60_000;
+const GENERIC_STREAM_MAX_VIDEOS_PER_TAB = 8;
+const GENERIC_STREAM_PUBLISH_DELAY_MS = 300;
 const DASH_PAIR_SELECTOR_ORIGIN = "https://fluxcatch.invalid";
 const MANIFEST_SELECTOR_ORIGIN = "https://fluxcatch.invalid";
 // 0.2.5 has no pinned broker for external tools. Keep the adapter source for
 // the future GitHub build, but compile every setting/candidate/download gate
 // closed regardless of what an older or replacement native host reports.
 const SENSITIVE_REQUEST_HEADERS = new Set(["authorization", "cookie", "origin", "referer"]);
-const UI_PORT_NAMES = new Set(["fluxcatch-popup", "fluxcatch-sidepanel"]);
-const JOB_STATUSES = new Set(["queued", "starting", "downloading", "remuxing", "completed", "failed", "cancelled"]);
+const UI_PORT_NAMES = new Set(["fluxcatch-popup", "fluxcatch-sidepanel", "fluxcatch-downloads"]);
+const JOB_STATUSES = new Set(["queued", "starting", "downloading", "remuxing", "pausing", "paused", "completed", "failed", "cancelled"]);
 const TERMINAL_JOB_STATUSES = new Set(["completed", "failed", "cancelled"]);
+// A paused job is neither active nor ended: its resumable state lives on
+// disk (direct checkpoint or staged segments) and in the job's resume recipe.
+const PAUSED_JOB_MESSAGE = "已暂停，可随时继续";
 const CONTENT_SOURCES = new Set([
   "content", "dom", "loadedmetadata", "durationchange", "mutation",
   "source-element", "metadata", "site-payload", "instagram-api-response", "x-api-response"
 ]);
-const CONTENT_MESSAGE_TYPES = new Set(["CONTENT_MEDIA", "PAGE_PREVIEW"]);
+const CONTENT_MESSAGE_TYPES = new Set(["CONTENT_MEDIA", "CONTENT_PLAYBACK_HINT", "PAGE_PREVIEW"]);
 const PAGE_PREVIEW_PRIORITIES = new Map([
   ["poster", 600],
   ["og:image:secure_url", 500],
@@ -198,7 +234,9 @@ function youtubeWatchUrl(url) {
 
 const DEFAULT_SETTINGS = {
   concurrentFragments: 8,
-  concurrentRanges: 8,
+  concurrentRanges: 12,
+  // Native jobs beyond this number wait in the engine's queue.
+  concurrentJobs: 3,
   outputContainer: "mp4",
   saveAs: false,
   useNativeForDirect: false,
@@ -209,7 +247,9 @@ const DEFAULT_SETTINGS = {
   allowPrivateNetworkMedia: false,
   blockedDomains: [],
   filenameTemplate: "{title}",
-  showNotifications: false
+  // Completion notifications lead straight to the saved file; the optional
+  // browser permission is requested from the first download gesture.
+  showNotifications: true
 };
 
 const tabMedia = new Map();
@@ -219,6 +259,14 @@ const siteCandidateRecoveryInFlight = new Map();
 const requestHeaders = new Map();
 const pendingRequestHeaders = new Map();
 const hostClients = new Set();
+// Worker-private facts about a job that never reach UI payloads raw: the
+// published path, the source page and the retry recipe (opaque candidate ref).
+const jobDetails = new Map();
+let history = [];
+const historyIndex = new Map();
+const pendingHostFileActions = new Map();
+let downloadBadgeTimer = null;
+const historyReady = loadHistory();
 const popupClients = new Set();
 const browserDownloads = new Set();
 // chrome.downloads.cancel() can synchronously emit an "interrupted" change
@@ -242,10 +290,23 @@ const bilibiliAutomaticDiscoveryAttemptAt = new Map();
 const bilibiliObservationChains = new Map();
 const bilibiliPruneTimers = new Map();
 const bilibiliTabTokens = new Map();
+// tabId -> Map<identity, genericStreamTrack>. Memory-only, like Bilibili DASH
+// state: signed or session-scoped stream URLs never reach storage.session.
+const genericStreamStates = new Map();
+// tabId -> {height, width, duration, at}. The MSE player's own videoHeight/
+// duration, replayed onto ladder cards whose playlist carries no resolution.
+const tabPlaybackHints = new Map();
+const genericStreamPruneTimers = new Map();
+const genericStreamPublishTimers = new Map();
 let headerPruneTimer = null;
 let jobPersistTimer = null;
 let nativePort = null;
 let nativeConnectPromise = null;
+let nativeApiSelfHealScheduled = false;
+// What the worker was doing when it found Chrome's connectNative binding
+// missing: the surface that asked and the download that should continue after
+// the self-heal reload. Consumed once by attemptNativeApiSelfHeal().
+const nativeIntent = { surface: null, pendingDownload: null };
 const pendingHostPings = new Map();
 let hostStatus = {
   connected: false,
@@ -261,8 +322,28 @@ let hostStatus = {
 
 // Register listeners synchronously, but make every state consumer wait for the
 // MV3 session restore so early webRequest/content events cannot be overwritten.
-const sessionReady = restoreSession();
+const nativeApiSelfHealResume = restoreNativeApiSelfHealSnapshot();
+const sessionReady = nativeApiSelfHealResume.then(restoreSession, restoreSession);
 const nativeRecoveryReady = prepareNativeApiRecoveryAtStartup();
+void completeNativeApiSelfHeal();
+
+// Keyboard shortcuts (chrome://extensions/shortcuts lets the user change them).
+chrome.commands?.onCommand?.addListener((command, tab) => {
+  void handleCommand(command, tab);
+});
+
+async function handleCommand(command, tab) {
+  try {
+    if (command === "open-downloads") {
+      await openDownloadsPage();
+    } else if (command === "open-workspace") {
+      const windowId = Number.isInteger(tab?.windowId) ? tab.windowId : (await chrome.windows?.getLastFocused?.())?.id;
+      if (Number.isInteger(windowId)) await chrome.sidePanel?.open?.({ windowId });
+    }
+  } catch {
+    // Shortcuts are conveniences; a window without a panel simply does nothing.
+  }
+}
 
 chrome.permissions.onRemoved?.addListener((permissions) => {
   if (!permissions?.permissions?.includes("nativeMessaging")) return;
@@ -293,7 +374,7 @@ chrome.webRequest.onBeforeSendHeaders.addListener(
         expectedTabToken: bilibiliGeneration
       });
     }
-    const allowed = new Set(["accept", "authorization", "cookie", "origin", "referer", "user-agent"]);
+    const allowed = new Set(["accept", "authorization", "cookie", "origin", "range", "referer", "user-agent"]);
     const headers = {};
     let capturedBytes = 0;
     for (const header of details.requestHeaders || []) {
@@ -348,12 +429,24 @@ chrome.webRequest.onHeadersReceived.addListener(
       && (!pending.documentId || pending.documentId === cleanText(details.documentId, 128))
     );
     if (routeIsCurrent && classification?.kind === "segment") {
-      queueBilibiliDashObservation(details, {
+      const observation = {
         mime,
         contentLength,
         rangeSupported: rangeLength > 0 || /bytes/i.test(headers["accept-ranges"] || ""),
+        // Whole-object evidence: either this response is a ranged slice of a
+        // larger object (Content-Range with a total) or the request itself
+        // asked for a byte range. accept-ranges alone is a capability, not
+        // evidence — segment players get it too.
+        rangeEvidence: rangeLength > 0 || /^bytes\s*=/i.test(String(pending?.headers?.range || "")),
         headers: nonSensitiveMediaHeaders(pending?.headers)
-      }, pending?.bilibiliGeneration);
+      };
+      // Bilibili-shaped objects feed the fixed-site pipeline (its public-API
+      // leg is what fills in the full 4K quality ladder). Everything else goes
+      // to the generic behavior-based aggregator, so any site's MSE stream
+      // becomes downloadable without knowing that site's naming scheme.
+      if (!queueBilibiliDashObservation(details, observation, pending?.bilibiliGeneration)) {
+        observeGenericStreamSegment(details, observation, pending);
+      }
     }
     if (routeIsCurrent && classification && classification.kind !== "segment" && pending?.headers && !isPolicyBlocked(details.url)) {
       const finalUrl = canonicalizeUrl(details.url);
@@ -437,9 +530,23 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
     void clearTabAfterRestore(tabId, true);
     return;
   }
-  // Page completion alone is not a trusted media signal. Automatic Bilibili
-  // enrichment starts only from the observed media-request path above.
+  // Product behavior: opening a Bilibili video page lights the badge right
+  // away. The query is the same read-only, cookie-scoped playurl lookup the
+  // playback path uses (rate-limited by its TTL/cooldowns), so members see
+  // their full ladder — up to 4K — before the first segment request lands.
+  if (changeInfo.status === "complete") void triggerBilibiliPageCompleteDiscovery(tabId);
 });
+
+async function triggerBilibiliPageCompleteDiscovery(tabId) {
+  try {
+    await sessionReady;
+    const tab = await chrome.tabs.get(tabId);
+    if (!isBilibiliVideoPage(tab?.url)) return;
+    await triggerSiteDiscovery(tabId, { automatic: true, observedPlayback: false });
+  } catch {
+    // The tab may be gone already; discovery is best-effort.
+  }
+}
 
 chrome.tabs.onActivated.addListener(({ tabId }) => {
   // Chrome keeps per-tab badge text across service-worker restarts, but media
@@ -526,6 +633,23 @@ async function handleMessage(message, sender) {
     throw new Error("消息来源未通过校验");
   }
   switch (message.type) {
+    case "CONTENT_PLAYBACK_HINT": {
+      const tabId = sender.tab?.id;
+      if (!contentRouteGuard()) return { ignored: true };
+      const raw = message.data && typeof message.data === "object" ? message.data : {};
+      const height = positive(raw.height);
+      const width = positive(raw.width);
+      const duration = positive(raw.duration);
+      if (!height && !duration) return { ignored: true };
+      if (height > 8192 || duration > 86_400) return { ignored: true };
+      tabPlaybackHints.set(tabId, {
+        height,
+        width,
+        duration,
+        at: Date.now()
+      });
+      return { accepted: true };
+    }
     case "CONTENT_MEDIA": {
       const tabId = sender.tab?.id;
       if (!contentRouteGuard()) return { ignored: true };
@@ -562,8 +686,10 @@ async function handleMessage(message, sender) {
       // playback traffic and the explicit SCAN_TAB action own that work.
       await maybeAddYouTubeCandidate(tabId);
       const settings = await getSettings();
+      suppressRedundantVideoCandidates(tabId);
+      if (attachMissingTabPreviews(tabId)) await persistSession();
       const items = [...(tabMedia.get(tabId)?.values() || [])]
-        .filter((item) => item.kind !== "segment" && !item.mergedInto && !item.variantGroupInto)
+        .filter((item) => item.kind !== "segment" && !item.mergedInto && !item.variantGroupInto && !item.suppressedAs)
         .filter((item) => item.kind !== "dash_pair" || isFreshBilibiliCandidate(item))
         .filter((item) => item.kind !== "youtube" || settings.youtubeEnabled)
         .sort((a, b) => candidateScore(b) - candidateScore(a) || b.lastSeen - a.lastSeen)
@@ -572,6 +698,30 @@ async function handleMessage(message, sender) {
     }
     case "GET_JOBS":
       return { jobs: jobsForUi(), hostStatus: hostStatusForUi(hostStatus) };
+    case "GET_HISTORY": {
+      await historyReady;
+      return {
+        items: history.map(historyRecordForUi),
+        jobs: jobsForUi(),
+        hostStatus: hostStatusForUi(hostStatus),
+        downloadDir: downloadDirForUi()
+      };
+    }
+    case "REMOVE_HISTORY":
+      return removeHistoryRecord(cleanText(message.jobId, 128));
+    case "CLEAR_HISTORY":
+      return clearHistory();
+    case "VERIFY_HISTORY":
+      return verifyHistoryFiles();
+    case "FILE_ACTION":
+      return performFileAction(cleanText(message.action, 16), cleanText(message.jobId, 128));
+    case "RETRY_JOB":
+      return retryJob(cleanText(message.jobId, 128));
+    case "OPEN_JOB_SOURCE":
+      return openJobSource(cleanText(message.jobId, 128));
+    case "OPEN_DOWNLOADS_PAGE":
+      await openDownloadsPage();
+      return {};
     case "CLEAR_COMPLETED_JOBS": {
       // Keep the legacy message name for compatibility, but "completed" here
       // means every ended state: saved, failed, or cancelled.
@@ -598,24 +748,69 @@ async function handleMessage(message, sender) {
       return {};
     }
     case "SHOW_DOWNLOAD_FOLDER":
-      await chrome.downloads.showDefaultFolder();
-      return {};
+    case "OPEN_DOWNLOAD_FOLDER":
+      return openDownloadFolder();
+    case "CHOOSE_DOWNLOAD_FOLDER":
+      return chooseDownloadFolder({ reset: message.reset === true });
     case "PROBE_MANIFEST": {
       const tabId = validTabId(message.tabId);
       const candidate = requireTabCandidate(tabId, message.candidate);
       if (candidate.kind === "dash_pair") return { probe: dashPairProbeForUi(candidate) };
       const settings = await getSettings();
-      const inspection = await probeManifest(candidate, {
-        userInitiated: true,
-        networkScope: networkScopeForSettings(settings),
-        timeoutMs: MANIFEST_INSPECTION_TIMEOUT_MS
-      });
-      await recordManifestInspection(tabId, candidate, inspection);
-      return { probe: probeForUi(inspection, candidate) };
+      let inspection = null;
+      try {
+        inspection = await probeManifest(candidate, {
+          userInitiated: true,
+          networkScope: networkScopeForSettings(settings),
+          timeoutMs: MANIFEST_INSPECTION_TIMEOUT_MS
+        });
+        await recordManifestInspection(tabId, candidate, inspection);
+      } catch (error) {
+        // A rendition-group card already carries its own ladder; several CDNs
+        // refuse the extension's probe fetch outright. The dropdown must not
+        // depend on the network's goodwill.
+        if (candidate.kind === "hls" && Array.isArray(candidate.variants) && candidate.variants.length) {
+          return { probe: renditionGroupProbeForUi(candidate) };
+        }
+        // Plain media playlists get the pinned native engine to replay the
+        // page's own headers — the same path the download itself will use.
+        // Without a connected engine the original probe error stands.
+        if (candidate.kind === "hls" && nativePort) {
+          inspection = await inspectHlsThroughNative(tabId, candidate, {
+            networkScope: networkScopeForSettings(settings),
+            userInitiated: true
+          });
+        } else {
+          throw error;
+        }
+      }
+      return { probe: inspection ? probeForUi(inspection, candidate) : renditionGroupProbeForUi(candidate) };
     }
     case "DOWNLOAD": {
       const tabId = validTabId(message.tabId);
-      return startDownload(requireTabCandidate(tabId, message.candidate), message.options || {}, tabId);
+      return startDownload(requireTabCandidate(tabId, message.candidate), message.options || {}, tabId, { surface: surfaceFromSender(sender) });
+    }
+    case "DOWNLOAD_BATCH": {
+      // Every visible card on the page, with the page's default options; the
+      // engine's job queue meters how many actually transfer at once.
+      const tabId = validTabId(message.tabId);
+      const references = Array.isArray(message.candidates) ? message.candidates.slice(0, MAX_BATCH_DOWNLOADS) : [];
+      const results = [];
+      for (const reference of references) {
+        try {
+          const candidate = requireTabCandidate(tabId, reference);
+          const result = await startDownload(candidate, message.options || {}, tabId, { surface: surfaceFromSender(sender) });
+          results.push({ id: cleanText(reference?.id, 64), ok: true, jobId: result.jobId, method: result.method });
+        } catch (error) {
+          results.push({ id: cleanText(reference?.id, 64), ok: false, error: error?.message || String(error) });
+        }
+      }
+      const started = results.filter((item) => item.ok).length;
+      return { started, failed: results.length - started, results };
+    }
+    case "DOWNLOAD_URL": {
+      const tabId = validTabId(Number.isInteger(message.tabId) ? message.tabId : sender.tab?.id);
+      return downloadUserUrl(tabId, message.url, message.options || {}, { surface: surfaceFromSender(sender) });
     }
     case "PING_HOST": {
       await nativeRecoveryReady;
@@ -624,6 +819,7 @@ async function handleMessage(message, sender) {
         return { hostStatus: hostStatusForUi(hostStatus) };
       }
       try {
+        noteNativeIntent({ surface: surfaceFromSender(sender) });
         const port = await ensureNativePort({ requireCompatibility: false });
         // A live port answers with capabilities probed when its process started;
         // yt-dlp may have been installed or upgraded since. Force a fresh ping
@@ -670,10 +866,15 @@ async function handleMessage(message, sender) {
           throw error;
         }
       }
+      if (job?.method === "native" && job.status === "paused") return discardPausedJob(job);
       const port = await ensureNativePort();
       port.postMessage({ type: "cancel", jobId });
       return {};
     }
+    case "PAUSE_JOB":
+      return pauseJob(cleanText(message.jobId, 128));
+    case "RESUME_JOB":
+      return resumeJob(cleanText(message.jobId, 128), { surface: surfaceFromSender(sender) });
     case "GET_SETTINGS":
       return { settings: await getSettings() };
     case "GET_DIAGNOSTICS":
@@ -702,20 +903,30 @@ async function handleMessage(message, sender) {
 
 function dashPairProbeForUi(candidate) {
   const now = Date.now();
+  const site = candidate?.site === "generic" ? "generic" : "bilibili";
+  const enforceWindow = site !== "generic";
   if (!isFreshBilibiliCandidate(candidate, now)) throw new Error("视频清晰度地址已过期，请重新扫描页面");
-  const audios = (candidate.audioTracks || []).filter((track) => isFreshBilibiliTrack(track, now));
+  const audios = (candidate.audioTracks || []).filter((track) => isFreshBilibiliTrack(track, now, site));
   const ranked = (candidate.videoTracks || [])
-    .filter((track) => isFreshBilibiliTrack(track, now))
-    .filter((video) => audios.some((audio) => canPairBilibiliTracks(video, audio, true)))
-    .sort((a, b) => Number(b.height || 0) - Number(a.height || 0)
-      || bilibiliVideoCompatibilityRank(b) - bilibiliVideoCompatibilityRank(a)
-      || Number(b.bandwidth || 0) - Number(a.bandwidth || 0)
-      || Number(b.lastSeen || 0) - Number(a.lastSeen || 0))
-    .map((track) => ({
+    .filter((track) => isFreshBilibiliTrack(track, now, site))
+    .filter((video) => audios.some((audio) => canPairBilibiliTracks(video, audio, enforceWindow)))
+    .sort((a, b) => site === "generic"
+      // Generic tracks carry no resolution metadata; whole-object size is the
+      // honest quality proxy (players ship higher renditions as bigger files).
+      ? Number(b.contentLength || 0) - Number(a.contentLength || 0)
+        || Number(b.lastSeen || 0) - Number(a.lastSeen || 0)
+      : Number(b.height || 0) - Number(a.height || 0)
+        || bilibiliVideoCompatibilityRank(b) - bilibiliVideoCompatibilityRank(a)
+        || Number(b.bandwidth || 0) - Number(a.bandwidth || 0)
+        || Number(b.lastSeen || 0) - Number(a.lastSeen || 0))
+    .map((track, index) => ({
       // The popup treats this as an opaque option value. Never disclose the
       // short-lived CDN signature outside the worker's private state.
       url: dashPairTrackSelector(candidate, track),
-      id: cleanText(track.representationId, 32),
+      id: cleanText(track.representationId, 32) || (site === "generic" ? `rendition-${index + 1}` : ""),
+      // Generic renditions have no resolution metadata, so the dialog shows a
+      // readable rank plus the observed object size instead of "清晰度 N".
+      name: site === "generic" ? `画质 ${index + 1} · ${humanBytes(track.contentLength)}` : "",
       bandwidth: positive(track.bandwidth) || 0,
       width: positive(track.width),
       height: positive(track.height),
@@ -725,7 +936,9 @@ function dashPairProbeForUi(candidate) {
     .filter((track) => track.url);
   const seenQualities = new Set();
   const variants = ranked.filter((track) => {
-    const quality = track.height ? `${track.width || 0}x${track.height}` : `id:${track.id}`;
+    const quality = site === "generic"
+      ? track.url
+      : track.height ? `${track.width || 0}x${track.height}` : `id:${track.id}`;
     if (seenQualities.has(quality)) return false;
     seenQualities.add(quality);
     return true;
@@ -765,7 +978,9 @@ function bilibiliCidFromMediaUrl(value) {
     const parsed = new URL(value);
     if (!isBilibiliMediaUrl(parsed.href)) return null;
     const basename = decodeURIComponent(parsed.pathname.split("/").pop() || "");
-    const match = basename.match(/^(\d{1,20})-\d{1,4}-30[0-2]\d{2}\.(?:m4s|cmfv|cmfa)$/i);
+    // Object names are `{cid}` or `{cid}_{codec-stream}` (for example
+    // `_da2`, `_da2x1`), then `-{page}-{representation}.{ext}`.
+    const match = basename.match(/^(\d{1,20})(?:_(?:da\d+x?\d*))?-\d{1,4}-(?:30[0-2]\d{2}|1001\d{2})\.(?:m4s|cmfv|cmfa)$/i);
     if (!match) return null;
     const cid = Number(match[1]);
     return Number.isSafeInteger(cid) && cid > 0 ? cid : null;
@@ -1091,16 +1306,21 @@ function queueBilibiliDashObservation(details, observation, tabToken) {
     mime: observation.mime,
     contentLength: observation.contentLength
   });
+  // The boolean answers "is this a Bilibili-shaped object at all" so the
+  // generic aggregator can take everything else, independent of whether the
+  // fixed-site pipeline will actually accept this particular response.
+  if (!track) return false;
   // Missing start-generation metadata means the worker began observing after
   // the request was already in flight. Fail closed rather than bind it to a
   // possibly different SPA route.
-  if (!track || !tabToken || !Number.isInteger(details.tabId) || details.tabId < 0) return;
+  if (!tabToken || !Number.isInteger(details.tabId) || details.tabId < 0) return true;
   const previous = bilibiliObservationChains.get(details.tabId) || Promise.resolve();
   const next = previous.catch(() => {}).then(() => observeBilibiliDashTrack(details, observation, track, tabToken));
   bilibiliObservationChains.set(details.tabId, next);
   void next.finally(() => {
     if (bilibiliObservationChains.get(details.tabId) === next) bilibiliObservationChains.delete(details.tabId);
   });
+  return true;
 }
 
 async function observeBilibiliDashTrack(details, observation, classified, tabToken) {
@@ -1141,6 +1361,228 @@ async function observeBilibiliDashTrack(details, observation, classified, tabTok
     scheduleHeaderPrune();
   }
   await publishBilibiliDashPair(details.tabId, tab, tabToken);
+}
+
+// --- Generic stream aggregation -------------------------------------------------
+// The Bilibili adapter answers "what quality ladder does this playback have";
+// this layer answers the site-agnostic question "did this document just stream
+// a media object". Pairing uses only runtime signals: one browser document,
+// complementary video/audio MIME, whole-object responses large enough to be
+// media rather than captions or thumbnails. Site naming is never a condition,
+// so player redesigns and new CDN segment ids cannot blind it.
+
+function genericStreamState(tabId) {
+  let state = genericStreamStates.get(tabId);
+  if (!state) genericStreamStates.set(tabId, (state = new Map()));
+  return state;
+}
+
+function observeGenericStreamSegment(details, observation, pending) {
+  if (!Number.isInteger(details.tabId) || details.tabId < 0) return;
+  const url = canonicalizeUrl(details.url);
+  if (!url) return;
+  const ext = getExtension(url);
+  if (!GENERIC_STREAM_EXTENSIONS.has(ext)) return;
+  // Range evidence gate. Whole-object players address one URL through many
+  // ranged requests; segment-template players instead fetch thousands of
+  // distinct numbered files with one plain 200 each. Without this gate every
+  // such segment would pose as a "rendition" and the quality dropdown would
+  // offer broken few-second clips.
+  if (!observation.rangeEvidence) return;
+  const mime = normalizeMime(observation.mime);
+  // A declared track MIME separates video from audio. Opaque octet-stream
+  // objects are stored unclassified ("") — the publisher's strong inference
+  // may later promote them, but nothing is guessed at observation time.
+  let trackType = "";
+  if (mime.startsWith("video/") || ext === "cmfv") trackType = "video";
+  else if (mime.startsWith("audio/") || ext === "cmfa") trackType = "audio";
+  if (Number(observation.contentLength || 0) < GENERIC_STREAM_MIN_BYTES) return;
+  const parsed = new URL(url);
+  const identity = `${parsed.hostname.toLowerCase()}${parsed.pathname}`;
+  const now = Date.now();
+  const state = genericStreamState(details.tabId);
+  state.set(identity, {
+    url,
+    identity,
+    trackId: opaqueTrackId(parsed, trackType),
+    trackType,
+    mime,
+    contentLength: Number(observation.contentLength || 0),
+    rangeSupported: Boolean(observation.rangeSupported),
+    documentId: cleanText(pending?.documentId, 128),
+    routeGeneration: cleanText(pending?.routeGeneration, 64),
+    firstSeen: now,
+    lastSeen: now,
+    expiresAt: now + GENERIC_STREAM_TTL_MS
+  });
+  if (state.size > 64) {
+    for (const [key, track] of state) {
+      if (track.lastSeen < now - GENERIC_STREAM_TTL_MS) state.delete(key);
+    }
+  }
+  // Keep the observed safe headers so a download can replay Referer/UA on
+  // sites whose CDN rejects fetches that lack them.
+  const safeHeaders = nonSensitiveMediaHeaders(observation.headers);
+  if (Object.keys(safeHeaders).length) {
+    requestHeaders.set(headerKey(details.tabId, url), {
+      headers: safeHeaders,
+      bytes: capturedHeadersByteLength(safeHeaders),
+      at: now,
+      tabId: details.tabId,
+      requestId: details.requestId
+    });
+    scheduleHeaderPrune();
+  }
+  scheduleGenericStreamPublish(details.tabId);
+}
+
+function scheduleGenericStreamPublish(tabId) {
+  if (genericStreamPublishTimers.has(tabId)) return;
+  const timer = setTimeout(() => {
+    genericStreamPublishTimers.delete(tabId);
+    void publishGenericStreamPairs(tabId);
+  }, GENERIC_STREAM_PUBLISH_DELAY_MS);
+  timer?.unref?.();
+  genericStreamPublishTimers.set(tabId, timer);
+}
+
+function pruneGenericStreamTracks(tabId, now = Date.now()) {
+  const state = genericStreamStates.get(tabId);
+  if (!state) return false;
+  let removed = 0;
+  for (const [key, track] of state) {
+    if (track.expiresAt > now) continue;
+    requestHeaders.delete(headerKey(tabId, track.url));
+    state.delete(key);
+    removed += 1;
+  }
+  if (!state.size) genericStreamStates.delete(tabId);
+  return removed > 0;
+}
+
+async function removePublishedGenericPairs(tabId) {
+  const map = tabMedia.get(tabId);
+  let removed = false;
+  for (const [key, item] of map || []) {
+    if (item.kind !== "dash_pair" || item.site !== "generic") continue;
+    map.delete(key);
+    removed = true;
+  }
+  if (!removed) return false;
+  await persistSession();
+  await updateBadge(tabId);
+  broadcast({ type: "MEDIA_UPDATED", tabId, item: null });
+  return true;
+}
+
+async function publishGenericStreamPairs(tabId) {
+  pruneGenericStreamTracks(tabId);
+  const state = genericStreamStates.get(tabId);
+  if (!state?.size) {
+    await removePublishedGenericPairs(tabId);
+    scheduleGenericStreamPrune(tabId);
+    return;
+  }
+  let tab = null;
+  try { tab = await chrome.tabs.get(tabId); } catch { return; }
+  const routeGeneration = tabGenerations.get(tabId);
+  const map = tabMedia.get(tabId);
+  const previousByGroupKey = new Map();
+  for (const [key, item] of map || []) {
+    if (item.kind !== "dash_pair" || item.site !== "generic") continue;
+    const groupKey = cleanText(item.documentId, 128) || `route:${cleanText(item.routeGeneration, 64)}`;
+    if (groupKey) previousByGroupKey.set(groupKey, item);
+  }
+  // Withdraw every previously published pair first so expired renditions
+  // never linger beside fresh ones, and so a video-only republish (its audio
+  // gone) actually clears the badge. Candidate ids are reused below so an
+  // open popup keeps its selection stable across republishes.
+  await removePublishedGenericPairs(tabId);
+  const groups = new Map();
+  for (const track of state.values()) {
+    if (track.routeGeneration && track.routeGeneration !== routeGeneration) continue;
+    const key = track.documentId || `route:${track.routeGeneration}`;
+    if (!groups.has(key)) groups.set(key, { videos: [], audios: [], unclassified: [] });
+    const group = groups.get(key);
+    if (track.trackType === "video") group.videos.push(track);
+    else if (track.trackType === "audio") group.audios.push(track);
+    else group.unclassified.push(track);
+  }
+  for (const [key, group] of groups) {
+    // Strong inference, nothing weaker: an opaque large object streamed
+    // alongside a declared audio track, with no declared video yet, is that
+    // document's video track (whole-object ladders serve every rendition the
+    // same opaque way). Any other configuration fails closed — a guessed
+    // audio or a guessed extra rendition would produce broken merges and
+    // false "quality" choices, which is worse than an absent card.
+    let videos = group.videos;
+    if (!videos.length && group.audios.length && group.unclassified.length) {
+      videos = group.unclassified.map((track) => ({
+        ...track,
+        trackType: "video",
+        // Keep the selector identical to what normalizeDashPairTracks will
+        // recompute for a video track, so republishes stay stable.
+        trackId: opaqueTrackId(new URL(track.url), "video")
+      }));
+    }
+    videos = videos
+      .sort((a, b) => b.lastSeen - a.lastSeen || b.contentLength - a.contentLength)
+      .slice(0, GENERIC_STREAM_MAX_VIDEOS_PER_TAB);
+    const audios = group.audios
+      .slice()
+      .sort((a, b) => b.lastSeen - a.lastSeen || b.contentLength - a.contentLength);
+    const selectedVideo = videos[0];
+    const selectedAudio = audios[0];
+    if (!selectedVideo || !selectedAudio || selectedVideo.url === selectedAudio.url) continue;
+    const family = `doc:${key}`;
+    // One card per document, mirroring the Bilibili card: every rendition the
+    // player streamed (a quality the user switched to, or a preloaded one)
+    // becomes a choice in the download dialog's quality dropdown instead of a
+    // separate card. The currently playing rendition is the default.
+    await addCandidate(tabId, {
+      id: previousByGroupKey.get(key)?.id || randomOpaqueId(),
+      kind: "dash_pair",
+      site: "generic",
+      url: canonicalizeUrl(tab?.url) || selectedVideo.url,
+      pairedAudioUrl: selectedAudio.url,
+      videoTracks: videos.map((track) => ({ ...track, assetFamily: family, cohort: family })),
+      audioTracks: audios.map((track) => ({ ...track, assetFamily: family, cohort: family })),
+      selectedVideoTrackId: selectedVideo.trackId,
+      selectedAudioTrackId: selectedAudio.trackId,
+      expiresAt: Math.min(selectedVideo.expiresAt, selectedAudio.expiresAt),
+      mime: selectedVideo.mime || "video/mp4",
+      ext: "mp4",
+      codecs: "",
+      contentLength: Number(selectedVideo.contentLength || 0) + Number(selectedAudio.contentLength || 0),
+      rangeSupported: Boolean(selectedVideo.rangeSupported && selectedAudio.rangeSupported),
+      title: cleanText(tab?.title, 240),
+      pageTitle: cleanText(tab?.title, 240),
+      tabUrl: cleanText(tab?.url, 2048),
+      documentId: key.startsWith("route:") ? "" : key,
+      routeGeneration: selectedVideo.routeGeneration || "",
+      source: "webRequest",
+      provenance: "observed_response",
+      confidence: 0.9
+    });
+  }
+  scheduleGenericStreamPrune(tabId);
+}
+
+function scheduleGenericStreamPrune(tabId) {
+  const existing = genericStreamPruneTimers.get(tabId);
+  if (existing !== undefined) clearTimeout(existing);
+  genericStreamPruneTimers.delete(tabId);
+  const state = genericStreamStates.get(tabId);
+  const expiries = [...(state?.values() || [])]
+    .map((track) => track.expiresAt)
+    .filter((value) => Number.isFinite(value) && value > 0);
+  if (!expiries.length) return;
+  const timer = setTimeout(() => {
+    genericStreamPruneTimers.delete(tabId);
+    void publishGenericStreamPairs(tabId);
+  }, Math.max(0, Math.min(...expiries) - Date.now() + 25));
+  timer?.unref?.();
+  genericStreamPruneTimers.set(tabId, timer);
 }
 
 function bilibiliTabToken(tabId) {
@@ -1226,16 +1668,20 @@ async function publishBilibiliDashPair(tabId, tab, tabToken = bilibiliTabTokens.
     return;
   }
   let map = tabMedia.get(tabId);
-  const previous = [...(map?.values() || [])].find((item) => item.kind === "dash_pair");
+  const previous = [...(map?.values() || [])]
+    .find((item) => item.kind === "dash_pair" && item.site !== "generic");
   const liveTrackUrls = new Set([...videos, ...audios].map((track) => track.url));
   for (const track of [...(previous?.videoTracks || []), ...(previous?.audioTracks || [])]) {
     if (track?.url && !liveTrackUrls.has(track.url)) requestHeaders.delete(headerKey(tabId, track.url));
   }
   if (!commitGuard()) return;
-  if (map) for (const [key, item] of map) if (item.kind === "dash_pair") map.delete(key);
+  // Generic aggregated pairs live beside the fixed-site pair and are managed
+  // by their own publisher, so this rotation must only touch Bilibili's.
+  if (map) for (const [key, item] of map) if (item.kind === "dash_pair" && item.site !== "generic") map.delete(key);
   await addCandidate(tabId, {
     id: previous?.id || randomOpaqueId(),
     kind: "dash_pair",
+    site: "bilibili",
     // This public candidate address is intentionally the page URL. Exact CDN
     // track URLs remain only in the worker-private arrays below.
     url: pageUrl,
@@ -1414,17 +1860,25 @@ function nonSensitiveMediaHeaders(value) {
   return result;
 }
 
-function normalizeDashPairTracks(values, trackType) {
+function normalizeDashPairTracks(values, trackType, site = "bilibili") {
   const seen = new Set();
   const result = [];
   for (const value of Array.isArray(values) ? values : []) {
     const url = canonicalizeUrl(value?.url);
-    if (!url || !isBilibiliMediaUrl(url) || seen.has(url)) continue;
+    // Bilibili tracks keep their CDN allowlist; generic aggregated tracks are
+    // already bounded by "observed by webRequest in this tab" and need no
+    // naming contract, only a well-formed https URL.
+    const trusted = site === "generic"
+      ? url !== null && url.startsWith("https://")
+      : url !== null && isBilibiliMediaUrl(url);
+    if (!url || !trusted || seen.has(url)) continue;
     seen.add(url);
     const parsed = new URL(url);
-    const assetFamily = bilibiliDashAssetFamily(parsed);
+    const assetFamily = site === "generic"
+      ? cleanText(value.assetFamily, 1024) || `generic:${parsed.hostname.toLowerCase()}`
+      : bilibiliDashAssetFamily(parsed);
     const identity = cleanText(value.identity, 4096) || `${parsed.hostname.toLowerCase()}${parsed.pathname}`;
-    const trackId = bilibiliDashTrackId(parsed, trackType);
+    const trackId = site === "generic" ? opaqueTrackId(parsed, trackType) : bilibiliDashTrackId(parsed, trackType);
     if (!assetFamily || !trackId) continue;
     const lastSeen = timestamp(value.lastSeen, Date.now());
     const derivedExpiresAt = lastSeen + BILIBILI_TRACK_TTL_MS;
@@ -1498,6 +1952,15 @@ async function addCandidate(tabId, input, commitGuard = null) {
   });
   const kind = input.kind || classified?.kind;
   if (!kind) return;
+  // A page's own URL addresses a document, never a media object. Players and
+  // page metadata occasionally point there (an embed fallback, or a video
+  // element before MSE attaches); saving that response writes the HTML page
+  // out as a media file. Pair cards keep the page URL on purpose — their real
+  // media lives in the private track arrays — and YouTube delegates the page
+  // to yt-dlp, so both stay exempt.
+  const selfReferentialPage = kind !== "dash_pair" && kind !== "youtube"
+    && canonicalizeUrl(input.tabUrl) === url;
+  if (selfReferentialPage) return;
   const settings = await getSettings();
   if (commitGuard && !commitGuard()) return false;
   try {
@@ -1563,20 +2026,27 @@ async function addCandidate(tabId, input, commitGuard = null) {
     suggestedFilenames: sourceFilenames
   });
   const directSourceFilename = !manifest ? directSuggestedFilename(input.suggestedFilename, kind, ext) : "";
-  const videoTracks = kind === "dash_pair" ? normalizeDashPairTracks(input.videoTracks, "video") : [];
-  const audioTracks = kind === "dash_pair" ? normalizeDashPairTracks(input.audioTracks, "audio") : [];
+  const pairSite = input.site === "generic" ? "generic" : "bilibili";
+  const videoTracks = kind === "dash_pair" ? normalizeDashPairTracks(input.videoTracks, "video", pairSite) : [];
+  const audioTracks = kind === "dash_pair" ? normalizeDashPairTracks(input.audioTracks, "audio", pairSite) : [];
   const pairedAudioUrl = kind === "dash_pair" ? canonicalizeUrl(input.pairedAudioUrl) : null;
-  if (kind === "dash_pair" && (!videoTracks.length || !audioTracks.length || !pairedAudioUrl || !isBilibiliMediaUrl(pairedAudioUrl))) return;
+  if (kind === "dash_pair" && (!videoTracks.length || !audioTracks.length || !pairedAudioUrl
+    || (pairSite === "bilibili" && !isBilibiliMediaUrl(pairedAudioUrl)))) {
+    return;
+  }
   const selectedVideo = kind === "dash_pair" ? videoTracks.find((track) => track.trackId === cleanText(input.selectedVideoTrackId, 128)) : null;
   const selectedAudio = kind === "dash_pair" ? audioTracks.find((track) => track.trackId === cleanText(input.selectedAudioTrackId, 128)) : null;
   const pairExpiresAt = kind === "dash_pair" && selectedVideo && selectedAudio
     ? Math.min(bilibiliTrackExpiresAt(selectedVideo), bilibiliTrackExpiresAt(selectedAudio), Number(input.expiresAt || Number.POSITIVE_INFINITY))
     : 0;
-  if (kind === "dash_pair" && (!selectedVideo || !selectedAudio || !Number.isFinite(pairExpiresAt) || pairExpiresAt <= now)) return false;
+  if (kind === "dash_pair" && (!selectedVideo || !selectedAudio || !Number.isFinite(pairExpiresAt) || pairExpiresAt <= now)) {
+    return false;
+  }
   const candidate = {
     id: old?.id || reusableOpaqueId(input.id),
     generation: old?.generation || routeGeneration || currentTabGeneration(tabId),
     documentId: cleanText(input.documentId, 128) || old?.documentId || "",
+    routeGeneration: cleanText(input.routeGeneration, 64) || old?.routeGeneration || "",
     url,
     kind,
     mime,
@@ -1585,7 +2055,11 @@ async function addCandidate(tabId, input, commitGuard = null) {
     manifestSize: manifest ? observedLength : null,
     rangeSupported: Boolean(input.rangeSupported || old?.rangeSupported),
     width: positive(input.width) || old?.width || null,
-    height: positive(input.height) || old?.height || null,
+    height: positive(input.height) || old?.height
+      // A lone media playlist never gets a variant table; the site's own
+      // rendition filename (720P_…/1080P_…) is the honest height label.
+      || (kind === "hls" ? heightFromManifestFilename(url) : null)
+      || null,
     duration: positive(input.duration) || old?.duration || null,
     codecs: cleanText(input.codecs, 180) || old?.codecs || "",
     title: naming.title,
@@ -1658,7 +2132,7 @@ async function addCandidate(tabId, input, commitGuard = null) {
     return false;
   }
   broadcast({ type: "MEDIA_UPDATED", tabId, item: withoutManifestText(candidate) });
-  if (kind === "hls") scheduleTabManifestInspections(tabId, key, Boolean(input.manifestText));
+  if (kind === "hls" || kind === "dash") scheduleTabManifestInspections(tabId, key, Boolean(input.manifestText));
   return true;
 }
 
@@ -2189,13 +2663,92 @@ function clearVariantGroupFields(candidates) {
   }
 }
 
-function rankVariantGroupMembers(members) {
-  return [...members].sort((a, b) =>
-    Number(b.height || 0) - Number(a.height || 0)
-    || Number(b.bandwidth || 0) - Number(a.bandwidth || 0)
-    || Number(b.firstSeen || 0) - Number(a.firstSeen || 0)
-    || String(a.url).localeCompare(String(b.url))
-  );
+// One playable video per page in the media list. Short hover-preview loops
+// are never what a download click wants, and once a probed ladder card (an
+// HLS master, a DASH manifest, or a paired DASH card) exists, same-site
+// metadata-only direct MP4s and standalone media playlists are duplicates of
+// that same playback whose signed URLs are the fragile ones. Suppressed
+// candidates stay in the map — probes can still promote or retire them — but
+// never reach the list or the badge. Recomputed on every read so a worker
+// restart cannot resurrect hidden rows.
+// Page previews (og:image and friends) arrive from the content script some
+// time after candidates are created; a card that was last written before the
+// preview landed would otherwise show its kind tile forever. Read-time attach
+// closes that race without ordering assumptions.
+function attachMissingTabPreviews(tabId) {
+  const preview = tabPreviews.get(tabId);
+  if (!preview) return false;
+  const map = tabMedia.get(tabId);
+  if (!map?.size) return false;
+  let attached = false;
+  for (const item of map.values()) {
+    if (item.thumbnailUrl) continue;
+    if (previewRank(preview) <= previewRank(item)) continue;
+    item.thumbnailUrl = preview.thumbnailUrl || null;
+    item.thumbnailSource = preview.thumbnailSource || null;
+    item.thumbnailFrameId = preview.thumbnailFrameId ?? null;
+    item.thumbnailAt = preview.thumbnailAt ?? null;
+    item.thumbnailAllowedOrigins = uniqueCleanTexts(preview.thumbnailAllowedOrigins, 512, 16);
+    item.thumbnailAdapterImageHosts = uniqueCleanTexts(preview.thumbnailAdapterImageHosts, 255, 16);
+    attached = true;
+  }
+  return attached;
+}
+
+function suppressRedundantVideoCandidates(tabId) {
+  const map = tabMedia.get(tabId);
+  if (!map) return;
+  const items = [...map.values()];
+  for (const item of items) {
+    item.suppressedAs = "";
+    item.recommended = false;
+  }
+  for (const item of items) {
+    if (item.kind !== "video") continue;
+    const duration = Number(item.duration || 0);
+    if (duration > 0 && duration < 5) item.suppressedAs = "preview_loop";
+  }
+  // A parsed standalone media playlist with real runtime length is also a
+  // ladder: it is what the player is actually streaming, and same-site direct
+  // MP4s beside it are the fragile signed fallbacks (or hover previews).
+  const ladder = items.find((item) =>
+    (item.kind === "hls" && item.manifestProbeStatus === "parsed" && item.manifestType === "master" && positive(item.manifestVariantCount) > 0)
+    || (item.kind === "hls" && Array.isArray(item.variants) && item.variants.length > 0)
+    || (item.kind === "hls" && item.manifestProbeStatus === "parsed" && positive(item.duration) >= 30)
+    || (item.kind === "dash" && item.manifestProbeStatus === "parsed")
+    || item.kind === "dash_pair");
+  if (!ladder) return;
+  ladder.recommended = true;
+  for (const item of items) {
+    if (item.suppressedAs || item === ladder || item.variantGroupInto) continue;
+    // A direct MP4 from the same CDN family is the fragile signed fallback
+    // (og:video shape: short-lived, IP-bound, dead by the time a user clicks
+    // it). The ladder card is what the player is actually streaming.
+    if (item.kind === "video" && sharesRegistrableHost(item.url, ladder.url)) {
+      item.suppressedAs = "duplicate_of_ladder";
+      continue;
+    }
+    // Standalone media playlists of a probed master are the master's own
+    // renditions; the master card's quality dropdown already carries them.
+    if (item.kind === "hls" && ladder.kind === "hls" && item.manifestType === "media"
+      && sharesRegistrableHost(item.url, ladder.url) && item.manifestProbeStatus === "parsed") {
+      item.suppressedAs = "duplicate_of_ladder";
+    }
+  }
+}
+
+// Compare the last two host labels (the CDN family). Exact-host equality is
+// too strict for ladders whose master and renditions live on sibling
+// subdomains; when the labels do not line up the caller keeps the row visible.
+function sharesRegistrableHost(first, second) {
+  try {
+    const tail = (value) => new URL(value).hostname.toLowerCase().split(".").slice(-2).join(".");
+    const left = tail(first);
+    const right = tail(second);
+    return Boolean(left && right && left === right);
+  } catch {
+    return false;
+  }
 }
 
 function variantGroupSelector(candidate, value) {
@@ -2208,6 +2761,37 @@ function variantGroupSelector(candidate, value) {
   }
 }
 
+// Rendition ladders on several large sites (Pornhub among them) are plain
+// per-quality media playlists under one directory — there is no master
+// playlist at all, and the CDN rejects the extension's own probe fetches, so
+// grouping cannot wait for a successful parse. The observable family signal
+// is the shared directory; the site's own rendition filename (1080P_4000K…)
+// supplies honest height labels. Probes, when they do succeed, still refine
+// heights and audio detection on top.
+function heightFromManifestFilename(value) {
+  try {
+    const basename = decodeURIComponent(new URL(value).pathname.split("/").pop() || "");
+    const match = basename.match(/(?:^|[^0-9])([1-9]\d{2,3})P(?:[^0-9P]|$)/i);
+    return match ? positive(Number(match[1])) || null : null;
+  } catch {
+    return null;
+  }
+}
+
+// The site's own rendition naming (`720P_4000K_56209715.m3u8`) is the one
+// signal that two still-unparsed playlists in a generic directory are
+// renditions of one object rather than different videos. Used only as a
+// grouping hint: when it does not match, cards simply stay separate —
+// detection itself never depends on it.
+function renditionFamilyKey(value) {
+  try {
+    const basename = decodeURIComponent(new URL(value).pathname.split("/").pop() || "");
+    return /^(\d{3,4}P_)(.+)$/i.exec(basename)?.[2]?.toLowerCase() || "";
+  } catch {
+    return "";
+  }
+}
+
 function regroupHlsVariantGroups(tabId) {
   const map = tabMedia.get(tabId);
   if (!map) return;
@@ -2215,24 +2799,50 @@ function regroupHlsVariantGroups(tabId) {
   clearVariantGroupFields(candidates);
   const buckets = new Map();
   for (const candidate of candidates) {
-    if (!usableTrackHints(candidate.trackHints)) continue;
-    if (candidate.manifestType !== "media") continue;
-    // Only probed (parsed) playlists may lead a group; an unparsed sibling
-    // URL directory match alone would be too weak a relation signal.
-    if (candidate.manifestProbeStatus !== "parsed") continue;
     const directory = hlsVariantDirectoryKey(candidate.url);
     if (!directory) continue;
-    const group = buckets.get(directory) || [];
+    const parsedMedia = candidate.manifestProbeStatus === "parsed" && candidate.manifestType === "media";
+    let key = directory;
+    if (!parsedMedia) {
+      // Unparsed playlists join a family only through rendition naming; a
+      // bare directory groups different videos' masters (Wistia-style).
+      const family = renditionFamilyKey(candidate.url);
+      if (!family) continue;
+      key = `${directory}::${family}`;
+    }
+    const group = buckets.get(key) || [];
     group.push(candidate);
-    buckets.set(directory, group);
+    buckets.set(key, group);
   }
   for (const members of buckets.values()) {
-    const videoMembers = members.filter((member) => member.trackHints.video);
-    if (!videoMembers.length) continue;
-    const rankedVideos = rankVariantGroupMembers(videoMembers);
-    const representative = rankedVideos[0];
+    // Renditions differ in their object names (1080P_… vs 720P_…). Siblings
+    // that share one basename and differ only in query tokens are different
+    // assets behind a per-asset address, never one family.
+    const basenames = new Set();
+    for (const member of members) {
+      try { basenames.add(decodeURIComponent(new URL(member.url).pathname.split("/").pop() || "")); } catch { /* skip */ }
+    }
+    if (basenames.size !== members.length) continue;
+    // A parsed master leads its directory family: the media playlists below
+    // it are its own renditions, already carried by its quality dropdown.
+    const master = members.find((member) => member.manifestProbeStatus === "parsed" && member.manifestType === "master");
+    if (master) {
+      for (const member of members) {
+        if (member !== master) member.variantGroupInto = master.id;
+      }
+      continue;
+    }
+    const videoMembers = members.filter((member) => member.trackHints?.video !== false);
+    const audioMembers = members.filter((member) => member.trackHints?.video === false && member.trackHints?.audio === true);
+    const pool = videoMembers.length ? videoMembers : members;
+    if (pool.length < 2 && !pool.some((member) => member.manifestProbeStatus === "parsed")) continue;
+    const ranked = pool.slice().sort((a, b) =>
+      (positive(b.height) || heightFromManifestFilename(b.url) || 0) - (positive(a.height) || heightFromManifestFilename(a.url) || 0)
+      || Number(b.bandwidth || 0) - Number(a.bandwidth || 0)
+      || Number(b.lastSeen || 0) - Number(a.lastSeen || 0));
+    const representative = ranked[0];
     const variants = [];
-    for (const member of rankedVideos.slice(0, MAX_HLS_GROUP_VARIANTS)) {
+    for (const member of ranked.slice(0, MAX_HLS_GROUP_VARIANTS)) {
       const selector = variantGroupSelector(representative, member.url);
       if (!selector) continue;
       variants.push({
@@ -2241,14 +2851,14 @@ function regroupHlsVariantGroups(tabId) {
         selector,
         bandwidth: Number(member.bandwidth) > 0 ? Math.max(0, Math.round(Number(member.bandwidth))) : 0,
         width: positive(member.width),
-        height: positive(member.height),
+        height: positive(member.height) || heightFromManifestFilename(member.url),
         duration: positive(member.duration) || 0,
-        trackHints: { ...member.trackHints }
+        ...(usableTrackHints(member.trackHints) ? { trackHints: { ...member.trackHints } } : {})
       });
     }
     if (!variants.length) continue;
     const audioCandidates = [];
-    for (const member of rankVariantGroupMembers(members.filter((item) => !item.trackHints.video)).slice(0, MAX_HLS_GROUP_VARIANTS)) {
+    for (const member of audioMembers.slice(0, MAX_HLS_GROUP_VARIANTS)) {
       const selector = variantGroupSelector(representative, member.url);
       if (!selector) continue;
       audioCandidates.push({
@@ -2294,13 +2904,19 @@ function selectHlsGroupTracks(candidate, resolvedVariantUrl) {
 }
 
 function scheduleTabManifestInspections(tabId, preferredKey, retryPreferred = false) {
+  // DASH manifests get the same one-shot inspection as HLS playlists: without
+  // it a template-based MPD never reaches the "parsed" state, so its numbered
+  // segment files kept showing up as separate 1 MB "videos" beside the card.
   const entries = [...(tabMedia.get(tabId)?.entries() || [])].filter(([, candidate]) =>
-    candidate.kind === "hls"
+    (candidate.kind === "hls" || candidate.kind === "dash")
     && (typeof candidate.manifestText === "string"
       || candidate.provenance === "observed_response"
       || candidate.sources?.includes("webRequest"))
   );
-  if (entries.length < 2 && !retryPreferred) return;
+  // Every observed playlist gets its one bounded inspection immediately:
+  // duration, height and the ladder role all come from parsing, and waiting
+  // for a second rendition (or a download click) left single-playlist sites
+  // — most of them, in practice — without any card metadata.
   for (const [key] of entries) scheduleManifestInspection(tabId, key, retryPreferred && key === preferredKey);
 }
 
@@ -2315,7 +2931,7 @@ function scheduleManifestInspection(tabId, key, retry = false) {
 
 async function inspectManifestCandidate(tabId, key) {
   const candidate = tabMedia.get(tabId)?.get(key);
-  if (!candidate || candidate.kind !== "hls") return;
+  if (!candidate || (candidate.kind !== "hls" && candidate.kind !== "dash")) return;
   try {
     const settings = await getSettings();
     const inspection = await probeManifest(candidate, {
@@ -2326,9 +2942,48 @@ async function inspectManifestCandidate(tabId, key) {
     });
     await recordManifestInspection(tabId, candidate, inspection);
   } catch {
-    // Private, expired and live manifests remain individually usable; a user
-    // initiated probe/download can retry with the captured browser context.
+    // The CDN refused the extension's own fetch (hotlink referer checks are
+    // common). The pinned native engine replays the page's own headers, so
+    // cards still get duration, height and ladder metadata; a failure stays
+    // silent because a user initiated probe/download can retry.
+    if (candidate.kind !== "hls") return;
+    try {
+      await inspectHlsThroughNative(tabId, candidate);
+    } catch {
+      // Private, expired and live manifests remain individually usable; a user
+      // initiated probe/download can retry with the captured browser context.
+    }
   }
+}
+
+async function inspectHlsThroughNative(tabId, candidate, options = {}) {
+  const url = canonicalizeUrl(candidate?.url);
+  if (!url) throw new Error("清单地址无效");
+  // The native engine must never become a private-network side door: the
+  // playlist URL passes the same policy gate the extension fetch used.
+  requireNetworkRequest({
+    url,
+    purpose: "manifest_probe",
+    provenance: CANDIDATE_PROVENANCES.includes(candidate?.provenance) ? candidate.provenance : "user_supplied",
+    networkScope: options.networkScope || "public_only",
+    userInitiated: Boolean(options.userInitiated)
+  });
+  const capture = requestHeaders.get(headerKey(tabId, url));
+  const headers = capture && Date.now() - capture.at <= HEADER_TTL_MS
+    ? nonSensitiveMediaHeaders(capture.headers)
+    : {};
+  const result = await inspectHlsViaNative(url, headers);
+  const manifestText = typeof result.text === "string" && result.text.length <= 1_500_000 ? result.text : null;
+  if (!manifestText) throw new Error("媒体清单超出大小限制");
+  candidate.manifestText = manifestText;
+  const settings = await getSettings();
+  const inspection = await probeManifest(candidate, {
+    credentials: "omit",
+    timeoutMs: MANIFEST_INSPECTION_TIMEOUT_MS,
+    networkScope: networkScopeForSettings(settings)
+  });
+  await recordManifestInspection(tabId, candidate, inspection);
+  return inspection;
 }
 
 async function mediaPlaylistFingerprint(inspection) {
@@ -2345,7 +3000,49 @@ async function mediaPlaylistFingerprint(inspection) {
   return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("");
 }
 
+// A parsed MPD is a ladder like a parsed HLS master: the card gets its real
+// runtime and best height, and the same-CDN numbered segment files the player
+// fetched fold away instead of posing as separate downloads.
+async function recordDashInspection(tabId, inspectedCandidate, inspection) {
+  const map = tabMedia.get(tabId);
+  if (!map) return;
+  const key = `dash:${canonicalizeUrl(inspectedCandidate?.url)}`;
+  const candidate = map.get(key);
+  if (!candidate || candidate.kind !== "dash") return;
+  const representations = Array.isArray(inspection.representations) ? inspection.representations : [];
+  const videoRepresentations = representations.filter((item) => /^video\//i.test(item?.mime || "") || positive(item?.height));
+  candidate.manifestProbeStatus = "parsed";
+  candidate.manifestInspectedAt = Date.now();
+  candidate.manifestVariantCount = videoRepresentations.length;
+  candidate.manifestSize = Math.max(Number(candidate.manifestSize || 0), Number(inspection.manifestByteLength || 0));
+  const seconds = isoDurationSeconds(inspection.duration);
+  if (seconds > 0) candidate.duration = Math.round(seconds);
+  const best = videoRepresentations.slice().sort((a, b) =>
+    (positive(b.height) || 0) - (positive(a.height) || 0) || (positive(b.bandwidth) || 0) - (positive(a.bandwidth) || 0))[0];
+  if (best) {
+    candidate.width = positive(best.width) || candidate.width;
+    candidate.height = positive(best.height) || candidate.height;
+    candidate.codecs = cleanText(best.codecs, 180) || candidate.codecs;
+  }
+  suppressRedundantVideoCandidates(tabId);
+  await persistSession();
+  await updateBadge(tabId);
+  broadcast({ type: "MEDIA_UPDATED", tabId, item: withoutManifestText(candidate) });
+}
+
+function isoDurationSeconds(value) {
+  if (typeof value === "number") return Number.isFinite(value) && value > 0 ? value : 0;
+  const match = /^P(?:(\d+(?:\.\d+)?)D)?(?:T(?:(\d+(?:\.\d+)?)H)?(?:(\d+(?:\.\d+)?)M)?(?:(\d+(?:\.\d+)?)S)?)?$/i.exec(String(value || "").trim());
+  if (!match) return 0;
+  const [, days, hours, minutes, seconds] = match.map((item) => Number(item) || 0);
+  return days * 86400 + hours * 3600 + minutes * 60 + seconds;
+}
+
 async function recordManifestInspection(tabId, inspectedCandidate, inspection) {
+  if (inspection?.kind === "dash") {
+    await recordDashInspection(tabId, inspectedCandidate, inspection);
+    return;
+  }
   if (inspection?.kind !== "hls") return;
   const map = tabMedia.get(tabId);
   if (!map) return;
@@ -2379,6 +3076,22 @@ async function recordManifestInspection(tabId, inspectedCandidate, inspection) {
   candidate.manifestProbeStatus = "parsed";
   candidate.manifestInspectedAt = Date.now();
   candidate.manifestSize = Math.max(Number(candidate.manifestSize || 0), Number(inspection.manifestByteLength || 0));
+  // Media playlists carry their own duration; the card shows it without
+  // waiting for a download. A single-rendition playlist has no variant table,
+  // so its honest height label is the site's own rendition filename.
+  if (manifestType === "media") {
+    const totalSeconds = (Array.isArray(inspection.segments) ? inspection.segments : [])
+      .reduce((sum, item) => sum + (positive(item.duration) || 0), 0);
+    if (totalSeconds > 0) candidate.duration = Math.round(totalSeconds);
+    candidate.height = candidate.height || heightFromManifestFilename(candidate.url) || null;
+  }
+  // The MSE player's own videoHeight labels a single-rendition ladder whose
+  // playlist carries no resolution of its own.
+  const playbackHint = tabPlaybackHints.get(tabId);
+  if (playbackHint && Date.now() - playbackHint.at < 10 * 60_000) {
+    candidate.height = candidate.height || (playbackHint.height > 0 ? playbackHint.height : null);
+    candidate.duration = candidate.duration || (playbackHint.duration > 0 ? playbackHint.duration : null);
+  }
   const bestVariant = sortHlsVariants(variants)[0];
   if (bestVariant) {
     candidate.width = positive(bestVariant.width) || candidate.width;
@@ -2686,6 +3399,38 @@ function resolveDashRepresentationSelector(candidate, value) {
   return index;
 }
 
+// Project a masterless rendition group's own ladder with the same opaque
+// selector shape a master probe produces, so the dialog's quality dropdown
+// works even when the CDN refuses every probe fetch.
+function renditionGroupProbeForUi(candidate) {
+  const variants = (candidate?.variants || [])
+    .map((variant) => {
+      const selector = variantGroupSelector(candidate, variant?.url);
+      if (!selector) return null;
+      return {
+        url: selector,
+        bandwidth: positive(variant.bandwidth) || 0,
+        width: positive(variant.width),
+        height: positive(variant.height)
+      };
+    })
+    .filter(Boolean);
+  return {
+    kind: "hls",
+    type: "media",
+    variants,
+    segmentCount: 0,
+    duration: null,
+    encrypted: false,
+    protection: "",
+    live: false,
+    discontinuity: false,
+    audioTrackCount: Array.isArray(candidate?.audioCandidates) ? candidate.audioCandidates.length : 0,
+    targetDuration: null,
+    variantSource: "rendition_group"
+  };
+}
+
 function probeForUi(probe, candidate) {
   if (probe.kind === "hls") {
     const variants = (probe.variants || []).slice(0, 200).map((item) => ({
@@ -2763,7 +3508,8 @@ function probeForUi(probe, candidate) {
 function hlsUnsupportedReason(probe) {
   if (probe?.kind !== "hls") return null;
   if (probe.protection === "drm" || probe.protected) return "检测到 DRM/SAMPLE-AES 内容保护，仅显示媒体信息";
-  if (probe.protection === "aes128" || probe.encrypted) return "FluxCatch 0.2.5 暂不支持 AES-128 加密的 HLS 下载";
+  // AES-128 is ordinary HLS transport encryption (the player fetches a plain
+  // key; no license server), so it downloads like any other media playlist.
   // A master playlist has no EXT-X-ENDLIST of its own. Its selected media
   // playlist is revalidated by the native host before any segment is fetched.
   if (probe.type === "media" && probe.live) return "FluxCatch 0.2.5 暂不支持 HLS 直播录制";
@@ -2773,9 +3519,11 @@ function hlsUnsupportedReason(probe) {
 
 function selectDashPairTracks(candidate, requestedVariant) {
   const now = Date.now();
+  const site = candidate?.site === "generic" ? "generic" : "bilibili";
+  const enforceWindow = site !== "generic";
   if (!isFreshBilibiliCandidate(candidate, now)) throw new Error("视频清晰度地址已过期，请重新扫描页面");
-  const videos = (candidate.videoTracks || []).filter((track) => isFreshBilibiliTrack(track, now));
-  const audios = (candidate.audioTracks || []).filter((track) => isFreshBilibiliTrack(track, now));
+  const videos = (candidate.videoTracks || []).filter((track) => isFreshBilibiliTrack(track, now, site));
+  const audios = (candidate.audioTracks || []).filter((track) => isFreshBilibiliTrack(track, now, site));
   if (!videos.length || !audios.length) throw new Error("视频清晰度地址已过期，请重新扫描页面");
 
   let video = videos.find((track) => track.trackId === candidate.selectedVideoTrackId) || null;
@@ -2791,7 +3539,7 @@ function selectDashPairTracks(candidate, requestedVariant) {
       || Number(b.bandwidth || 0) - Number(a.bandwidth || 0)
       || Number(b.lastSeen || 0) - Number(a.lastSeen || 0))[0];
   }
-  const compatibleAudios = audios.filter((track) => canPairBilibiliTracks(track, video, true));
+  const compatibleAudios = audios.filter((track) => canPairBilibiliTracks(track, video, enforceWindow));
   let audio = compatibleAudios.find((track) => track.trackId === candidate.selectedAudioTrackId) || null;
   if (!audio) {
     audio = compatibleAudios.slice().sort((a, b) => bilibiliAudioCompatibilityRank(b) - bilibiliAudioCompatibilityRank(a)
@@ -2811,12 +3559,15 @@ function bilibiliTrackExpiresAt(track) {
   return explicit > 0 && Number.isFinite(explicit) ? (derived > 0 ? Math.min(explicit, derived) : explicit) : derived;
 }
 
-function isFreshBilibiliTrack(track, now = Date.now()) {
+function isFreshBilibiliTrack(track, now = Date.now(), site = "bilibili") {
   const url = canonicalizeUrl(track?.url);
-  return Boolean(url && isBilibiliMediaUrl(url) && bilibiliTrackExpiresAt(track) > now);
+  // Generic aggregated tracks were accepted at observation time; their
+  // freshness is the observation TTL alone, with no naming contract to pass.
+  return Boolean(url && (site === "generic" || isBilibiliMediaUrl(url)) && bilibiliTrackExpiresAt(track) > now);
 }
 
 function isFreshBilibiliCandidate(candidate, now = Date.now()) {
+  const site = candidate?.site === "generic" ? "generic" : "bilibili";
   const expiresAt = Number(candidate?.expiresAt || 0);
   if (candidate?.kind !== "dash_pair" || !Number.isFinite(expiresAt) || expiresAt <= now) return false;
   const video = (candidate.videoTracks || []).find((track) => track.trackId === candidate.selectedVideoTrackId);
@@ -2825,9 +3576,9 @@ function isFreshBilibiliCandidate(candidate, now = Date.now()) {
     video
     && audio
     && video.url !== audio.url
-    && isFreshBilibiliTrack(video, now)
-    && isFreshBilibiliTrack(audio, now)
-    && canPairBilibiliTracks(video, audio, true)
+    && isFreshBilibiliTrack(video, now, site)
+    && isFreshBilibiliTrack(audio, now, site)
+    && canPairBilibiliTracks(video, audio, site !== "generic")
   );
 }
 
@@ -2838,13 +3589,18 @@ function dashPairHeaders(tabId, url) {
   const safe = capture && Date.now() - capture.at <= HEADER_TTL_MS
     ? nonSensitiveMediaHeaders(capture.headers)
     : {};
-  const result = { referer: BILIBILI_SAFE_REFERER };
+  const result = {};
+  // Bilibili keeps its fixed safe referer (the page referer may carry tracking
+  // params we do not replay). Other sites replay the referer their own page
+  // used, because many CDNs reject cross-site fetches without it.
+  const referer = isBilibiliMediaUrl(url) ? BILIBILI_SAFE_REFERER : (safe.referer || "");
+  if (referer) result.referer = referer;
   if (safe.accept) result.accept = safe.accept;
   if (safe["user-agent"]) result["user-agent"] = safe["user-agent"];
   return result;
 }
 
-async function startDownload(candidate, options, tabId) {
+async function startDownload(candidate, options, tabId, context = {}) {
   let url = canonicalizeUrl(candidate?.url);
   if (!url) throw new Error("媒体地址无效");
   let dashPair = candidate.kind === "dash_pair" ? selectDashPairTracks(candidate, options.variantUrl) : null;
@@ -2965,6 +3721,7 @@ async function startDownload(candidate, options, tabId) {
     requestHeaders.delete(headerKey(tabId, url));
     scheduleHeaderPrune();
     const jobId = `browser:${id}`;
+    rememberJobSource(jobId, { candidate, tabId, options, pageTitle });
     const browserJob = await mergeJob(jobId, {
       method: "browser",
       downloadId: id,
@@ -2990,6 +3747,9 @@ async function startDownload(candidate, options, tabId) {
   }
 
   if (!await hasNativePermission()) throw new Error("需要授权连接本地引擎，才能使用此下载模式");
+  // If this is the first native action after the permission grant, the worker
+  // may have to reload itself to obtain the API; remember what to continue.
+  noteNativeIntent({ surface: context.surface || null, pendingDownload: pendingDownloadRecord(candidate, options, tabId) });
   const port = await ensureNativePort();
   if (candidate.kind === "youtube" && ytdlpNetworkDisabled()) {
     throw new Error("0.2.5 暂停外部引擎联网，等待受控网络代理");
@@ -3037,6 +3797,8 @@ async function startDownload(candidate, options, tabId) {
     throw new Error("该域名已在 FluxCatch 设置中被忽略");
   }
   const jobId = crypto.randomUUID();
+  rememberJobSource(jobId, { candidate, tabId, options, pageTitle });
+  const resume = await resumeRecipe(candidate, tabId, options, filename);
   const captureKey = headerKey(tabId, url);
   const capture = requestHeaders.get(captureKey);
   const captured = dashPair
@@ -3053,6 +3815,7 @@ async function startDownload(candidate, options, tabId) {
     tabId,
     kind: candidate.kind,
     filename,
+    resume,
     status: "queued",
     progress: 0,
     speed: 0,
@@ -3089,6 +3852,7 @@ async function startDownload(candidate, options, tabId) {
       options: {
         concurrentFragments: opts.concurrentFragments,
         concurrentRanges: opts.concurrentRanges,
+        concurrentJobs: settings.concurrentJobs,
         outputContainer: opts.outputContainer,
         extractAudio: Boolean(opts.extractAudio),
         convert: Boolean(opts.convert),
@@ -3145,6 +3909,10 @@ async function ensureNativePort({ requireCompatibility = true } = {}) {
 async function openNativePort() {
   if (!await hasNativePermission()) throw new Error("尚未授权连接本地引擎");
   if (!await waitForNativeMessagingApi()) {
+    if (await attemptNativeApiSelfHeal()) {
+      hostStatus = disconnectedHostStatus({ failureReason: "api_unavailable", lastError: NATIVE_API_SELF_HEAL_MESSAGE, selfHealing: true });
+      throw new Error(NATIVE_API_SELF_HEAL_MESSAGE);
+    }
     const marker = await readNativeApiRecoveryMarker();
     const message = marker?.phase === "restart_required"
       ? NATIVE_API_RESTART_MESSAGE
@@ -3176,6 +3944,14 @@ async function openNativePort() {
   }
   nativePort = port;
   port.onMessage.addListener((message) => {
+    if (message?.type === "inspect_hls_result") {
+      resolveHostInspect(message.requestId, message, port);
+      return;
+    }
+    if (message?.type === "file_action_result") {
+      resolveHostFileAction(message.requestId, message, port);
+      return;
+    }
     if (message?.type === "pong") {
       hostStatus = {
         connected: true,
@@ -3184,6 +3960,7 @@ async function openNativePort() {
         capabilityProfileVersion: message.capabilityProfileVersion ?? null,
         ffmpeg: Boolean(message.ffmpeg),
         capabilities: message.capabilities && typeof message.capabilities === "object" ? message.capabilities : null,
+        downloadDir: cleanLocalPath(message.downloadDir),
         needsPermission: false,
         failureReason: null,
         lastError: null
@@ -3197,6 +3974,8 @@ async function openNativePort() {
   port.onDisconnect.addListener(() => {
     const failure = nativeConnectionFailure(chrome.runtime.lastError?.message || "");
     rejectHostPings(port, new Error(failure.lastError));
+    rejectHostInspects(port, new Error(failure.lastError));
+    rejectHostFileActions(port, new Error(failure.lastError));
     if (nativePort !== port) return;
     nativePort = null;
     hostStatus = disconnectedHostStatus(failure);
@@ -3372,6 +4151,7 @@ async function handleNativePermissionRemoved() {
   rejectHostPings(port, new Error("本地下载引擎权限已关闭"));
   try { port?.disconnect?.(); } catch { /* The port may already be closed. */ }
   await clearNativeApiRecoveryMarker();
+  await clearNativeApiSelfHealMarker();
   await handleNativeDisconnect("本地下载引擎权限已关闭");
 }
 
@@ -3382,6 +4162,227 @@ async function waitForNativeMessagingApi() {
     await new Promise((resolve) => setTimeout(resolve, 50));
   } while (Date.now() < deadline);
   return typeof chrome.runtime.connectNative === "function";
+}
+
+function surfaceFromSender(sender) {
+  const url = typeof sender?.url === "string" ? sender.url : "";
+  if (url.includes("/options/")) return "options";
+  if (url.includes("/popup/")) return "popup";
+  if (url.includes("/sidepanel/")) return "sidepanel";
+  if (url.includes("/downloads/")) return "downloads";
+  return null;
+}
+
+function noteNativeIntent({ surface = null, pendingDownload = null } = {}) {
+  if (surface) nativeIntent.surface = surface;
+  if (pendingDownload) nativeIntent.pendingDownload = pendingDownload;
+}
+
+function pendingDownloadRecord(candidate, options, tabId) {
+  // Volatile pairs are rediscovered from playback and cannot be replayed.
+  if (!candidate || candidate.kind === "dash_pair" || !Number.isInteger(tabId)) return null;
+  const url = canonicalizeUrl(candidate.url);
+  if (!url) return null;
+  let plainOptions = {};
+  try { plainOptions = JSON.parse(JSON.stringify(options || {})); } catch { plainOptions = {}; }
+  return {
+    tabId,
+    kind: cleanText(candidate.kind, 16),
+    url,
+    tabUrl: canonicalizeUrl(candidate.tabUrl) || null,
+    filename: cleanText(plainOptions.filename, 260) || cleanText(candidate.suggestedFilename, 260) || "",
+    options: plainOptions,
+    requestedAt: Date.now()
+  };
+}
+
+async function readNativeApiSelfHealMarker() {
+  try {
+    const stored = (await chrome.storage.local.get(NATIVE_API_SELF_HEAL_KEY))?.[NATIVE_API_SELF_HEAL_KEY];
+    return stored && typeof stored === "object" && Number.isFinite(stored.attemptedAt) ? stored : null;
+  } catch { return null; }
+}
+
+async function writeNativeApiSelfHealMarker(marker) {
+  try {
+    await chrome.storage.local.set({ [NATIVE_API_SELF_HEAL_KEY]: marker });
+    return true;
+  } catch { return false; }
+}
+
+async function clearNativeApiSelfHealMarker() {
+  try {
+    if (typeof chrome.storage.local.remove === "function") await chrome.storage.local.remove(NATIVE_API_SELF_HEAL_KEY);
+    else await chrome.storage.local.set({ [NATIVE_API_SELF_HEAL_KEY]: null });
+  } catch { /* The marker is best-effort and contains no page secrets. */ }
+}
+
+// Chrome binds chrome.runtime.connectNative into a service worker only when
+// the worker starts with the optional permission already granted. A worker
+// that was alive during the grant keeps a missing binding until it is
+// replaced, and MV3 idle termination can take minutes with nothing the user
+// can see. Reloading the extension replaces the worker at once, so the first
+// action after granting completes by itself. The reload also drops
+// storage.session, hence the snapshot that restoreNativeApiSelfHealSnapshot()
+// replays before the first state consumer runs. One attempt per cooldown: a
+// binding that a reload does not fix falls back to the measured recovery
+// marker below, which ends in explicit "restart Chrome" guidance.
+async function attemptNativeApiSelfHeal() {
+  if (typeof chrome.runtime.reload !== "function") return false;
+  if (nativeApiSelfHealScheduled) return true;
+  const marker = await readNativeApiSelfHealMarker();
+  if (marker && Date.now() - marker.attemptedAt < NATIVE_API_SELF_HEAL_COOLDOWN_MS) return false;
+  if (!await hasNativePermission()) return false;
+  const intent = { surface: nativeIntent.surface, pendingDownload: nativeIntent.pendingDownload };
+  nativeIntent.surface = null;
+  nativeIntent.pendingDownload = null;
+  let session = null;
+  try {
+    await persistSession();
+    persistJobs();
+    await persistChain.catch(() => {});
+    const stored = await chrome.storage.session.get(["tabMedia", "tabPreviews", "jobs"]);
+    session = {};
+    for (const key of ["tabMedia", "tabPreviews", "jobs"]) {
+      if (stored?.[key] !== undefined) session[key] = stored[key];
+    }
+  } catch { session = null; }
+  const written = await writeNativeApiSelfHealMarker({
+    attemptedAt: Date.now(),
+    surface: intent.surface,
+    pendingDownload: intent.pendingDownload,
+    session
+  });
+  if (!written) return false;
+  nativeApiSelfHealScheduled = true;
+  // Let the pending reply reach its page first so the UI can say why it is
+  // about to disappear.
+  const timer = setTimeout(() => {
+    try { chrome.runtime.reload(); } catch { nativeApiSelfHealScheduled = false; }
+  }, NATIVE_API_SELF_HEAL_RELOAD_DELAY_MS);
+  timer?.unref?.();
+  return true;
+}
+
+async function restoreNativeApiSelfHealSnapshot() {
+  const marker = await readNativeApiSelfHealMarker();
+  if (!marker) return null;
+  const carriesPayload = marker.session !== undefined || marker.pendingDownload !== undefined || marker.surface !== undefined;
+  const fresh = Date.now() - marker.attemptedAt <= NATIVE_API_SELF_HEAL_RESTORE_TTL_MS;
+  if (carriesPayload) {
+    // The payload is replayed once; only the cooldown stamp stays behind.
+    await writeNativeApiSelfHealMarker({ attemptedAt: marker.attemptedAt, restoredAt: Date.now() });
+  }
+  if (!carriesPayload || !fresh) return null;
+  if (marker.session && typeof marker.session === "object") {
+    try {
+      const current = await chrome.storage.session.get(["tabMedia", "tabPreviews", "jobs"]);
+      const replay = {};
+      for (const key of ["tabMedia", "tabPreviews", "jobs"]) {
+        if (marker.session[key] !== undefined && current?.[key] === undefined) replay[key] = marker.session[key];
+      }
+      if (Object.keys(replay).length) await chrome.storage.session.set(replay);
+    } catch { /* Media is rediscovered from traffic when the replay fails. */ }
+  }
+  return { surface: marker.surface || null, pendingDownload: marker.pendingDownload || null };
+}
+
+async function completeNativeApiSelfHeal() {
+  let followUp = null;
+  try { followUp = await nativeApiSelfHealResume; } catch { followUp = null; }
+  if (!followUp) return;
+  await sessionReady;
+  await nativeRecoveryReady;
+  let connected = false;
+  try {
+    if (await hasNativePermission() && typeof chrome.runtime.connectNative === "function") {
+      await ensureNativePort({ requireCompatibility: false });
+      connected = hostStatus.connected === true;
+    }
+  } catch { connected = false; }
+  const resumed = followUp.pendingDownload ? await resumePendingDownload(followUp.pendingDownload, connected) : null;
+  const reopened = await reopenSurfaceAfterSelfHeal(followUp.surface);
+  if (followUp.pendingDownload || !reopened) {
+    await notifySelfHealOutcome({ connected, resumed, pendingDownload: followUp.pendingDownload });
+  }
+}
+
+async function resumePendingDownload(pending, connected) {
+  if (!connected || !pending || !Number.isInteger(pending.tabId)) return { resumed: false };
+  if (Date.now() - Number(pending.requestedAt || 0) > NATIVE_API_SELF_HEAL_RESTORE_TTL_MS) return { resumed: false };
+  let tab;
+  try { tab = await chrome.tabs.get(pending.tabId); } catch { return { resumed: false }; }
+  const liveUrl = canonicalizeUrl(tab?.url);
+  // The user clicked on a specific page; never continue on whatever replaced it.
+  if (pending.tabUrl && liveUrl && liveUrl !== pending.tabUrl) return { resumed: false };
+  const url = canonicalizeUrl(pending.url);
+  const kind = cleanText(pending.kind, 16);
+  const items = tabMedia.get(pending.tabId);
+  const candidate = items?.get(`${kind}:${url}`)
+    || [...(items?.values() || [])].find((item) => item.kind === kind && !item.mergedInto && canonicalizeUrl(item.url) === url);
+  if (!candidate) return { resumed: false };
+  try {
+    const options = pending.options && typeof pending.options === "object" ? pending.options : {};
+    const result = await startDownload(candidate, options, pending.tabId);
+    return { resumed: true, jobId: result.jobId, method: result.method };
+  } catch (error) {
+    return { resumed: false, error: error?.message || String(error) };
+  }
+}
+
+async function reopenSurfaceAfterSelfHeal(surface) {
+  try {
+    if (surface === "options") {
+      if (!await reloadExtensionTabs("options/options.html")) await chrome.runtime.openOptionsPage?.();
+      return true;
+    }
+    if (surface === "downloads") {
+      if (!await reloadExtensionTabs(DOWNLOADS_PAGE_PATH)) await chrome.tabs.create({ url: chrome.runtime.getURL(DOWNLOADS_PAGE_PATH) });
+      return true;
+    }
+    if (surface === "popup" && typeof chrome.action?.openPopup === "function") {
+      await chrome.action.openPopup();
+      return true;
+    }
+  } catch { /* Reopening is a courtesy; the notification covers the rest. */ }
+  return false;
+}
+
+async function reloadExtensionTabs(path) {
+  const url = chrome.runtime.getURL(path);
+  let tabs = [];
+  try { tabs = await chrome.tabs.query?.({ url: [url, `${url}?*`, `${url}#*`] }) || []; } catch { tabs = []; }
+  let reloaded = 0;
+  for (const tab of tabs) {
+    if (!Number.isInteger(tab?.id)) continue;
+    try {
+      await chrome.tabs.reload(tab.id);
+      reloaded += 1;
+    } catch { /* The tab closed meanwhile. */ }
+  }
+  return reloaded > 0;
+}
+
+async function notifySelfHealOutcome({ connected, resumed, pendingDownload }) {
+  let granted = false;
+  try { granted = await chrome.permissions.contains({ permissions: ["notifications"] }); } catch { granted = false; }
+  if (!granted || typeof chrome.notifications?.create !== "function") return;
+  const filename = cleanText(pendingDownload?.filename, 120);
+  const detail = !connected
+    ? "引擎重新加载后仍未连接；请打开设置页重新检查"
+    : resumed?.resumed
+      ? "已自动继续刚才的下载"
+      : pendingDownload
+        ? "连接已就绪；请回到页面重新点击下载"
+        : "连接已就绪，可以继续下载";
+  try {
+    await chrome.notifications.create(`fluxcatch:self-heal:${Date.now()}`, {
+      type: "basic",
+      iconUrl: chrome.runtime.getURL("icons/icon128.png"),
+      title: connected ? tr("FluxCatch 本地下载引擎已连接") : tr("FluxCatch 本地下载引擎未连接"),
+      message: resumed?.resumed && filename ? `${tr(detail)}\n${filename}` : tr(detail)
+    });
+  } catch { /* Notifications can be disabled by browser policy. */ }
 }
 
 function nativeConnectionFailure(error) {
@@ -3415,6 +4416,49 @@ function pingNativePort(port) {
   });
 }
 
+// Request/response inspection of an HLS playlist through the pinned native
+// client — the fallback when a hotlink CDN rejects the extension's own fetch
+// and cards would otherwise lose duration, quality and ladder metadata.
+const pendingHostInspects = new Map();
+
+function inspectHlsViaNative(url, headers, timeoutMs = 12_000) {
+  const port = nativePort;
+  if (!port) return Promise.reject(new Error("本地下载引擎未连接"));
+  const requestId = crypto.randomUUID();
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pendingHostInspects.delete(requestId);
+      reject(new Error("本地引擎读取播放列表超时"));
+    }, timeoutMs);
+    pendingHostInspects.set(requestId, { port, resolve, reject, timer });
+    try {
+      port.postMessage({ type: "inspect_hls", requestId, url, headers });
+    } catch (error) {
+      clearTimeout(timer);
+      pendingHostInspects.delete(requestId);
+      reject(error);
+    }
+  });
+}
+
+function resolveHostInspect(requestId, message, port) {
+  const pending = pendingHostInspects.get(requestId);
+  if (!pending || pending.port !== port) return;
+  clearTimeout(pending.timer);
+  pendingHostInspects.delete(requestId);
+  if (message?.ok) pending.resolve({ text: String(message.text || ""), finalUrl: String(message.finalUrl || "") });
+  else pending.reject(new Error(String(message?.error || "本地引擎读取播放列表失败")));
+}
+
+function rejectHostInspects(port, error) {
+  for (const [requestId, pending] of pendingHostInspects) {
+    if (pending.port !== port) continue;
+    clearTimeout(pending.timer);
+    pendingHostInspects.delete(requestId);
+    pending.reject(error);
+  }
+}
+
 function resolveHostPing(port, requestId) {
   const pending = pendingHostPings.get(requestId);
   if (!pending || pending.port !== port) return;
@@ -3438,6 +4482,9 @@ async function handleNativeHostMessage(message) {
   if (jobId) {
     const status = nativeJobStatus(message);
     if (status) {
+      // The published path, media facts and poster frame stay worker-private
+      // and feed the durable history record written by mergeJob below.
+      if (message?.type === "complete") rememberJobCompletion(jobId, message);
       updatedJob = await mergeJob(jobId, {
         method: "native",
         filename: cleanText(message.filename, 180) || undefined,
@@ -3446,8 +4493,9 @@ async function handleNativeHostMessage(message) {
         speed: message.speed,
         bytes: message.bytes ?? message.size,
         total: message.total ?? message.size,
-        message: cleanText(message.message, 240) || undefined,
-        error: cleanText(message.error, 240) || undefined
+        message: cleanText(message.message, 240) || (message?.type === "complete" ? NATIVE_COMPLETE_MESSAGE : undefined),
+        error: cleanText(message.error, 240) || undefined,
+        resume: status === "paused" ? resumeWithTargetName(jobId, message.targetName) : undefined
       }, {
         deferPersistence: message?.type === "progress" && status === "downloading"
       });
@@ -3461,7 +4509,7 @@ async function handleNativeHostMessage(message) {
 async function handleNativeDisconnect(error) {
   const updates = [];
   for (const [jobId, job] of jobs) {
-    if (job.method !== "native" || TERMINAL_JOB_STATUSES.has(job.status)) continue;
+    if (job.method !== "native" || TERMINAL_JOB_STATUSES.has(job.status) || job.status === "paused") continue;
     const updated = normalizeJob({ ...job, status: "failed", message: error, error, speed: 0, updatedAt: Date.now() });
     jobs.set(jobId, updated);
     cleanupJobHeaders(jobId);
@@ -3493,14 +4541,17 @@ async function updateBrowserDownload(delta) {
   // a transient URL-derived basename (or omit filename entirely) while its
   // download item is being created; neither should replace the user's name.
   const browserFilename = changedFilename ? displayFilename(changedFilename) : "";
+  // Chrome reports the final absolute path; keep it worker-private so a
+  // finished browser row can still be revealed after the download item ages.
+  if (changedFilename.startsWith("/")) rememberJobPath(jobId, changedFilename);
   const elapsed = Math.max(0.001, (now - current.updatedAt) / 1000);
   const speed = bytes > current.bytes ? Math.round((bytes - current.bytes) / elapsed) : current.speed;
   let status = current.status;
   let message = current.message;
   let error = current.error;
   if (browserState === "in_progress") {
-    status = "downloading";
-    message = delta.paused?.current ? "浏览器下载已暂停" : "浏览器正在下载";
+    status = delta.paused?.current ? "paused" : "downloading";
+    message = delta.paused?.current ? PAUSED_JOB_MESSAGE : "浏览器正在下载";
   } else if (browserState === "complete") {
     status = "completed";
     message = "已保存到下载目录";
@@ -3557,18 +4608,21 @@ async function mergeJob(jobId, patch, { deferPersistence = false } = {}) {
     createdAt: old?.createdAt || now,
     updatedAt: now
   });
+  const becameTerminal = TERMINAL_JOB_STATUSES.has(job.status) && !(old && TERMINAL_JOB_STATUSES.has(old.status));
   jobs.set(safeId, job);
   trimJobs();
+  if (becameTerminal) await recordHistory(job);
   if (deferPersistence) scheduleJobPersistence();
   else await persistJobs();
   broadcast({ type: "JOB_UPDATED", job: jobForUi(job) });
+  scheduleDownloadBadgeRefresh();
   return job;
 }
 
 function nativeJobStatus(message) {
   const direct = cleanText(message?.status, 32).toLowerCase();
   if (JOB_STATUSES.has(direct)) return direct;
-  return ({ complete: "completed", failed: "failed", cancelled: "cancelled" })[message?.type] || null;
+  return ({ complete: "completed", failed: "failed", cancelled: "cancelled", paused: "paused" })[message?.type] || null;
 }
 
 async function maybeNotifyJob(job) {
@@ -3577,20 +4631,54 @@ async function maybeNotifyJob(job) {
   const settings = await getSettings();
   if (!settings.showNotifications) return;
   const filename = displayFilename(job.filename);
+  const presentation = jobPresentation(job);
   const detail = status === "completed"
-    ? `${filename} 已保存`
+    ? completionSummary(job, presentation)
     : redactJobText(job.message || job.error, 240) || `${filename} 下载失败`;
+  // Buttons lead straight to the file; the notification body does too.
+  const buttons = status === "completed" && presentation.hasFile
+    ? [{ title: tr("在 Finder 中显示") }, { title: tr("打开") }]
+    : status === "failed" && presentation.retryable
+      ? [{ title: tr("重试") }]
+      : [];
   try {
     await chrome.notifications.create(`fluxcatch:${job.jobId}:${status}`, {
       type: "basic",
       iconUrl: chrome.runtime.getURL("icons/icon128.png"),
       title: status === "completed" ? tr("FluxCatch 下载完成") : tr("FluxCatch 下载失败"),
-      message: tr(detail)
+      message: status === "completed" ? `${filename}\n${tr(detail)}` : tr(detail),
+      ...(buttons.length ? { buttons } : {})
     });
   } catch {
     // Notifications can be disabled by browser policy.
   }
 }
+
+function completionSummary(job, presentation = jobPresentation(job)) {
+  const parts = [tr("已保存")];
+  const size = job.total || job.bytes || 0;
+  if (size > 0) parts.push(humanBytes(size));
+  if (presentation.media?.duration) parts.push(formatMediaDuration(presentation.media.duration));
+  if (presentation.media?.height) parts.push(`${presentation.media.height}p`);
+  return parts.join(" · ");
+}
+
+async function handleNotificationClick(notificationId, buttonIndex) {
+  const match = /^fluxcatch:(.+):(completed|failed)$/.exec(String(notificationId || ""));
+  if (!match) return;
+  const [, jobId, status] = match;
+  try {
+    if (status === "completed") await performFileAction(buttonIndex === 1 ? "open" : "reveal", jobId);
+    else if (buttonIndex === 0) await retryJob(jobId);
+    else await handleMessage({ type: "OPEN_DOWNLOADS_PAGE" }, { id: chrome.runtime.id, url: EXTENSION_ORIGIN });
+  } catch {
+    // The file may have been moved; the downloads page shows that state.
+  }
+  try { await chrome.notifications.clear(notificationId); } catch { /* already dismissed */ }
+}
+
+chrome.notifications?.onClicked?.addListener((notificationId) => void handleNotificationClick(notificationId, -1));
+chrome.notifications?.onButtonClicked?.addListener((notificationId, buttonIndex) => void handleNotificationClick(notificationId, buttonIndex));
 
 function broadcast(message) {
   for (const port of hostClients) {
@@ -3599,17 +4687,60 @@ function broadcast(message) {
 }
 
 async function updateBadge(tabId) {
-  const count = [...(tabMedia.get(tabId)?.values() || [])].filter((item) => item.kind !== "segment" && !item.mergedInto && !item.variantGroupInto).length;
+  suppressRedundantVideoCandidates(tabId);
+  const count = [...(tabMedia.get(tabId)?.values() || [])].filter((item) => item.kind !== "segment" && !item.mergedInto && !item.variantGroupInto && !item.suppressedAs).length;
+  // The badge text always counts this tab's media. While anything downloads
+  // the icon carries progress too: the badge turns pool-green and the tooltip
+  // names the running jobs and their overall percent.
+  const active = activeDownloadSummary();
+  const text = count ? String(Math.min(count, 99)) : "";
+  const color = active ? "#0A66D6" : count ? "#3A3A3C" : "#8E8E93";
+  const title = active
+    ? tr(`FluxCatch — 正在下载 ${active.count} 个任务 · ${active.percent}%`)
+    : tr(count ? `FluxCatch — 检测到 ${count} 个媒体` : "FluxCatch — 暂未检测到媒体");
   try {
-    await chrome.action.setBadgeText({ tabId, text: count ? String(Math.min(count, 99)) : "" });
+    await chrome.action.setBadgeText({ tabId, text });
     await Promise.allSettled([
-      chrome.action.setBadgeBackgroundColor({ tabId, color: count ? "#7C6FA3" : "#66716D" }),
+      chrome.action.setBadgeBackgroundColor({ tabId, color }),
       chrome.action.setBadgeTextColor?.({ tabId, color: "#FFFFFF" }),
-      chrome.action.setTitle({ tabId, title: tr(count ? `FluxCatch — 检测到 ${count} 个媒体` : "FluxCatch — 暂未检测到媒体") })
+      chrome.action.setTitle({ tabId, title })
     ]);
   } catch {
     // The tab may have closed.
   }
+}
+
+function activeDownloadSummary() {
+  let count = 0;
+  let fraction = 0;
+  for (const job of jobs.values()) {
+    if (!isActiveJob(job)) continue;
+    count += 1;
+    fraction += Number(job.progress) || 0;
+  }
+  if (!count) return null;
+  return { count, percent: Math.max(0, Math.min(99, Math.round((fraction / count) * 100))) };
+}
+
+function scheduleDownloadBadgeRefresh() {
+  if (downloadBadgeTimer !== null) return;
+  downloadBadgeTimer = setTimeout(() => {
+    downloadBadgeTimer = null;
+    void refreshDownloadBadges();
+  }, DOWNLOAD_BADGE_REFRESH_MS);
+  downloadBadgeTimer?.unref?.();
+}
+
+async function refreshDownloadBadges() {
+  const tabIds = new Set(tabMedia.keys());
+  try {
+    for (const tab of await chrome.tabs.query?.({ active: true }) || []) {
+      if (Number.isInteger(tab?.id)) tabIds.add(tab.id);
+    }
+  } catch {
+    // Tab enumeration is best effort; badges on known tabs still refresh.
+  }
+  for (const tabId of tabIds) await updateBadge(tabId);
 }
 
 async function restoreSession() {
@@ -3716,6 +4847,16 @@ async function restoreSession() {
       if (!old || job.updatedAt >= old.updatedAt) jobs.set(job.jobId, job);
     }
     trimJobs();
+    // Ended rows restored from the session (including native jobs the worker
+    // restart just failed) belong in the durable history as well.
+    await historyReady;
+    let historyChanged = false;
+    for (const job of jobs.values()) {
+      if (!TERMINAL_JOB_STATUSES.has(job.status) || historyIndex.has(job.jobId)) continue;
+      upsertHistoryRecord(historyRecordFromJob(job));
+      historyChanged = true;
+    }
+    if (historyChanged) await persistHistory();
     const browserRestores = [];
     for (const job of jobs.values()) {
       if (job.method === "browser" && Number.isInteger(job.downloadId) && !TERMINAL_JOB_STATUSES.has(job.status)) {
@@ -3723,7 +4864,7 @@ async function restoreSession() {
         browserRestores.push(job);
       }
     }
-    if (Array.isArray(data.jobs)) await chrome.storage.session.set({ jobs: jobsForUi() });
+    if (Array.isArray(data.jobs)) await chrome.storage.session.set({ jobs: [...jobs.values()].map(jobForStorage) });
     if (typeof chrome.downloads.search === "function") {
       await Promise.all(browserRestores.map((job) => reconcileBrowserJob(job)));
     }
@@ -3763,7 +4904,7 @@ function persistJobs() {
   jobPersistTimer = null;
   const storedJobs = [...jobs.values()]
     .sort((a, b) => a.createdAt - b.createdAt || a.jobId.localeCompare(b.jobId))
-    .map(jobForUi);
+    .map(jobForStorage);
   persistChain = persistChain
     .catch(() => {})
     .then(() => chrome.storage.session.set({ jobs: storedJobs }))
@@ -3791,6 +4932,7 @@ async function clearTerminalJobs() {
   for (const [jobId, job] of jobs) {
     if (!TERMINAL_JOB_STATUSES.has(job.status)) continue;
     jobs.delete(jobId);
+    jobDetails.delete(jobId);
     cleanupJobHeaders(jobId);
     if (Number.isInteger(job.downloadId)) {
       browserDownloads.delete(job.downloadId);
@@ -3806,7 +4948,7 @@ async function clearTerminalJobs() {
   return { removed, jobs: visibleJobs };
 }
 
-function jobForUi(job) {
+function jobForStorage(job) {
   return {
     jobId: job.jobId,
     method: job.method,
@@ -3822,7 +4964,39 @@ function jobForUi(job) {
     message: job.message,
     error: job.error,
     createdAt: job.createdAt,
-    updatedAt: job.updatedAt
+    updatedAt: job.updatedAt,
+    resume: job.resume || null
+  };
+}
+
+// UI rows carry presentation facts (poster frame, media summary, whether a
+// file can be revealed) but never the local path itself. The resume recipe
+// (tab, media key digest, options) stays worker-private as well.
+function jobForUi(job) {
+  const { resume, ...stored } = jobForStorage(job);
+  return { ...stored, ...jobPresentation(job) };
+}
+
+function jobPresentation(job) {
+  const details = jobDetails.get(job.jobId) || null;
+  const record = historyIndex.get(job.jobId) || null;
+  const media = mediaForUi(details?.media || record?.media);
+  const path = details?.path || record?.path || "";
+  const terminalFailure = job.status === "failed" || job.status === "cancelled";
+  return {
+    sourceHost: cleanText(details?.sourceHost || record?.sourceHost, 253),
+    sourceTitle: cleanText(details?.sourceTitle || record?.sourceTitle, 200),
+    hasSource: Boolean(details?.sourceUrl || record?.sourceUrl),
+    media,
+    thumbnail: thumbnailOrNull(details?.thumbnail || record?.thumbnail),
+    hasFile: job.status === "completed" && (Boolean(path) || (job.method === "browser" && Number.isInteger(job.downloadId))),
+    fileMissing: Boolean(record?.fileMissing),
+    retryable: terminalFailure && Boolean(details?.retry),
+    pausable: isActiveJob(job) && job.status !== "pausing"
+      && (job.method === "browser" ? Number.isInteger(job.downloadId) : Boolean(hostStatus.capabilities?.pause)),
+    resumable: job.status === "paused"
+      && (job.method === "browser" ? Number.isInteger(job.downloadId) : Boolean(job.resume)),
+    elapsedMs: nonNegativeNumber(details?.elapsedMs ?? record?.elapsedMs, 0)
   };
 }
 
@@ -3857,7 +5031,8 @@ function normalizeJob(value = {}) {
     message: redactJobText(value.message, 240),
     error: redactJobText(value.error, 240),
     createdAt,
-    updatedAt
+    updatedAt,
+    resume: normalizeResumeRecipe(value.resume)
   };
 }
 
@@ -3866,10 +5041,663 @@ function trimJobs() {
   const oldestTerminal = [...jobs.values()]
     .filter((job) => TERMINAL_JOB_STATUSES.has(job.status))
     .sort((a, b) => a.updatedAt - b.updatedAt || a.createdAt - b.createdAt);
-  while (jobs.size > MAX_STORED_JOBS && oldestTerminal.length) jobs.delete(oldestTerminal.shift().jobId);
+  while (jobs.size > MAX_STORED_JOBS && oldestTerminal.length) {
+    const evicted = oldestTerminal.shift().jobId;
+    jobs.delete(evicted);
+    jobDetails.delete(evicted);
+  }
   // Active jobs are durable control state, not cache entries. If every slot is
   // active, temporarily exceed the history cap rather than orphan cancellation,
   // progress, or terminal reconciliation for a live transfer.
+}
+
+// ---------------------------------------------------------------------------
+// Download history, file actions and retry
+// ---------------------------------------------------------------------------
+
+async function loadHistory() {
+  try {
+    const data = await chrome.storage.local.get(HISTORY_STORAGE_KEY);
+    const raw = Array.isArray(data?.[HISTORY_STORAGE_KEY]) ? data[HISTORY_STORAGE_KEY] : [];
+    history = raw.map(normalizeHistoryRecord).filter(Boolean).slice(0, MAX_HISTORY_RECORDS);
+  } catch {
+    history = [];
+  }
+  rebuildHistoryIndex();
+}
+
+function rebuildHistoryIndex() {
+  historyIndex.clear();
+  for (const record of history) historyIndex.set(record.jobId, record);
+}
+
+function normalizeHistoryRecord(value) {
+  if (!value || typeof value !== "object") return null;
+  const jobId = cleanText(value.jobId, 128);
+  const statusText = cleanText(value.status, 32).toLowerCase();
+  if (!jobId || !TERMINAL_JOB_STATUSES.has(statusText)) return null;
+  const now = Date.now();
+  const createdAt = timestamp(value.createdAt, now);
+  return {
+    jobId,
+    method: value.method === "browser" ? "browser" : "native",
+    downloadId: Number.isInteger(value.downloadId) && value.downloadId >= 0 ? value.downloadId : null,
+    kind: ["video", "audio", "hls", "dash", "dash_pair", "youtube"].includes(value.kind) ? value.kind : "",
+    filename: displayFilename(value.filename),
+    status: statusText,
+    size: Math.min(nonNegativeNumber(value.size, 0), Number.MAX_SAFE_INTEGER),
+    path: cleanLocalPath(value.path),
+    downloadDir: cleanLocalPath(value.downloadDir),
+    sourceUrl: publicSourceUrl(value.sourceUrl),
+    sourceHost: cleanText(value.sourceHost, 253),
+    sourceTitle: cleanText(value.sourceTitle, 200),
+    media: mediaForUi(value.media),
+    thumbnail: thumbnailOrNull(value.thumbnail),
+    message: redactJobText(value.message, 240),
+    error: redactJobText(value.error, 240),
+    createdAt,
+    finishedAt: Math.max(createdAt, timestamp(value.finishedAt, createdAt)),
+    elapsedMs: Math.min(nonNegativeNumber(value.elapsedMs, 0), Number.MAX_SAFE_INTEGER),
+    fileMissing: Boolean(value.fileMissing)
+  };
+}
+
+function mediaForUi(value) {
+  if (!value || typeof value !== "object") return null;
+  const media = {};
+  const duration = Number(value.duration);
+  if (Number.isFinite(duration) && duration > 0 && duration < 1e7) media.duration = Math.round(duration * 100) / 100;
+  for (const key of ["width", "height", "bitrate"]) {
+    const number = Number(value[key]);
+    if (Number.isInteger(number) && number > 0 && number < 1e9) media[key] = number;
+  }
+  for (const key of ["container", "videoCodec", "audioCodec"]) {
+    const text = cleanText(value[key], 32);
+    if (text) media[key] = text;
+  }
+  return Object.keys(media).length ? media : null;
+}
+
+function thumbnailOrNull(value) {
+  return typeof value === "string"
+    && value.length <= MAX_HISTORY_THUMBNAIL_CHARS
+    && /^data:image\/(?:jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(value)
+    ? value
+    : null;
+}
+
+function cleanLocalPath(value) {
+  if (typeof value !== "string") return "";
+  const text = value.replace(/[\u0000-\u001f\u007f]/g, "").trim();
+  return text.startsWith("/") && text.length <= 2048 ? text : "";
+}
+
+function publicSourceUrl(value) {
+  try {
+    const url = new URL(String(value || ""));
+    if (!/^https?:$/.test(url.protocol)) return "";
+    url.username = "";
+    url.password = "";
+    url.hash = "";
+    const text = url.toString();
+    return text.length <= 2048 ? text : "";
+  } catch {
+    return "";
+  }
+}
+
+function hostOf(url) {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+}
+
+function rememberJobSource(jobId, { candidate, tabId, options, pageTitle }) {
+  const sourceUrl = publicSourceUrl(candidate?.tabUrl);
+  const reference = candidate?.id && candidate?.generation && candidate?.kind
+    ? { id: candidate.id, kind: candidate.kind, generation: candidate.generation }
+    : null;
+  const entry = jobDetails.get(jobId) || {};
+  jobDetails.set(jobId, {
+    ...entry,
+    sourceUrl,
+    sourceHost: hostOf(sourceUrl),
+    sourceTitle: cleanText(pageTitle, 200),
+    retry: reference && Number.isInteger(tabId)
+      ? { tabId, reference, options: options && typeof options === "object" ? { ...options } : {} }
+      : null
+  });
+  trimJobDetails();
+}
+
+function rememberJobPath(jobId, path) {
+  const clean = cleanLocalPath(path);
+  if (!clean) return;
+  const entry = jobDetails.get(jobId) || {};
+  jobDetails.set(jobId, { ...entry, path: clean });
+  const record = historyIndex.get(jobId);
+  if (record && record.path !== clean) {
+    record.path = clean;
+    void persistHistory();
+  }
+}
+
+function rememberJobCompletion(jobId, message) {
+  const entry = jobDetails.get(jobId) || {};
+  jobDetails.set(jobId, {
+    ...entry,
+    path: cleanLocalPath(message?.path) || entry.path || "",
+    downloadDir: cleanLocalPath(message?.downloadDir) || entry.downloadDir || "",
+    size: nonNegativeNumber(message?.size, 0),
+    media: mediaForUi(message?.media) || entry.media || null,
+    thumbnail: thumbnailOrNull(message?.thumbnail) || entry.thumbnail || null,
+    elapsedMs: nonNegativeNumber(message?.elapsedMs, 0)
+  });
+  trimJobDetails();
+}
+
+function trimJobDetails() {
+  while (jobDetails.size > MAX_JOB_DETAILS) {
+    const oldest = jobDetails.keys().next().value;
+    if (!oldest) break;
+    jobDetails.delete(oldest);
+  }
+}
+
+function historyRecordFromJob(job) {
+  const details = jobDetails.get(job.jobId) || {};
+  const previous = historyIndex.get(job.jobId) || {};
+  return normalizeHistoryRecord({
+    jobId: job.jobId,
+    method: job.method,
+    downloadId: job.downloadId,
+    kind: job.kind,
+    filename: job.filename,
+    status: job.status,
+    size: job.status === "completed" ? details.size || job.total || job.bytes || previous.size || 0 : job.bytes || 0,
+    path: details.path || previous.path || "",
+    downloadDir: details.downloadDir || previous.downloadDir || "",
+    sourceUrl: details.sourceUrl || previous.sourceUrl || "",
+    sourceHost: details.sourceHost || previous.sourceHost || "",
+    sourceTitle: details.sourceTitle || previous.sourceTitle || "",
+    media: details.media || previous.media || null,
+    thumbnail: details.thumbnail || previous.thumbnail || null,
+    message: job.message,
+    error: job.error,
+    createdAt: job.createdAt,
+    finishedAt: job.updatedAt,
+    elapsedMs: details.elapsedMs || previous.elapsedMs || 0,
+    fileMissing: Boolean(previous.fileMissing)
+  });
+}
+
+function upsertHistoryRecord(record) {
+  if (!record) return;
+  history = history.filter((item) => item.jobId !== record.jobId);
+  history.unshift(record);
+  history.sort((a, b) => b.finishedAt - a.finishedAt || b.createdAt - a.createdAt);
+  if (history.length > MAX_HISTORY_RECORDS) history.length = MAX_HISTORY_RECORDS;
+  // Poster frames are the bulk of a record; keep them for recent rows only so
+  // the whole history stays comfortably inside chrome.storage.local.
+  history.forEach((item, index) => {
+    if (index >= MAX_HISTORY_THUMBNAILS) item.thumbnail = null;
+  });
+  rebuildHistoryIndex();
+}
+
+async function recordHistory(job) {
+  await historyReady;
+  upsertHistoryRecord(historyRecordFromJob(job));
+  await persistHistory();
+  broadcast({ type: "HISTORY_UPDATED", record: historyRecordForUi(historyIndex.get(job.jobId)) });
+}
+
+function persistHistory() {
+  const snapshot = history.slice();
+  persistChain = persistChain
+    .catch(() => {})
+    .then(() => chrome.storage.local.set({ [HISTORY_STORAGE_KEY]: snapshot }))
+    .catch(() => {});
+  return persistChain;
+}
+
+function historyRecordForUi(record) {
+  if (!record) return null;
+  const { path, downloadDir, ...rest } = record;
+  return {
+    ...rest,
+    hasFile: record.status === "completed" && (Boolean(path) || (record.method === "browser" && Number.isInteger(record.downloadId))),
+    hasSource: Boolean(record.sourceUrl),
+    retryable: (record.status === "failed" || record.status === "cancelled") && Boolean(jobDetails.get(record.jobId)?.retry)
+  };
+}
+
+async function removeHistoryRecord(jobId) {
+  await historyReady;
+  if (!jobId) throw new Error("任务编号无效");
+  const before = history.length;
+  history = history.filter((item) => item.jobId !== jobId);
+  rebuildHistoryIndex();
+  const job = jobs.get(jobId);
+  if (job && TERMINAL_JOB_STATUSES.has(job.status)) {
+    jobs.delete(jobId);
+    jobDetails.delete(jobId);
+    cleanupJobHeaders(jobId);
+    await persistJobs();
+    broadcast({ type: "JOBS_UPDATED", jobs: jobsForUi() });
+  }
+  if (history.length !== before) await persistHistory();
+  broadcast({ type: "HISTORY_REMOVED", jobId });
+  return { removed: before - history.length, jobs: jobsForUi() };
+}
+
+async function clearHistory() {
+  await historyReady;
+  const removed = history.length;
+  history = [];
+  rebuildHistoryIndex();
+  await persistHistory();
+  const cleared = await clearTerminalJobs();
+  broadcast({ type: "HISTORY_CLEARED" });
+  return { removed, jobs: cleared.jobs };
+}
+
+function downloadDirForUi() {
+  return cleanLocalPath(hostStatus?.downloadDir) || cleanLocalPath(history.find((item) => item.downloadDir)?.downloadDir) || "";
+}
+
+async function markHistoryFileMissing(jobId) {
+  const record = historyIndex.get(jobId);
+  if (record && !record.fileMissing) {
+    record.fileMissing = true;
+    await persistHistory();
+  }
+  if (record) broadcast({ type: "HISTORY_UPDATED", record: historyRecordForUi(record) });
+  const job = jobs.get(jobId);
+  if (job) broadcast({ type: "JOB_UPDATED", job: jobForUi(job) });
+}
+
+function friendlyFileActionError(error) {
+  const text = String(error?.message || error || "");
+  if (/no longer exists/i.test(text)) return "文件已不在下载文件夹中";
+  if (/outside the download folder|not a regular file|Unfinished files|not a file/i.test(text)) return "这个文件不在 FluxCatch 的下载文件夹里，请在 Finder 中打开";
+  if (/Trash/i.test(text)) return "无法移到废纸篓，请在 Finder 中操作";
+  if (/未连接|未授权|not found|connect|超时/i.test(text)) return "本地下载引擎未连接，请先在设置里开启";
+  return "操作失败，请在 Finder 中手动打开";
+}
+
+async function performFileAction(action, jobId) {
+  if (!FILE_ACTIONS.has(action)) throw new Error("不支持的文件操作");
+  if (!jobId) throw new Error("任务编号无效");
+  await historyReady;
+  const job = jobs.get(jobId) || null;
+  const record = historyIndex.get(jobId) || null;
+  const details = jobDetails.get(jobId) || {};
+  if (!job && !record) throw new Error("找不到这条下载记录");
+  if ((job?.status || record?.status) !== "completed") throw new Error("只有已完成的下载才能打开文件");
+  if (record?.fileMissing) throw new Error("文件已不在下载文件夹中");
+  const method = job?.method || record?.method;
+  const downloadId = Number.isInteger(job?.downloadId) ? job.downloadId : Number.isInteger(record?.downloadId) ? record.downloadId : null;
+  const path = details.path || record?.path || "";
+  let nativeError = null;
+  if (path && await hasNativePermission()) {
+    try {
+      await nativeFileAction({ type: action, path });
+      if (action === "trash") await markHistoryFileMissing(jobId);
+      return { via: "native" };
+    } catch (error) {
+      nativeError = error;
+      if (method !== "browser" && /no longer exists/i.test(error?.message || "")) {
+        await markHistoryFileMissing(jobId);
+        throw new Error(friendlyFileActionError(error));
+      }
+    }
+  }
+  if (method === "browser" && downloadId !== null) {
+    if (action === "reveal") {
+      await chrome.downloads.show(downloadId);
+      return { via: "browser" };
+    }
+    if (action === "open") {
+      await chrome.downloads.open(downloadId);
+      return { via: "browser" };
+    }
+    await chrome.downloads.removeFile(downloadId);
+    await markHistoryFileMissing(jobId);
+    return { via: "browser", permanent: true };
+  }
+  if (nativeError) throw new Error(friendlyFileActionError(nativeError));
+  if (!path) throw new Error("这条记录没有保存文件位置");
+  throw new Error("需要本地下载引擎权限才能打开文件");
+}
+
+async function nativeFileAction(request, timeoutMs = 20_000) {
+  if (!await hasNativePermission()) throw new Error("尚未授权连接本地引擎");
+  const port = await ensureNativePort({ requireCompatibility: false });
+  const requestId = crypto.randomUUID();
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pendingHostFileActions.delete(requestId);
+      reject(new Error("本地引擎响应超时"));
+    }, timeoutMs);
+    pendingHostFileActions.set(requestId, { port, resolve, reject, timer });
+    try {
+      port.postMessage({ ...request, requestId });
+    } catch (error) {
+      clearTimeout(timer);
+      pendingHostFileActions.delete(requestId);
+      reject(error);
+    }
+  });
+}
+
+function resolveHostFileAction(requestId, message, port) {
+  const pending = pendingHostFileActions.get(requestId);
+  if (!pending || pending.port !== port) return;
+  clearTimeout(pending.timer);
+  pendingHostFileActions.delete(requestId);
+  if (message?.ok) {
+    pending.resolve({
+      items: Array.isArray(message.items) ? message.items : [],
+      downloadDir: cleanLocalPath(message.downloadDir) || null
+    });
+  }
+  else pending.reject(new Error(String(message?.error || "本地引擎未能完成文件操作")));
+}
+
+function rejectHostFileActions(port, error) {
+  for (const [requestId, pending] of pendingHostFileActions) {
+    if (pending.port !== port) continue;
+    clearTimeout(pending.timer);
+    pendingHostFileActions.delete(requestId);
+    pending.reject(error);
+  }
+}
+
+// The engine owns the folder picker (a native macOS sheet) and the persisted
+// choice; the worker only mirrors the result into the public host status.
+async function chooseDownloadFolder({ reset = false } = {}) {
+  if (!await hasNativePermission()) throw new Error("尚未授权连接本地引擎");
+  let result;
+  try {
+    result = await nativeFileAction({ type: "choose_folder", ...(reset ? { reset: true } : {}) }, 5 * 60_000);
+  } catch (error) {
+    if (/cancel/i.test(error?.message || "")) throw new Error("已取消选择");
+    throw error;
+  }
+  if (!result?.downloadDir) throw new Error("无法更改保存位置");
+  hostStatus = { ...hostStatus, downloadDir: result.downloadDir };
+  broadcast({ type: "HOST_EVENT", event: hostEventForUi({ type: "pong" }), hostStatus: hostStatusForUi(hostStatus) });
+  return { downloadDir: result.downloadDir, hostStatus: hostStatusForUi(hostStatus) };
+}
+
+async function openDownloadsPage() {
+  const url = chrome.runtime.getURL(DOWNLOADS_PAGE_PATH);
+  const [existing] = await chrome.tabs.query?.({ url }) || [];
+  if (existing?.id) {
+    await chrome.tabs.update(existing.id, { active: true });
+    if (Number.isInteger(existing.windowId)) await chrome.windows?.update?.(existing.windowId, { focused: true }).catch?.(() => {});
+  } else {
+    await chrome.tabs.create({ url });
+  }
+}
+
+async function openDownloadFolder() {
+  if (await hasNativePermission()) {
+    try {
+      await nativeFileAction({ type: "open_folder" });
+      return { opened: "native" };
+    } catch {
+      // Fall back to Chrome's own folder below.
+    }
+  }
+  await chrome.downloads.showDefaultFolder();
+  return { opened: "browser" };
+}
+
+async function verifyHistoryFiles() {
+  await historyReady;
+  const candidates = history
+    .filter((item) => item.method === "native" && item.status === "completed" && item.path)
+    .slice(0, 300);
+  if (!candidates.length || !await hasNativePermission()) return { checked: 0, missing: 0 };
+  let result;
+  try {
+    result = await nativeFileAction({ type: "stat", paths: candidates.map((item) => item.path) });
+  } catch {
+    return { checked: 0, missing: 0 };
+  }
+  const existence = new Map((result.items || []).map((item) => [cleanLocalPath(item?.path), Boolean(item?.exists)]));
+  let missing = 0;
+  let changed = false;
+  for (const record of candidates) {
+    if (!existence.has(record.path)) continue;
+    const exists = existence.get(record.path);
+    if (!exists) missing += 1;
+    if (record.fileMissing === exists) {
+      record.fileMissing = !exists;
+      changed = true;
+    }
+  }
+  if (changed) {
+    await persistHistory();
+    broadcast({ type: "HISTORY_VERIFIED" });
+  }
+  return { checked: candidates.length, missing };
+}
+
+async function retryJob(jobId) {
+  if (!jobId) throw new Error("任务编号无效");
+  const retry = jobDetails.get(jobId)?.retry;
+  if (!retry) throw new Error("这条任务无法重试，请回到来源页面重新下载");
+  let candidate;
+  try {
+    candidate = requireTabCandidate(retry.tabId, retry.reference);
+  } catch {
+    throw new Error("来源页面的媒体信息已失效，请重新打开页面后再下载");
+  }
+  return startDownload(candidate, retry.options, retry.tabId);
+}
+
+function isActiveJob(job) {
+  return Boolean(job) && !TERMINAL_JOB_STATUSES.has(job.status) && job.status !== "paused";
+}
+
+// A pasted address becomes an ordinary candidate of the current tab (so the
+// card, retry and resume all work) and then takes the normal download path
+// under the user_supplied provenance.
+async function downloadUserUrl(tabId, rawUrl, options, context = {}) {
+  const url = canonicalizeUrl(cleanText(rawUrl, 4096));
+  if (!url || !/^https?:$/i.test(new URL(url).protocol)) throw new Error("请输入 http 或 https 的媒体地址");
+  if (isPolicyBlocked(url, "")) throw new Error("商店版本不支持从此平台下载");
+  const settings = await getSettings();
+  const networkScope = networkScopeForSettings(settings);
+  requireNetworkRequest({ url, purpose: "user_download", provenance: "user_supplied", networkScope, userInitiated: true });
+  let classified = classifyMedia({ url });
+  let mime = "";
+  let contentLength = 0;
+  if (!classified) {
+    const head = await probeUserUrl(url);
+    mime = head.mime;
+    contentLength = head.contentLength;
+    classified = classifyMedia({ url, mime, contentLength });
+    if (!classified) throw new Error("这个地址不是可下载的媒体（视频、音频或播放列表）");
+  }
+  let tab = null;
+  try { tab = await chrome.tabs.get(tabId); } catch { tab = null; }
+  const accepted = await addCandidate(tabId, {
+    url,
+    kind: classified.kind,
+    mime,
+    contentLength,
+    source: "user",
+    provenance: "user_supplied",
+    pageTitle: cleanText(tab?.title, 240),
+    tabUrl: canonicalizeUrl(tab?.url) || ""
+  });
+  const candidate = tabMedia.get(tabId)?.get(`${classified.kind}:${url}`);
+  if (!accepted || !candidate) throw new Error("该地址被当前设置忽略（域名屏蔽或小于最小媒体大小）");
+  await persistSession();
+  return startDownload(candidate, options, tabId, context);
+}
+
+// Learn the type of an address without downloading its body: HEAD first, a
+// one-byte range GET for servers that refuse HEAD. Credentials never travel.
+async function probeUserUrl(url) {
+  const attempts = [
+    { method: "HEAD" },
+    { method: "GET", headers: { Range: "bytes=0-0" } }
+  ];
+  let lastError = null;
+  for (const attempt of attempts) {
+    try {
+      const response = await fetch(url, {
+        ...attempt,
+        credentials: "omit",
+        cache: "no-store",
+        redirect: "follow",
+        signal: AbortSignal.timeout(USER_URL_PROBE_TIMEOUT_MS)
+      });
+      try { response.body?.cancel?.(); } catch { /* headers are all we need */ }
+      if (!response.ok && response.status !== 206) {
+        lastError = new Error(`HTTP ${response.status}`);
+        continue;
+      }
+      const mime = cleanText(response.headers.get("content-type"), 180).split(";")[0].trim().toLowerCase();
+      const contentRange = response.headers.get("content-range") || "";
+      const total = Number(contentRange.split("/")[1]) || Number(response.headers.get("content-length")) || 0;
+      return { mime, contentLength: Number.isFinite(total) && total > 0 ? total : 0 };
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw new Error(`无法读取这个地址的类型，请确认链接可以直接打开（${lastError?.message || "网络错误"}）`);
+}
+
+async function pauseJob(jobId) {
+  if (!jobId) throw new Error("任务编号无效");
+  const job = jobs.get(jobId);
+  if (!job) throw new Error("任务不存在或已结束");
+  if (!isActiveJob(job) || job.status === "pausing") throw new Error("这条任务现在不能暂停");
+  if (job.method === "browser") {
+    if (!Number.isInteger(job.downloadId)) throw new Error("这条任务现在不能暂停");
+    await chrome.downloads.pause(job.downloadId);
+    await mergeJob(jobId, { status: "paused", message: PAUSED_JOB_MESSAGE, speed: 0 });
+    return { status: "paused" };
+  }
+  const port = await ensureNativePort();
+  if (!hostStatus.capabilities?.pause) throw new Error("当前安装的本地下载引擎不支持暂停，请更新引擎");
+  await mergeJob(jobId, { status: "pausing", message: "正在暂停…" });
+  port.postMessage({ type: "pause", jobId });
+  return { status: "pausing" };
+}
+
+async function resumeJob(jobId, context = {}) {
+  if (!jobId) throw new Error("任务编号无效");
+  const job = jobs.get(jobId);
+  if (!job || job.status !== "paused") throw new Error("这条任务不在暂停状态");
+  if (job.method === "browser") {
+    if (!Number.isInteger(job.downloadId)) throw new Error("这条任务无法继续，请回到来源页面重新下载");
+    await chrome.downloads.resume(job.downloadId);
+    await mergeJob(jobId, { status: "downloading", message: "浏览器正在下载" });
+    await reconcileBrowserJob(job, false);
+    return { method: "browser", jobId };
+  }
+  const recipe = job.resume;
+  if (!recipe) throw new Error("这条任务无法继续，请回到来源页面重新下载");
+  const candidate = await findCandidateByRecipe(recipe);
+  if (!candidate) throw new Error("来源页面的媒体信息已失效，请重新打开页面后再下载");
+  // The engine hands the same output name back to a job that asks for it,
+  // which is how the checkpoint or the staged segments are picked up again.
+  const options = { ...(recipe.options || {}), filename: recipe.filename || recipe.options?.filename };
+  const result = await startDownload(candidate, options, recipe.tabId, context);
+  jobs.delete(jobId);
+  jobDetails.delete(jobId);
+  await persistJobs();
+  broadcast({ type: "JOBS_UPDATED", jobs: jobsForUi() });
+  return { ...result, replaced: jobId };
+}
+
+async function discardPausedJob(job) {
+  await mergeJob(job.jobId, { status: "cancelled", message: "任务已取消", error: "", speed: 0 });
+  const filename = job.resume?.filename || job.filename;
+  if (filename) {
+    nativeFileAction({ type: "discard", filename }, 8_000).catch(() => {
+      // Leftovers are collected by the engine's weekly sweep.
+    });
+  }
+  return {};
+}
+
+async function resumeRecipe(candidate, tabId, options, filename) {
+  // Volatile pairs are rediscovered from playback; they cannot be resumed.
+  if (!candidate || candidate.kind === "dash_pair" || !Number.isInteger(tabId)) return null;
+  const url = canonicalizeUrl(candidate.url);
+  if (!url) return null;
+  let plainOptions = {};
+  try { plainOptions = JSON.parse(JSON.stringify(options || {})); } catch { plainOptions = {}; }
+  return {
+    tabId,
+    kind: cleanText(candidate.kind, 16),
+    keySha256: await candidateKeySha256(candidate.kind, url),
+    options: plainOptions,
+    filename: cleanText(filename, 500)
+  };
+}
+
+function resumeWithTargetName(jobId, targetName) {
+  const recipe = jobs.get(jobId)?.resume;
+  const filename = cleanText(targetName, 500);
+  if (!recipe || !filename) return undefined;
+  return { ...recipe, filename };
+}
+
+async function candidateKeySha256(kind, url) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${kind}:${url}`));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function findCandidateByRecipe(recipe) {
+  const items = tabMedia.get(recipe.tabId);
+  if (!items) return null;
+  for (const item of items.values()) {
+    if (item.kind !== recipe.kind || item.mergedInto) continue;
+    const url = canonicalizeUrl(item.url);
+    if (!url) continue;
+    if (await candidateKeySha256(item.kind, url) === recipe.keySha256) return item;
+  }
+  return null;
+}
+
+function normalizeResumeRecipe(value) {
+  if (!value || typeof value !== "object") return null;
+  const tabId = Number(value.tabId);
+  const kind = cleanText(value.kind, 16);
+  const keySha256 = cleanText(value.keySha256, 64).toLowerCase();
+  if (!Number.isInteger(tabId) || tabId < 0 || !kind || !/^[a-f0-9]{64}$/.test(keySha256)) return null;
+  let options = {};
+  try { options = JSON.parse(JSON.stringify(value.options || {})); } catch { options = {}; }
+  return { tabId, kind, keySha256, options, filename: cleanText(value.filename, 500) };
+}
+
+async function openJobSource(jobId) {
+  await historyReady;
+  const url = jobDetails.get(jobId)?.sourceUrl || historyIndex.get(jobId)?.sourceUrl || "";
+  if (!url) throw new Error("这条记录没有来源页面");
+  const tab = await chrome.tabs.create({ url });
+  return { tabId: tab?.id ?? null };
+}
+
+function formatMediaDuration(seconds) {
+  const total = Math.max(0, Math.round(Number(seconds) || 0));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const rest = total % 60;
+  return hours
+    ? `${hours}:${String(minutes).padStart(2, "0")}:${String(rest).padStart(2, "0")}`
+    : `${minutes}:${String(rest).padStart(2, "0")}`;
 }
 
 function cleanupJobHeaders(jobId) {
@@ -3917,6 +5745,7 @@ function normalizeSettings(value) {
     ...DEFAULT_SETTINGS,
     concurrentFragments: boundedInt(value.concurrentFragments, 1, 24, DEFAULT_SETTINGS.concurrentFragments),
     concurrentRanges: boundedInt(value.concurrentRanges, 1, 24, DEFAULT_SETTINGS.concurrentRanges),
+    concurrentJobs: boundedInt(value.concurrentJobs, 1, 6, DEFAULT_SETTINGS.concurrentJobs),
     outputContainer: ["mp4", "mkv", "webm"].includes(value.outputContainer) ? value.outputContainer : DEFAULT_SETTINGS.outputContainer,
     saveAs: Boolean(value.saveAs),
     useNativeForDirect: Boolean(value.useNativeForDirect),
@@ -3926,7 +5755,7 @@ function normalizeSettings(value) {
     liveDuration: 0,
     blockedDomains: normalizeDomains(value.blockedDomains),
     filenameTemplate: cleanText(value.filenameTemplate, 160) || DEFAULT_SETTINGS.filenameTemplate,
-    showNotifications: Boolean(value.showNotifications),
+    showNotifications: value.showNotifications === undefined ? DEFAULT_SETTINGS.showNotifications : Boolean(value.showNotifications),
     youtubeEnabled: Boolean(value.youtubeEnabled),
     autoEnrichSiteQuality: typeof value.autoEnrichSiteQuality === "boolean"
       ? value.autoEnrichSiteQuality
@@ -4062,7 +5891,7 @@ function ytdlpNetworkAllowed() {
     && ytdlp?.networkDisabled === false;
 }
 
-function disconnectedHostStatus({ needsPermission = false, failureReason = null, lastError = null, restartRequired = false } = {}) {
+function disconnectedHostStatus({ needsPermission = false, failureReason = null, lastError = null, restartRequired = false, selfHealing = false } = {}) {
   return {
     connected: false,
     version: null,
@@ -4073,7 +5902,8 @@ function disconnectedHostStatus({ needsPermission = false, failureReason = null,
     needsPermission: Boolean(needsPermission),
     failureReason,
     lastError: lastError || null,
-    restartRequired: Boolean(restartRequired)
+    restartRequired: Boolean(restartRequired),
+    selfHealing: Boolean(selfHealing)
   };
 }
 
@@ -4112,6 +5942,14 @@ function dropTabState(tabId) {
   const pruneTimer = bilibiliPruneTimers.get(tabId);
   if (pruneTimer !== undefined) clearTimeout(pruneTimer);
   bilibiliPruneTimers.delete(tabId);
+  genericStreamStates.delete(tabId);
+  tabPlaybackHints.delete(tabId);
+  const genericPruneTimer = genericStreamPruneTimers.get(tabId);
+  if (genericPruneTimer !== undefined) clearTimeout(genericPruneTimer);
+  genericStreamPruneTimers.delete(tabId);
+  const genericPublishTimer = genericStreamPublishTimers.get(tabId);
+  if (genericPublishTimer !== undefined) clearTimeout(genericPublishTimer);
+  genericStreamPublishTimers.delete(tabId);
   const prefix = `${tabId}\n`;
   for (const token of manifestInspectionAttempted) if (token.startsWith(prefix)) manifestInspectionAttempted.delete(token);
   for (const token of manifestInspectionInFlight.keys()) if (token.startsWith(prefix)) manifestInspectionInFlight.delete(token);
@@ -4260,9 +6098,10 @@ function isContentSender(sender) {
 function withoutManifestText(item) {
   if (item?.kind === "dash_pair") {
     const now = Date.now();
+    const site = item.site === "generic" ? "generic" : "bilibili";
     const tracks = [
-      ...(Array.isArray(item.videoTracks) ? item.videoTracks : []).filter((track) => isFreshBilibiliTrack(track, now)).map((track) => publicDashPairTrack(track, "video")),
-      ...(Array.isArray(item.audioTracks) ? item.audioTracks : []).filter((track) => isFreshBilibiliTrack(track, now)).map((track) => publicDashPairTrack(track, "audio"))
+      ...(Array.isArray(item.videoTracks) ? item.videoTracks : []).filter((track) => isFreshBilibiliTrack(track, now, site)).map((track) => publicDashPairTrack(track, "video")),
+      ...(Array.isArray(item.audioTracks) ? item.audioTracks : []).filter((track) => isFreshBilibiliTrack(track, now, site)).map((track) => publicDashPairTrack(track, "audio"))
     ];
     const expiresAt = Number(item.expiresAt || 0);
     return candidateForUi(item, {

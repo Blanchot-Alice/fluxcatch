@@ -4,12 +4,13 @@ import { BUILD_PROFILE, HOST_MISMATCH_MESSAGE } from "../lib/build-profile.js";
 import { friendlyDashMessage } from "../lib/job-presentation.js";
 import { createToastController, isActionPending, restoreFocus, withPendingAction } from "../ui/interactions.js";
 import { bindUiI18n } from "../ui/i18n.js";
+import { compareJobs, createJobActions, createJobTile, createTransferControls, estimateRemaining, finishedMetaParts, isTerminalStatus, runFileAction } from "../ui/job-rows.js";
 
 let initStarted = false;
 await bindUiI18n();
 
 const SITE_LABELS = { instagram: "Instagram", twitter: "X" };
-const state = { tabId: null, windowId: null, items: [], settings: {}, hostStatus: {}, jobs: new Map(), selected: null, probes: new Map(), filter: "all", refreshSequence: 0, dialogTrigger: null, lastJobAnnouncementKey: "", probeError: "" };
+const state = { tabId: null, windowId: null, items: [], settings: {}, hostStatus: {}, jobs: new Map(), selected: null, probes: new Map(), filter: "all", refreshSequence: 0, dialogTrigger: null, lastJobAnnouncementKey: "", probeError: "", notificationPermission: null, notifyHintDismissed: false };
 const $ = (selector) => document.querySelector(selector);
 const mediaList = $("#mediaList");
 const emptyState = $("#emptyState");
@@ -102,6 +103,9 @@ function bindEvents() {
   $("#filterSelect").addEventListener("change", (event) => { state.filter = event.target.value; renderMedia(); });
   $("#scanButton").addEventListener("click", (event) => void scanCurrentPage(event.currentTarget));
   $("#forceButton").addEventListener("click", (event) => void scanCurrentPage(event.currentTarget));
+  $("#urlButton").addEventListener("click", (event) => openUrlDialog(event.currentTarget));
+  $("#urlInput").addEventListener("input", syncUrlDialog);
+  $("#downloadAllButton").addEventListener("click", (event) => void downloadAllVisible(event.currentTarget));
   $("#retryMediaButton").addEventListener("click", (event) => void runUiAction(event.currentTarget, `popup:retry-media:${state.tabId}`, () => loadMediaState({ propagateError: true }), { pendingText: "读取中…", successText: "已更新" }));
   $("#retryJobsButton").addEventListener("click", (event) => void runUiAction(event.currentTarget, "popup:retry-jobs", () => loadJobsState({ propagateError: true }), { pendingText: "读取中…", successText: "已更新" }));
   $("#clearButton").addEventListener("click", (event) => {
@@ -118,9 +122,31 @@ function bindEvents() {
       active ? "warning" : "success");
     }, { pendingText: "清理中…", successText: "已清空 ✓" });
   });
-  $("#folderButton").addEventListener("click", (event) => void runUiAction(event.currentTarget, "popup:open-folder", () => call({ type: "SHOW_DOWNLOAD_FOLDER" }), {
+  $("#folderButton").addEventListener("click", (event) => void runUiAction(event.currentTarget, "popup:open-folder", () => call({ type: "OPEN_DOWNLOAD_FOLDER" }), {
     pendingText: "打开中…", successText: "已打开 ✓"
   }));
+  for (const id of ["#historyButton", "#emptyHistoryButton"]) {
+    $(id).addEventListener("click", (event) => void runUiAction(event.currentTarget, "popup:open-history", async () => {
+      await call({ type: "OPEN_DOWNLOADS_PAGE" });
+      window.close();
+    }, { pendingText: "", successDurationMs: 0 }));
+  }
+  $("#notifyEnableButton").addEventListener("click", (event) => void runUiAction(event.currentTarget, "popup:enable-notifications", async () => {
+    // Must stay the first asynchronous call of this click so the optional
+    // permission prompt keeps its user gesture.
+    const granted = await chrome.permissions.request({ permissions: ["notifications"] });
+    state.notificationPermission = granted;
+    if (!granted) throw new Error("未授予通知权限，可稍后在设置里开启");
+    showToast("下载完成后会收到通知", "success");
+    renderNotifyHint();
+  }, { pendingText: "", successText: "已开启 ✓", successDurationMs: 0 }));
+  $("#notifyDismissButton").addEventListener("click", (event) => void runUiAction(event.currentTarget, "popup:dismiss-notifications", async () => {
+    state.notifyHintDismissed = true;
+    renderNotifyHint();
+    const settings = { ...(state.settings || {}), showNotifications: false };
+    const saved = await call({ type: "SAVE_SETTINGS", settings });
+    state.settings = saved.settings || settings;
+  }, { pendingText: "", successDurationMs: 0 }));
   $("#workspaceButton").addEventListener("click", (event) => void runUiAction(event.currentTarget, `popup:workspace:${state.windowId}`, async () => {
     if (!Number.isInteger(state.windowId)) throw new Error("当前窗口不可用");
     await chrome.sidePanel.open({ windowId: state.windowId });
@@ -195,6 +221,13 @@ async function loadMediaState({ propagateError = false } = {}) {
 async function loadJobsState({ propagateError = false } = {}) {
   setJobsLoadState("loading");
   try {
+    if (state.notificationPermission === null) {
+      try {
+        state.notificationPermission = await chrome.permissions.contains({ permissions: ["notifications"] });
+      } catch {
+        state.notificationPermission = false;
+      }
+    }
     await refreshJobs();
     setJobsLoadState("ready");
   } catch (error) {
@@ -257,9 +290,92 @@ function renderMedia() {
   $("#emptyState h2").textContent = anyMedia ? "当前筛选下没有媒体" : "尚未检测到媒体";
   $("#emptyState p").textContent = anyMedia ? "尝试切换媒体类型，或重新扫描当前页面。" : "播放视频后重新扫描；扫描不会刷新页面。";
   for (const item of items) mediaList.append(createMediaCard(item));
+  // Batch download reads the same filtered list the user is looking at.
+  $("#downloadAllButton").hidden = items.length < 2;
   if (activeMediaId && activeAction && !restoreFocus(findMediaAction(activeMediaId, activeAction))) {
     restoreFocus($("#scanButton"));
   }
+}
+
+function visibleMediaItems() {
+  return state.items.filter((item) => {
+    if (state.filter === "all") return true;
+    if (state.filter === "stream") return isStreamKind(item);
+    return item.kind === state.filter;
+  });
+}
+
+async function downloadAllVisible(button) {
+  const items = visibleMediaItems();
+  if (!items.length) {
+    showToast("没有可下载的媒体", "warning");
+    return;
+  }
+  await runUiAction(button, `popup:download-all:${state.tabId}`, async () => {
+    if (items.some((item) => downloadNeedsNative(item, {}))) {
+      const granted = await chrome.permissions.request({ permissions: ["nativeMessaging"] });
+      if (!granted) throw new Error("请先允许使用本地下载引擎，再继续下载");
+      requireNativeHostReady(await refreshNativeHost());
+    }
+    const result = await call({ type: "DOWNLOAD_BATCH", tabId: state.tabId, candidates: items.map(candidateReference), options: {} });
+    await refreshJobs().catch(() => {});
+    showToast(result.failed ? `已开始 ${result.started} 个下载，${result.failed} 个失败` : `已开始 ${result.started} 个下载`, result.failed ? "warning" : "success");
+    if (result.started) {
+      switchView("jobs");
+      restoreFocus($("#jobsTab"));
+    }
+  }, { pendingText: "准备中…", successText: "已开始", failureText: "未开始", successDurationMs: 0 });
+}
+
+// A pasted address uses the same sheet as a detected card: the item is a
+// stand-in built from the URL until the worker registers the real candidate.
+function urlDialogItem(rawUrl) {
+  const text = String(rawUrl || "").trim();
+  let kind = "video";
+  let title = "";
+  try {
+    const parsed = new URL(text);
+    const extension = (parsed.pathname.match(/\.([a-z0-9]{1,8})$/i)?.[1] || "").toLowerCase();
+    if (extension === "m3u8" || extension === "m3u") kind = "hls";
+    else if (extension === "mpd") kind = "dash";
+    else if (["mp3", "m4a", "aac", "flac", "wav", "ogg", "opus"].includes(extension)) kind = "audio";
+    title = decodeURIComponent(parsed.pathname.split("/").filter(Boolean).pop() || parsed.hostname);
+  } catch {
+    title = "";
+  }
+  return { id: "url", kind, displayUrl: text, displayTitle: title, urlMode: true, copyable: false };
+}
+
+function openUrlDialog(trigger) {
+  state.dialogTrigger = trigger;
+  const urlInput = $("#urlInput");
+  urlInput.value = "";
+  openDownloadDialog(urlDialogItem(""));
+  $("#downloadDialogTitle").textContent = "下载链接";
+  $("#urlLabel").hidden = false;
+  const filenameInput = $("#filenameInput");
+  filenameInput.required = false;
+  filenameInput.value = "";
+  filenameInput.placeholder = "留空则自动命名";
+  $("#dialogNote").textContent = "粘贴地址后会按它的类型自动选择格式；链接下载始终由本地下载引擎保存。";
+  queueMicrotask(() => {
+    if (dialog.open) urlInput.focus({ preventScroll: true });
+  });
+}
+
+function syncUrlDialog() {
+  if (!state.selected?.urlMode) return;
+  const item = urlDialogItem($("#urlInput").value);
+  state.selected = item;
+  const containerSelect = $("#containerSelect");
+  const stream = isStreamKind(item);
+  for (const option of containerSelect.options) {
+    if (option.value === "original") option.disabled = stream;
+  }
+  if (stream && containerSelect.value === "original") containerSelect.value = ["mp4", "mkv", "webm"].includes(state.settings.outputContainer) ? state.settings.outputContainer : "mp4";
+  if (!stream && !["mp3"].includes(containerSelect.value)) containerSelect.value = "original";
+  $("#nativeDirectInput").closest("label").hidden = true;
+  syncDialogRequirement();
 }
 
 function createMediaCard(item) {
@@ -393,7 +509,6 @@ function setManifestLoadingForItem(item, loading) {
 function manifestDownloadBlockReason(probe) {
   if (probe?.kind === "hls") {
     if (probe.protection === "drm" || probe.protected) return "检测到 DRM/SAMPLE-AES 内容保护，仅显示媒体信息。";
-    if (probe.protection === "aes128" || probe.encrypted) return "当前版本暂不支持 AES-128 加密的 HLS 下载。";
     if (probe.type === "media" && probe.live) return "当前版本暂不支持 HLS 直播录制。";
     if (probe.discontinuity) return "当前版本暂不支持包含时间线切换的 HLS 下载。";
   }
@@ -418,8 +533,12 @@ function openDownloadDialog(item, { probeWarning = false } = {}) {
     : ((pairedDash && ["mkv", "webm"].includes(preferredFormat)) || preferredOption?.disabled ? "mp4" : preferredFormat);
   containerSelect.value = outputFormat;
   $("#filenameInput").value = defaultFilename(item, outputFormat);
+  $("#filenameInput").required = true;
+  $("#filenameInput").placeholder = "";
+  $("#downloadDialogTitle").textContent = "下载设置";
+  $("#urlLabel").hidden = true;
   $("#nativeDirectInput").checked = Boolean(state.settings.useNativeForDirect);
-  $("#nativeDirectInput").closest("label").hidden = isStreamKind(item);
+  $("#nativeDirectInput").closest("label").hidden = isStreamKind(item) || Boolean(item.urlMode);
   const probe = state.probes.get(mediaKey(item));
   const variantLabel = $("#variantLabel");
   const variantSelect = $("#variantSelect");
@@ -504,6 +623,15 @@ async function submitDownload(event) {
   const actionKey = `popup:start-download:${mediaKey(item)}`;
   if (isActionPending(actionKey)) return;
   clearDialogError();
+  const pastedUrl = item.urlMode ? String($("#urlInput").value || "").trim() : "";
+  if (item.urlMode) {
+    if (!/^https?:\/\/\S+$/i.test(pastedUrl)) {
+      showDialogError("请输入 http 或 https 的媒体地址");
+      $("#urlInput").focus({ preventScroll: true });
+      return;
+    }
+    if (!options.filename) delete options.filename;
+  }
   try {
     await withPendingAction(confirm, actionKey, async () => {
       const advanced = downloadNeedsNative(item, options);
@@ -516,7 +644,10 @@ async function submitDownload(event) {
         const host = await refreshNativeHost();
         requireNativeHostReady(host);
       }
-      const result = await call({ type: "DOWNLOAD", tabId: state.tabId, candidate: candidateReference(item), options });
+      const result = item.urlMode
+        ? await call({ type: "DOWNLOAD_URL", tabId: state.tabId, url: pastedUrl, options })
+        : await call({ type: "DOWNLOAD", tabId: state.tabId, candidate: candidateReference(item), options });
+      if (item.urlMode) void loadMediaState().catch(() => {});
       dialog.close();
       if (result.method === "native") {
         state.jobs.set(result.jobId, { jobId: result.jobId, filename: options.filename, status: "queued", progress: 0, speed: 0 });
@@ -570,36 +701,33 @@ async function refreshJobs() {
 }
 
 function renderJobs() {
-  const focusedJobId = document.activeElement?.dataset?.jobId || "";
+  const active = document.activeElement;
+  const focusedJobId = active?.dataset?.jobId || "";
+  const focusedAction = active?.dataset?.action || "";
   jobsList.replaceChildren();
-  const jobs = [...state.jobs.values()].reverse();
+  // Live transfers first (newest start on top), then ended rows by end time:
+  // the file you just saved is always the first thing under the progress bars.
+  const jobs = [...state.jobs.values()].sort(compareJobs);
   jobsEmpty.hidden = jobs.length > 0;
   jobsList.hidden = jobs.length === 0;
   $("#jobCount").textContent = jobs.length;
+  renderNotifyHint();
   for (const job of jobs) {
     const card = el("li", "job-card");
-    const terminal = ["completed", "failed", "cancelled"].includes(job.status);
-    if (terminal) card.classList.add("terminal");
-    const line = el("div", "job-line");
-    const name = document.createElement("strong"); name.textContent = job.filename || "media"; name.title = name.textContent;
-    const progressPercent = job.status === "completed" ? 100 : Math.max(0, Math.min(100, Math.round(Number(job.progress || 0) * 100)));
-    const percent = document.createElement("span"); percent.className = `job-state ${job.status === "completed" ? "done" : job.status === "failed" ? "bad" : job.status === "cancelled" ? "wait" : "running"}`; percent.textContent = terminal ? statusLabel(job.status) : `${progressPercent}%`;
-    line.append(name, percent);
-    card.append(line);
-    if (terminal) {
-      const terminalDetail = String(job.message || job.error || "").trim();
-      if (job.status === "failed" && terminalDetail) {
-        const meta = el("div", "job-meta");
-        const status = document.createElement("span");
-        status.className = "job-state bad";
-        status.textContent = friendlyJobMessage(job);
-        status.title = status.textContent;
-        meta.append(status);
-        card.append(meta);
-      }
+    if (isTerminalStatus(job.status)) {
+      card.classList.add("terminal", job.status);
+      card.append(createFinishedRow(job));
       jobsList.append(card);
       continue;
     }
+    const line = el("div", "job-line");
+    const name = document.createElement("strong"); name.className = "job-title"; name.textContent = job.filename || "media"; name.title = name.textContent;
+    const progressPercent = Math.max(0, Math.min(100, Math.round(Number(job.progress || 0) * 100)));
+    const resting = job.status === "paused" || job.status === "pausing";
+    if (resting) card.classList.add("paused");
+    const percent = document.createElement("span"); percent.className = `job-state ${resting ? "wait" : "running"}`; percent.textContent = resting ? `${statusLabel(job.status)} · ${progressPercent}%` : job.status === "remuxing" && !(Number(job.progress) > 0) ? statusLabel(job.status) : `${progressPercent}%`;
+    line.append(name, percent);
+    card.append(line);
     const progress = el("div", "progress");
     progress.setAttribute("role", "progressbar");
     progress.setAttribute("aria-label", `${job.filename || "媒体"}下载进度`);
@@ -608,23 +736,87 @@ function renderJobs() {
     progress.setAttribute("aria-valuenow", String(progressPercent));
     progress.setAttribute("aria-valuetext", `${progressPercent}%`);
     const bar = document.createElement("i"); bar.style.width = `${progressPercent}%`; progress.append(bar);
-    const meta = el("div", "job-meta"); const status = document.createElement("span"); status.textContent = friendlyJobMessage(job); status.title = status.textContent; const speed = document.createElement("span"); speed.className = "speed"; speed.textContent = job.speed ? `${humanBytes(job.speed)}/s` : ""; meta.append(status, speed);
-    const cancel = document.createElement("button");
-    cancel.className = "cancel-job";
-    cancel.dataset.jobId = job.jobId;
-    cancel.type = "button";
-    cancel.textContent = "取消";
-    cancel.setAttribute("aria-label", `取消 ${job.filename || "媒体"}`);
-    cancel.addEventListener("click", () => void runUiAction(cancel, `popup:cancel-job:${job.jobId}`, () => call({ type: "CANCEL_JOB", jobId: job.jobId }), {
-      pendingText: "", successText: "✓", successDurationMs: 0
-    }));
-    meta.append(cancel);
+    const meta = el("div", "job-meta");
+    const status = document.createElement("span"); status.textContent = friendlyJobMessage(job); status.title = status.textContent;
+    const speed = document.createElement("span"); speed.className = "speed"; speed.textContent = job.speed ? `${humanBytes(job.speed)}/s` : "";
+    const remaining = estimateRemaining(job);
+    if (remaining) { const eta = document.createElement("span"); eta.className = "job-eta"; eta.textContent = remaining; speed.append(eta); }
+    meta.append(status, speed);
+    meta.append(createTransferControls(job, handleTransferControl));
     card.append(progress, meta); jobsList.append(card);
   }
   if (focusedJobId) {
-    const target = [...jobsList.querySelectorAll("button[data-job-id]")].find((button) => button.dataset.jobId === focusedJobId);
+    const buttons = [...jobsList.querySelectorAll("button[data-job-id]")].filter((button) => button.dataset.jobId === focusedJobId);
+    const target = buttons.find((button) => button.dataset.action === focusedAction) || buttons[0];
     if (!restoreFocus(target)) restoreFocus($("#jobsTab"));
   }
+}
+
+function createFinishedRow(job) {
+  const row = el("div", "job-finished");
+  const main = el("div", "job-main");
+  const head = el("div", "job-head-line");
+  const name = document.createElement("strong"); name.className = "job-title"; name.textContent = job.filename || "media"; name.title = name.textContent;
+  const chip = document.createElement("span");
+  chip.className = `job-chip ${job.status === "completed" ? "done" : job.status === "failed" ? "bad" : "wait"}`;
+  chip.textContent = statusLabel(job.status);
+  head.append(name, chip);
+  const meta = el("div", "job-meta-line");
+  const parts = finishedMetaParts(job, { message: job.status === "failed" ? friendlyJobMessage(job) : "" });
+  meta.textContent = parts.join(" · ");
+  meta.title = meta.textContent;
+  main.append(head, meta, createJobActions(job, handleJobAction));
+  row.append(createJobTile(job, { size: 44 }), main);
+  return row;
+}
+
+async function handleTransferControl(action, job, button) {
+  const key = `popup:transfer:${action}:${job.jobId}`;
+  if (action === "pause") {
+    await runUiAction(button, key, () => call({ type: "PAUSE_JOB", jobId: job.jobId }), { pendingText: "", successText: "✓", successDurationMs: 0 });
+    return;
+  }
+  if (action === "resume") {
+    await runUiAction(button, key, async () => {
+      await call({ type: "RESUME_JOB", jobId: job.jobId });
+      showToast("已继续下载", "success");
+    }, { pendingText: "", successText: "✓", successDurationMs: 0 });
+    return;
+  }
+  await runUiAction(button, key, () => call({ type: "CANCEL_JOB", jobId: job.jobId }), { pendingText: "", successText: "✓", successDurationMs: 0 });
+}
+
+async function handleJobAction(action, job, button) {
+  const key = `popup:job:${action}:${job.jobId}`;
+  if (action === "remove") {
+    await runUiAction(button, key, async () => {
+      const result = await call({ type: "REMOVE_HISTORY", jobId: job.jobId });
+      replaceJobs(result.jobs || []);
+    }, { pendingText: "", successDurationMs: 0 });
+    return;
+  }
+  if (action === "retry") {
+    await runUiAction(button, key, async () => {
+      const result = await call({ type: "RETRY_JOB", jobId: job.jobId });
+      showToast(result.method === "native" ? "本地下载任务已开始" : "浏览器下载已开始", "success");
+    }, { pendingText: "", successText: "✓", successDurationMs: 0 });
+    return;
+  }
+  if (action === "source") {
+    await runUiAction(button, key, async () => {
+      await call({ type: "OPEN_JOB_SOURCE", jobId: job.jobId });
+      window.close();
+    }, { pendingText: "", successDurationMs: 0 });
+    return;
+  }
+  await runUiAction(button, key, () => runFileAction(job, action, call), { pendingText: "", successText: "✓", successDurationMs: 600 });
+}
+
+function renderNotifyHint() {
+  const hint = $("#notifyHint");
+  if (!hint) return;
+  const wanted = state.settings?.showNotifications !== false;
+  hint.hidden = state.notifyHintDismissed || !wanted || state.notificationPermission !== false;
 }
 
 function announceJobChange(previous, current) {
@@ -668,6 +860,7 @@ function normalizeNativeHostStatus(status = {}) {
 function nativeHostIssueMessage(status = {}) {
   if (status.needsPermission) return "请先允许使用本地下载引擎，再继续操作";
   if (status.failureReason === "api_unavailable") {
+    if (status.selfHealing) return "本地下载引擎正在自动完成连接，FluxCatch 会在几秒内重新加载，之后即可下载";
     return status.recoveryBlocked || status.restartRequired
       ? "Chrome 尚未恢复本地下载引擎连接接口；请完全退出并重新启动 Chrome 后重试"
       : "授权已生效，但 Chrome 的本地下载引擎连接接口尚未就绪；请打开设置页完成自动恢复后重试";
@@ -763,6 +956,7 @@ async function call(message) {
 function mediaChips(item) {
   const stream = isStreamKind(item);
   const values = [{ text: streamTypeLabel(item), cls: stream ? "hls" : "fmt" }];
+  if (item.recommended) values.push({ text: "推荐", cls: "live" });
   if (item.site && SITE_LABELS[item.site]) values.push({ text: SITE_LABELS[item.site], cls: "fmt" });
   if (item.height) values.push({ text: `${item.height}p`, cls: "hd" });
   if (item.trackHints
@@ -939,7 +1133,6 @@ function showToast(message, type = "error") {
   const method = ["success", "warning", "error"].includes(type) ? type : "error";
   return toastController[method](String(message || "操作失败"));
 }
-
 // Module scripts normally finish while readyState is "interactive" and before
 // DOMContentLoaded, but the await above can suspend evaluation past the event on
 // slow starts, leaving the late listener registration missed. Initialize now

@@ -11,10 +11,10 @@ export const BUILD_PROFILE = Object.freeze({
     staticDash: true,
     bilibiliDashPair: true,
     liveHls: false,
-    encryptedHls: false,
+    encryptedHls: true,
     separateAudioHls: true,
     externalToolNetwork: false,
-    remoteThumbnails: false
+    remoteThumbnails: true
   })
 });
 

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { BUILD_PROFILE } from "../extension/lib/build-profile.js";
 import { fetchThumbnailBlob, loadPrivacySafeThumbnail } from "../extension/lib/thumbnail.js";
 
-test("stable profile keeps the fallback tile without fetching a remote thumbnail", async () => {
+test("page-referenced thumbnails render while off-allowlist origins keep the fallback tile", async () => {
   let fetchCalls = 0;
   const fallback = { marker: "kind-tile" };
 
@@ -20,9 +20,9 @@ test("stable profile keeps the fallback tile without fetching a remote thumbnail
   );
 
   await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.equal(BUILD_PROFILE.features.remoteThumbnails, false);
-  assert.equal(rendered, fallback);
-  assert.equal(fetchCalls, 0);
+  assert.equal(BUILD_PROFILE.features.remoteThumbnails, true);
+  assert.equal(fetchCalls, 1, "the page-referenced origin passes the allowlist and the fetch runs");
+  assert.equal(rendered, fallback, "outside a DOM the async swap keeps the tile; rendering is a UI concern");
 });
 
 test("thumbnail fetch uses an allowlisted origin, omits credentials and rejects redirects", async () => {

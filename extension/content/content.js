@@ -227,7 +227,35 @@
     send(candidate);
   });
 
+  function sendPlaybackHint(element) {
+    // An MSE player's <video> element is the ground truth for the stream the
+    // user is watching: its videoHeight is the active rendition and its
+    // duration the real runtime. Single-rendition HLS ladders carry neither
+    // in their playlist, so cards would stay unlabeled without this hint.
+    // Direct-src videos (hover previews etc.) never qualify.
+    if (!(element instanceof HTMLVideoElement)) return;
+    const src = String(element.currentSrc || element.src || "");
+    if (!src.startsWith("blob:")) return;
+    const height = Number(element.videoHeight) || 0;
+    const width = Number(element.videoWidth) || 0;
+    const duration = Number.isFinite(element.duration) ? element.duration : 0;
+    if (!height && !duration) return;
+    try {
+      chrome.runtime.sendMessage({
+        type: "CONTENT_PLAYBACK_HINT",
+        data: {
+          height,
+          width,
+          duration: duration > 0 && duration < 86_400 ? Math.round(duration) : 0,
+          pageTitle: document.title,
+          tabUrl: location.href
+        }
+      });
+    } catch { /* extension reload race */ }
+  }
+
   function inspectMedia(element, source = "dom") {
+    sendPlaybackHint(element);
     const candidates = new Set();
     const poster = element instanceof HTMLVideoElement
       ? sendPreview(element.poster || element.getAttribute?.("poster"), "poster")

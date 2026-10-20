@@ -9,6 +9,7 @@ shell commands supplied by a page.
 
 from __future__ import annotations
 
+import base64
 import concurrent.futures
 import contextlib
 import contextvars
@@ -58,6 +59,20 @@ VERSION = "0.2.5"
 NATIVE_PROTOCOL_VERSION = 1
 CAPABILITY_PROFILE_VERSION = 1
 MAX_MESSAGE = 1024 * 1024
+# Completion/file-action surface shared with the extension's download history.
+COMPLETE_MESSAGE = "已保存到 FluxCatch 文件夹"
+HISTORY_THUMBNAIL_MAX_BYTES = 48_000
+FILE_ACTION_TIMEOUT_SECONDS = 20.0
+MEDIA_PROBE_TIMEOUT_SECONDS = 15.0
+STALE_PARTIAL_TTL_SECONDS = 7 * 24 * 3600
+OPEN_COMMAND = "/usr/bin/open"
+OSASCRIPT_COMMAND = "/usr/bin/osascript"
+CONFIG_PATH = Path(os.environ.get("FLUXCATCH_CONFIG") or (Path.home() / "Library" / "Application Support" / "FluxCatch" / "config.json"))
+MAX_KNOWN_DOWNLOAD_DIRS = 8
+CHOOSE_FOLDER_TIMEOUT_SECONDS = 300
+CHOOSE_FOLDER_PROMPT = "选择 FluxCatch 的保存位置"
+FILE_ACTIONS = frozenset({"reveal", "open", "open_folder", "trash", "stat"})
+MAX_FILE_STAT_PATHS = 300
 MAX_MANIFEST = 4 * 1024 * 1024
 # Bounded manifest fetch: a stalled playlist connection gets one retry and
 # then fails the job with a diagnosable timeout instead of hanging forever.
@@ -86,6 +101,9 @@ MAX_DASH_REPRESENTATIONS = 256
 MAX_DASH_SEGMENTS = 10_000
 MAX_DASH_RESOURCES = 20_000
 MAX_NATIVE_ADMITTED_JOBS = 16
+DEFAULT_CONCURRENT_JOBS = 3
+MAX_CONCURRENT_JOBS = 6
+QUEUED_MESSAGE = "排队中，等待其他下载完成"
 FFMPEG_MAX_THREADS = 4
 FFMPEG_MAX_OUTPUT_BYTES = 512 * 1024 * 1024 * 1024
 FFMPEG_MAX_WALL_SECONDS = 6 * 60 * 60
@@ -99,12 +117,73 @@ TEMP_WORK_PREFIXES = (
 DASH_PAIR_EXPIRY_SAFETY_SECONDS = 30.0
 
 
+class JobControl(threading.Event):
+    """Stop signal for one job. ``reason`` tells the transfer code whether the
+    user cancelled (discard partial state) or paused (keep the checkpoint and
+    the staged segments so a later job with the same output name resumes)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.reason = "cancel"
+
+
+def is_pause(cancel: threading.Event | None) -> bool:
+    return getattr(cancel, "reason", "cancel") == "pause"
+
+
+SEGMENT_CHECKPOINT_VERSION = 3
+PAUSE_CAPABILITY = "resume-v1"
+PAUSED_MESSAGE = "已暂停，可随时继续"
+
+
 class Cancelled(Exception):
     pass
 
 
 class DownloadError(Exception):
     pass
+
+
+class HtmlMediaResponseError(DownloadError):
+    """A media transfer was answered with an HTML page.
+
+    Signed CDN URLs that expire, fail an IP binding, or trip hotlink
+    protection are commonly redirected to the site's own page. Without this
+    guard that page is written out as the media file and the job looks
+    successful while the output cannot be opened.
+    """
+
+
+HTML_MEDIA_MESSAGE = "服务器返回了网页而非媒体文件（地址可能已过期或未通过校验），请刷新页面重新检测后再试"
+
+HTML_MEDIA_TYPES = frozenset({"text/html", "application/xhtml+xml"})
+
+
+def ensure_media_response_type(mime: str) -> None:
+    if (mime or "").split(";", 1)[0].strip().lower() in HTML_MEDIA_TYPES:
+        raise HtmlMediaResponseError(HTML_MEDIA_MESSAGE)
+
+
+def looks_like_html_body(block: bytes) -> bool:
+    head = bytes(block[:64]).lstrip()
+    return head[:9].lower() == b"<!doctype" or head[:5].lower() == b"<html"
+
+
+def staged_media_extension(url: str) -> str:
+    """Suffix for a staged HLS segment copy; ffmpeg's hls demuxer gates staged
+    local playlists by segment file extension, so copies keep their real one."""
+    try:
+        suffix = pathlib.PurePosixPath(urllib.parse.urlsplit(url).path).suffix.lower()
+    except Exception:
+        return ".ts"
+    return suffix if 1 <= len(suffix) <= 6 else ".ts"
+
+
+def staged_segment_name(index: int, url: str) -> str:
+    return f"{index:08d}{staged_media_extension(url)}"
+
+
+STAGED_INIT_NAME = "-0000001.ts"
 
 
 class NetworkPolicyDownloadError(DownloadError):
@@ -361,24 +440,82 @@ def ensure_dash_pair_fresh(expires_at: float, phase: str) -> None:
         raise DownloadError(f"DASH {phase}前签名链接即将过期，请刷新页面后重试")
 
 
-def cleanup_stale_workdirs(directory: Path) -> None:
-    """Remove private crash remnants for every native temporary-work class."""
+_STAGING_FILE_NAME = re.compile(r"^\..+\.[0-9a-f]{32}\.part(?:\.[A-Za-z0-9]{1,8})?$")
+
+
+def is_stale_partial_name(name: str) -> bool:
+    """Names the host itself creates for unfinished output in the download folder."""
+    return name.endswith((".part", ".part.json")) or bool(_STAGING_FILE_NAME.match(name))
+
+
+def cleanup_stale_workdirs(directory: Path, *, now: float | None = None) -> None:
+    """Remove private crash remnants for every native temporary-work class.
+
+    Work directories are always safe to drop at startup because no job is
+    running yet. Partial files are kept for a week so a resumable direct
+    download can still pick up its checkpoint, then collected so the user's
+    folder does not silently accumulate ``.part`` leftovers after a crash.
+    """
     try:
         entries = list(directory.iterdir())
     except OSError:
         return
+    clock = time.time() if now is None else now
+    keep_dirs = _paused_work_dirs(entries, clock)
     for entry in entries:
-        if not entry.name.startswith(TEMP_WORK_PREFIXES):
+        try:
+            metadata = entry.lstat()
+        except OSError:
+            continue
+        if stat.S_ISLNK(metadata.st_mode):
+            continue
+        if hasattr(metadata, "st_uid") and hasattr(os, "getuid") and metadata.st_uid != os.getuid():
+            continue
+        if entry.name.startswith(TEMP_WORK_PREFIXES):
+            # Staged segments of a paused job stay until their pause marker
+            # expires with the same one-week budget as direct checkpoints.
+            if stat.S_ISDIR(metadata.st_mode) and entry.name not in keep_dirs:
+                shutil.rmtree(entry, ignore_errors=True)
+            continue
+        if (
+            stat.S_ISREG(metadata.st_mode)
+            and entry.name.endswith(".part.json")
+            and clock - metadata.st_mtime >= STALE_PARTIAL_TTL_SECONDS
+            and load_segment_checkpoint(entry) is not None
+        ):
+            placeholder = entry.with_name(entry.name[: -len(".json")])
+            with contextlib.suppress(OSError):
+                entry.unlink()
+            with contextlib.suppress(OSError):
+                if placeholder.is_file() and not placeholder.is_symlink() and placeholder.stat().st_size == 0:
+                    placeholder.unlink()
+            continue
+        if not stat.S_ISREG(metadata.st_mode) or not is_stale_partial_name(entry.name):
+            continue
+        if clock - metadata.st_mtime < STALE_PARTIAL_TTL_SECONDS:
+            continue
+        with contextlib.suppress(OSError):
+            entry.unlink()
+
+
+def _paused_work_dirs(entries: list[Path], clock: float) -> set[str]:
+    """Staged-segment directories that a fresh pause marker still references."""
+    keep: set[str] = set()
+    for entry in entries:
+        if not entry.name.endswith(".part.json"):
             continue
         try:
             metadata = entry.lstat()
         except OSError:
             continue
-        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
             continue
-        if hasattr(metadata, "st_uid") and hasattr(os, "getuid") and metadata.st_uid != os.getuid():
+        if clock - metadata.st_mtime >= STALE_PARTIAL_TTL_SECONDS:
             continue
-        shutil.rmtree(entry, ignore_errors=True)
+        marker = load_segment_checkpoint(entry)
+        if marker:
+            keep.add(marker["workDir"])
+    return keep
 
 
 def cleanup_dash_pair_workdirs(directory: Path) -> None:
@@ -630,15 +767,39 @@ HTTP_OPENER = urllib.request.build_opener(
     urllib.request.ProxyHandler({}),
     *_PROXY_HANDLER_CHAIN,
 )
-_SYSTEM_PROXY_OPENER: urllib.request.OpenerDirector | None
-_system_proxies_found = _system_proxies()
-if _system_proxies_found:
-    _SYSTEM_PROXY_OPENER = urllib.request.build_opener(
-        urllib.request.ProxyHandler(_system_proxies_found),
-        *_PROXY_HANDLER_CHAIN,
-    )
-else:
-    _SYSTEM_PROXY_OPENER = None
+# The OS proxy configuration is re-read per request (with a short cache) so
+# toggling a system proxy, switching Clash profiles, or turning it off entirely
+# takes effect within seconds — never requiring a Chrome restart. Without this
+# the opener captured at startup kept dialing a dead local proxy port.
+_SYSTEM_PROXY_REFRESH_SECONDS = 5.0
+_system_proxy_lock = threading.Lock()
+_system_proxy_cache: dict[str, Any] = {"at": None, "opener": None}
+
+
+def _system_proxy_opener() -> urllib.request.OpenerDirector | None:
+    now = time.monotonic()
+    cached_at = _system_proxy_cache["at"]
+    if cached_at is not None and now - cached_at < _SYSTEM_PROXY_REFRESH_SECONDS:
+        return _system_proxy_cache["opener"]
+    with _system_proxy_lock:
+        cached_at = _system_proxy_cache["at"]
+        if cached_at is not None and time.monotonic() - cached_at < _SYSTEM_PROXY_REFRESH_SECONDS:
+            return _system_proxy_cache["opener"]
+        proxies = _system_proxies()
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler(proxies),
+            *_PROXY_HANDLER_CHAIN,
+        ) if proxies else None
+        _system_proxy_cache["at"] = time.monotonic()
+        _system_proxy_cache["opener"] = opener
+        return opener
+
+
+def reset_system_proxy_cache() -> None:
+    """Test hook: forget the cached opener so the next request re-reads the OS."""
+    with _system_proxy_lock:
+        _system_proxy_cache["at"] = None
+        _system_proxy_cache["opener"] = None
 
 
 def _response_peer_address(response: Any) -> str | None:
@@ -693,10 +854,11 @@ def request(url: str, headers: dict[str, str], *, method: str = "GET", timeout: 
         target_token = _ACTIVE_AUTHORIZED_TARGET.set(initial_target)
         headers_token = _ACTIVE_REQUEST_HEADERS.set(dict(reusable_headers))
         req = urllib.request.Request(safe_url, headers=merged, method=method)
-        use_system_proxy = _SYSTEM_PROXY_OPENER is not None and not _target_bypasses_proxy(
+        system_proxy_opener = _system_proxy_opener()
+        use_system_proxy = system_proxy_opener is not None and not _target_bypasses_proxy(
             urllib.parse.urlsplit(safe_url).hostname
         )
-        opener = _SYSTEM_PROXY_OPENER if use_system_proxy else HTTP_OPENER
+        opener = system_proxy_opener if use_system_proxy else HTTP_OPENER
         proxy_token = _ACTIVE_VIA_SYSTEM_PROXY.set(use_system_proxy)
         response = opener.open(req, timeout=timeout)
         final_url = valid_url(response.geturl())
@@ -893,19 +1055,156 @@ def atomic_write_json(path: Path, value: dict[str, Any]) -> None:
 
 
 def commit_file(source: Path, target: Path) -> Path:
-    """Publish a completed file without overwriting a late-arriving target."""
+    """Publish a completed file without overwriting a late-arriving target.
+
+    If the reserved name became occupied while the transfer ran (a second job,
+    the user dropping a file in, Finder), the output is published under the
+    next free name instead of discarding the finished bytes. Callers always
+    use the returned path.
+    """
     if target.exists() or target.is_symlink():
-        raise DownloadError("Output filename became occupied")
+        target = unique_path(target.parent, target.name)
     try:
         os.link(source, target, follow_symlinks=False)
-    except FileExistsError as error:
-        raise DownloadError("Output filename became occupied") from error
+    except FileExistsError:
+        target = unique_path(target.parent, target.name)
+        try:
+            os.link(source, target, follow_symlinks=False)
+        except OSError as error:
+            raise DownloadError("Output filename became occupied") from error
     except (NotImplementedError, OSError) as error:
         # Source and target are created in the same directory, so a hard-link
         # failure is unexpected and falling back to replacing could lose data.
         raise DownloadError(f"Could not publish output safely: {error}") from error
     source.unlink()
     return target
+
+
+def default_download_dir() -> Path:
+    return Path.home() / "Downloads" / "FluxCatch"
+
+
+def load_host_config(path: Path = CONFIG_PATH) -> dict[str, Any]:
+    """The host's own small config: the chosen save folder and the folders
+    that were chosen before (so files saved there stay openable)."""
+    try:
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > 64 * 1024:
+            return {}
+        raw = json.loads(path.read_text("utf-8"))
+    except (OSError, ValueError, UnicodeError):
+        return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def save_host_config(config: dict[str, Any], path: Path = CONFIG_PATH) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(path, config)
+
+
+def validate_download_dir(value: Any) -> Path:
+    """A save folder must be an absolute, existing or creatable, writable
+    directory that is not a symlink and not one of the engine's work dirs."""
+    raw = value if isinstance(value, str) else ""
+    if not raw or len(raw) > 2048 or "\x00" in raw:
+        raise DownloadError("Folder path is invalid")
+    candidate = Path(raw).expanduser()
+    if not candidate.is_absolute():
+        raise DownloadError("Folder path must be absolute")
+    if candidate.is_symlink():
+        raise DownloadError("Symlinked folders are not accepted")
+    if candidate.name.startswith(TEMP_WORK_PREFIXES):
+        raise DownloadError("Folder path is reserved")
+    if candidate.exists() and not candidate.is_dir():
+        raise DownloadError("Folder path is not a directory")
+    candidate.mkdir(parents=True, exist_ok=True)
+    if not os.access(candidate, os.W_OK | os.X_OK):
+        raise DownloadError("Folder is not writable")
+    return candidate.resolve()
+
+
+def resolve_download_dir(config: dict[str, Any] | None = None) -> Path:
+    """Precedence: FLUXCATCH_DOWNLOAD_DIR (tests, harnesses) > the folder the
+    user chose > ~/Downloads/FluxCatch."""
+    configured = os.environ.get("FLUXCATCH_DOWNLOAD_DIR")
+    if configured:
+        directory = Path(configured).expanduser()
+        directory.mkdir(parents=True, exist_ok=True)
+        return directory
+    chosen = (config or {}).get("downloadDir")
+    if isinstance(chosen, str) and chosen:
+        try:
+            return validate_download_dir(chosen)
+        except DownloadError:
+            pass
+    directory = default_download_dir()
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
+def known_download_dirs(config: dict[str, Any] | None) -> list[Path]:
+    dirs: list[Path] = []
+    for value in (config or {}).get("knownDownloadDirs") or []:
+        if not isinstance(value, str) or not value.startswith("/"):
+            continue
+        path = Path(value)
+        if path.is_dir() and not path.is_symlink() and path not in dirs:
+            dirs.append(path)
+    return dirs[:MAX_KNOWN_DOWNLOAD_DIRS]
+
+
+def choose_folder_dialog(current: Path) -> Path | None:
+    """macOS folder picker through AppleScript; None when the user cancels."""
+    script = (
+        'POSIX path of (choose folder with prompt "%s" default location (POSIX file "%s"))'
+        % (CHOOSE_FOLDER_PROMPT, str(current).replace("\\", "\\\\").replace('"', '\\"'))
+    )
+    try:
+        completed = subprocess.run(
+            [OSASCRIPT_COMMAND, "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=CHOOSE_FOLDER_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise DownloadError("Folder dialog failed") from error
+    if completed.returncode != 0:
+        if "-128" in (completed.stderr or ""):
+            return None
+        raise DownloadError("Folder dialog failed")
+    chosen = (completed.stdout or "").strip()
+    return Path(chosen) if chosen else None
+
+
+def move_to_trash(path: Path) -> Path:
+    """Move a published file into the user's Trash; bytes are never deleted."""
+    trash = Path.home() / ".Trash"
+    try:
+        trash.mkdir(mode=0o700, exist_ok=True)
+    except OSError as error:
+        raise DownloadError("Trash folder is unavailable") from error
+    destination = trash / path.name
+    counter = 1
+    while destination.exists() or destination.is_symlink():
+        destination = trash / f"{path.stem} {time.strftime('%H.%M.%S')}-{counter}{path.suffix}"
+        counter += 1
+        if counter > 10_000:
+            raise DownloadError("Could not allocate a Trash filename")
+    try:
+        os.rename(path, destination)
+    except OSError:
+        shutil.move(str(path), str(destination))
+    return destination
+
+
+def run_opener(args: list[str]) -> None:
+    """Hand a managed path to macOS; the argument list is never page-derived."""
+    try:
+        completed = subprocess.run(args, capture_output=True, timeout=FILE_ACTION_TIMEOUT_SECONDS, check=False)
+    except (OSError, subprocess.SubprocessError) as error:
+        raise DownloadError("Could not hand the file to macOS") from error
+    if completed.returncode != 0:
+        raise DownloadError("macOS could not open the file")
 
 
 def _retry_wait(cancel: threading.Event, delay: float, abort: threading.Event | None = None) -> None:
@@ -1233,6 +1532,102 @@ def load_checkpoint_v2(path: Path) -> dict[str, Any] | None:
             os.close(fd)
 
 
+def segment_checkpoint_paths(target: Path) -> tuple[Path, Path]:
+    return target.with_suffix(target.suffix + ".part"), target.with_suffix(target.suffix + ".part.json")
+
+
+def load_segment_checkpoint(path: Path) -> dict[str, Any] | None:
+    """Pause marker of a staged-segment (HLS/DASH) job: schema 3 only."""
+    try:
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > 4096:
+            return None
+        raw = json.loads(path.read_text("utf-8"))
+    except (OSError, ValueError, UnicodeError):
+        return None
+    if not isinstance(raw, dict) or raw.get("schemaVersion") != SEGMENT_CHECKPOINT_VERSION:
+        return None
+    work_dir = raw.get("workDir")
+    url_hash = raw.get("urlSha256")
+    kind = raw.get("kind")
+    if not isinstance(work_dir, str) or "/" in work_dir or not work_dir.startswith(TEMP_WORK_PREFIXES):
+        return None
+    if not isinstance(url_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", url_hash):
+        return None
+    if kind not in {"hls", "dash"}:
+        return None
+    return {"workDir": work_dir, "urlSha256": url_hash, "kind": kind}
+
+
+def write_segment_checkpoint(target: Path, url: str, work_dir: Path, kind: str) -> None:
+    """Pause marker for staged-segment downloads. It names the private work
+    directory and carries a digest of the playlist URL, never the URL, the
+    headers or the playlist itself. The empty ``.part`` placeholder lets
+    :func:`unique_path` hand the same output name to the resuming job."""
+    part, checkpoint = segment_checkpoint_paths(target)
+    atomic_write_json(checkpoint, {
+        "schemaVersion": SEGMENT_CHECKPOINT_VERSION,
+        "kind": kind,
+        "workDir": work_dir.name,
+        "urlSha256": checkpoint_url_sha256(url),
+        "pausedAt": int(time.time()),
+    })
+    if not part.exists() and not part.is_symlink():
+        os.close(_open_private(part, truncate=True))
+
+
+def resume_segment_work_dir(target: Path, url: str, prefix: str, kind: str) -> Path:
+    """Reuse the staged-segment directory of a paused job with the same output
+    name and URL; otherwise start a fresh private directory. The pause marker
+    is consumed either way (the next pause writes a new one)."""
+    part, checkpoint = segment_checkpoint_paths(target)
+    marker = load_segment_checkpoint(checkpoint)
+    reusable: Path | None = None
+    if marker and marker["kind"] == kind and hmac.compare_digest(marker["urlSha256"], checkpoint_url_sha256(url)):
+        candidate = target.parent / marker["workDir"]
+        if candidate.is_dir() and not candidate.is_symlink():
+            reusable = candidate
+    with contextlib.suppress(OSError):
+        checkpoint.unlink(missing_ok=True)
+    with contextlib.suppress(OSError):
+        if part.is_file() and not part.is_symlink() and part.stat().st_size == 0:
+            part.unlink(missing_ok=True)
+    if reusable is not None:
+        return reusable
+    return Path(tempfile.mkdtemp(prefix=prefix, dir=str(target.parent)))
+
+
+def staged_file_complete(dest: Path, expected: int = 0) -> bool:
+    """A staged object is reusable only when it was renamed into place whole."""
+    try:
+        if dest.is_symlink() or not dest.is_file():
+            return False
+        size = dest.stat().st_size
+    except OSError:
+        return False
+    return size > 0 and (not expected or size == expected)
+
+
+def discard_partial_download(directory: Path, filename: str) -> dict[str, Any]:
+    """Remove what a paused job left behind for one output name: the part
+    file, its checkpoint and the staged-segment directory the marker names."""
+    target = directory / safe_filename(filename)
+    part, checkpoint = segment_checkpoint_paths(target)
+    removed: list[str] = []
+    marker = load_segment_checkpoint(checkpoint)
+    if marker:
+        work_dir = directory / marker["workDir"]
+        if work_dir.is_dir() and not work_dir.is_symlink():
+            shutil.rmtree(work_dir, ignore_errors=True)
+            removed.append("workDir")
+    for path, label in ((checkpoint, "checkpoint"), (part, "part")):
+        if path.is_symlink() or not path.exists():
+            continue
+        with contextlib.suppress(OSError):
+            path.unlink()
+            removed.append(label)
+    return {"removed": removed}
+
+
 def multipart_download(
     url: str,
     target: Path,
@@ -1247,6 +1642,10 @@ def multipart_download(
     part = target.with_suffix(target.suffix + ".part")
 
     def discard_cancelled_state() -> None:
+        # A pause keeps a validated part + checkpoint pair for the next job
+        # with this output name; without a checkpoint nothing is resumable.
+        if is_pause(cancel) and checkpoint.is_file() and not checkpoint.is_symlink() and part.is_file():
+            return
         for path in (part, checkpoint):
             with contextlib.suppress(OSError):
                 path.unlink(missing_ok=True)
@@ -1259,9 +1658,15 @@ def multipart_download(
         checkpoint.unlink(missing_ok=True)
         saved_checkpoint = None
     info = probe_direct(url, headers)
+    # A hotlinked, expired, or IP-bound URL is often redirected to the site's
+    # own page; refuse it here instead of saving the page as media.
+    ensure_media_response_type(info.mime)
     if not info.range_supported or info.length <= 1:
         try:
-            result = single_download(url, target, headers, cancel, progress)
+            result = single_download(
+                url, target, headers, cancel, progress,
+                expected_length=info.length if info.length > 1 else 0,
+            )
         except Cancelled:
             discard_cancelled_state()
             raise
@@ -1416,14 +1821,22 @@ def multipart_download(
         raise Cancelled()
     if part.stat().st_size != info.length:
         raise DownloadError("Final file length mismatch")
-    commit_file(part, target)
+    target = commit_file(part, target)
     checkpoint.unlink(missing_ok=True)
     progress.done = info.length
     progress.add(0, force=True)
     return target
 
 
-def single_download(url: str, target: Path, headers: dict[str, str], cancel: threading.Event, progress: Progress) -> Path:
+def single_download(
+    url: str,
+    target: Path,
+    headers: dict[str, str],
+    cancel: threading.Event,
+    progress: Progress,
+    *,
+    expected_length: int = 0,
+) -> Path:
     target.parent.mkdir(parents=True, exist_ok=True)
     part = target.with_suffix(target.suffix + ".part")
     last_error: Exception | None = None
@@ -1435,16 +1848,28 @@ def single_download(url: str, target: Path, headers: dict[str, str], cancel: thr
         attempt_bytes = 0
         try:
             response = request(url, headers, timeout=60)
-            progress.total = _content_length(response.headers)
+            if response.status != 200:
+                raise DownloadError(f"unexpected media response status {response.status}")
+            ensure_media_response_type(response.headers.get("Content-Type") or "")
+            # A close-delimited body (no Content-Length) can end early without
+            # any error; the probe's length is the only truth we have then.
+            progress.total = _content_length(response.headers) or max(0, int(expected_length or 0))
             fd = _open_private(part, truncate=True)
             try:
                 with os.fdopen(fd, "wb", closefd=True) as stream:
+                    first = True
                     while True:
                         if cancel.is_set():
                             raise Cancelled()
                         block = response.read(1024 * 1024)
                         if not block:
                             break
+                        # Some servers answer media requests with an
+                        # untyped page; catch it before any byte is kept.
+                        if first:
+                            first = False
+                            if looks_like_html_body(block):
+                                raise HtmlMediaResponseError(HTML_MEDIA_MESSAGE)
                         stream.write(block)
                         attempt_bytes += len(block)
                         progress.add(len(block))
@@ -1457,13 +1882,18 @@ def single_download(url: str, target: Path, headers: dict[str, str], cancel: thr
                 raise
             if cancel.is_set():
                 raise Cancelled()
-            commit_file(part, target)
+            target = commit_file(part, target)
             progress.add(0, force=True)
             return target
         except Cancelled:
             part.unlink(missing_ok=True)
             raise
         except NetworkPolicyDownloadError:
+            part.unlink(missing_ok=True)
+            raise
+        except HtmlMediaResponseError:
+            # Retrying or keeping bytes cannot fix a page answered in place
+            # of the media object; fail fast with nothing left behind.
             part.unlink(missing_ok=True)
             raise
         except Exception as error:  # noqa: BLE001 - restart non-range transfers
@@ -1632,7 +2062,7 @@ def fetch_manifest(
     cancel = cancel or threading.Event()
     last_error: Exception | None = None
     timeout_streak = 0
-    for attempt in range(4):
+    for attempt in range(6):
         if cancel.is_set():
             raise Cancelled()
         try:
@@ -1654,8 +2084,8 @@ def fetch_manifest(
                     ) from error
                 continue
             timeout_streak = 0
-            if attempt < 3:
-                _retry_wait(cancel, min(4.0, 0.35 * (2**attempt)))
+            if attempt < 5:
+                _retry_wait(cancel, min(8.0, 0.5 * (2**attempt)))
     raise DownloadError(f"Manifest download failed after retries: {last_error}")
 
 
@@ -2160,6 +2590,25 @@ def _fetch_dash_resource(
     state_lock: threading.Lock,
 ) -> Path:
     last_error: Exception | None = None
+    staging = destination.with_name(destination.name + ".tmp")
+    expected_known = 0
+    if resource.byte_range:
+        known_start, known_end = _dash_range(resource.byte_range)
+        expected_known = known_end - known_start + 1
+    if staged_file_complete(destination, expected_known):
+        with state_lock:
+            state["bytes"] += destination.stat().st_size
+            state["completed"] += 1
+            elapsed = max(0.001, time.monotonic() - progress.started)
+            progress.report({
+                "status": "downloading",
+                "bytes": state["bytes"],
+                "total": 0,
+                "progress": state["completed"] / max(1, state["resources"]),
+                "speed": int(state["bytes"] / elapsed),
+                "message": f"DASH 分片 {state['completed']}/{state['resources']}",
+            }, force=state["completed"] >= state["resources"])
+        return destination
     for attempt in range(4):
         if cancel.is_set():
             raise Cancelled()
@@ -2179,7 +2628,7 @@ def _fetch_dash_resource(
                 validate_range_response(response, start, end)
             elif response.status != 200:
                 raise DownloadError("Unexpected DASH segment response status")
-            fd = _open_private(destination, truncate=True)
+            fd = _open_private(staging, truncate=True)
             with os.fdopen(fd, "wb", closefd=True) as output:
                 while True:
                     if cancel.is_set():
@@ -2197,6 +2646,7 @@ def _fetch_dash_resource(
                     raise DownloadError("DASH byte-range response ended early")
                 output.flush()
                 os.fsync(output.fileno())
+            os.replace(staging, destination)
             with state_lock:
                 state["completed"] += 1
                 elapsed = max(0.001, time.monotonic() - progress.started)
@@ -2210,14 +2660,15 @@ def _fetch_dash_resource(
                 }, force=state["completed"] >= state["resources"])
             return destination
         except Cancelled:
-            destination.unlink(missing_ok=True)
+            staging.unlink(missing_ok=True)
             raise
         except NetworkPolicyDownloadError:
-            destination.unlink(missing_ok=True)
+            staging.unlink(missing_ok=True)
             abort.set()
             raise
         except Exception as error:  # noqa: BLE001 - retry transport failures
             last_error = error
+            staging.unlink(missing_ok=True)
             destination.unlink(missing_ok=True)
             if attempt_bytes:
                 with state_lock:
@@ -2242,7 +2693,7 @@ def _download_dash_track(
 ) -> Path:
     abort = threading.Event()
     track_dir = work_dir / f"{track.kind}-{safe_filename(track.representation_id or 'default')}"
-    track_dir.mkdir(mode=0o700)
+    track_dir.mkdir(mode=0o700, exist_ok=True)
     worker_count = max(1, min(24, workers))
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=worker_count)
     paths: list[Path] = []
@@ -2316,9 +2767,10 @@ def dash_static_download(
         raise UnsupportedDashError("the selected DASH MPD has no audio Representation")
     if extract_audio:
         tracks = [audio]
-    work_dir = Path(tempfile.mkdtemp(prefix="fluxcatch-dash-", dir=str(target.parent)))
+    work_dir = resume_segment_work_dir(target, manifest_url, "fluxcatch-dash-", "dash")
     state = {"bytes": 0, "completed": 0, "resources": sum(len(track.resources) for track in tracks)}
     state_lock = threading.Lock()
+    keep_work_dir = False
     try:
         local: dict[str, Path] = {}
         for track in tracks:
@@ -2332,8 +2784,14 @@ def dash_static_download(
             source = local.get("video") or local["audio"]
             args = [ffmpeg, "-hide_banner", "-nostdin", "-y", "-i", str(source), "-map", "0:v:0?", "-map", "0:a:0?", *output_codecs(target), "-progress", "pipe:1", "-nostats", str(target)]
         return run_ffmpeg(args, target, cancel, progress)
+    except Cancelled:
+        if is_pause(cancel):
+            keep_work_dir = True
+            write_segment_checkpoint(target, manifest_url, work_dir, "dash")
+        raise
     finally:
-        shutil.rmtree(work_dir, ignore_errors=True)
+        if not keep_work_dir:
+            shutil.rmtree(work_dir, ignore_errors=True)
 
 
 def select_hls_media(
@@ -2417,8 +2875,8 @@ def validate_hls_static_media(
     scope = f"{label} HLS" if label else "HLS"
     if playlist.protection == "drm":
         raise DownloadError(f"DRM/SAMPLE-AES {scope} is metadata-only")
-    if playlist.encrypted or playlist.protection == "aes128":
-        raise DownloadError(f"AES-128 {scope} is not supported in FluxCatch {VERSION}")
+    # AES-128 playlists pass: segments stage raw and FFmpeg's local HLS
+    # demuxer decrypts them against a rewritten local playlist.
     if playlist.live:
         raise DownloadError(f"Live {scope} recording is not supported in FluxCatch {VERSION}")
     if playlist.discontinuity:
@@ -2445,15 +2903,13 @@ def hls_fast_download(
     if cancel.is_set():
         raise Cancelled()
     progress.status("starting", "正在获取播放列表")
-    playlist, _text, master, selected = select_hls_media(url, headers, variant_url, cancel)
+    playlist, playlist_text, master, selected = select_hls_media(url, headers, variant_url, cancel)
     authorize_hls_playlist(playlist)
     if master:
         authorize_hls_playlist(master)
 
     if master and master.protection == "drm":
         raise DownloadError("DRM/SAMPLE-AES HLS is metadata-only")
-    if master and (master.encrypted or master.protection == "aes128"):
-        raise DownloadError(f"AES-128 HLS is not supported in FluxCatch {VERSION}")
 
     audio_rendition = select_hls_audio_rendition(master, selected) if master else None
     # Rendition-style players never expose a master playlist. The extension
@@ -2477,7 +2933,7 @@ def hls_fast_download(
     audio_selected: dict[str, Any] | None = None
     if audio_rendition:
         resolved_audio_url = audio_rendition["url"]
-        audio_playlist, _audio_text, audio_master, audio_selected = select_hls_media(
+        audio_playlist, audio_playlist_text, audio_master, audio_selected = select_hls_media(
             resolved_audio_url,
             scope_subresource_headers(master.url, [resolved_audio_url], master.request_headers),
             cancel=cancel,
@@ -2487,12 +2943,10 @@ def hls_fast_download(
             authorize_hls_playlist(audio_master, purpose="HLS audio master child")
             if audio_master.protection == "drm":
                 raise DownloadError("DRM/SAMPLE-AES audio HLS is metadata-only")
-            if audio_master.encrypted or audio_master.protection == "aes128":
-                raise DownloadError(f"AES-128 audio HLS is not supported in FluxCatch {VERSION}")
             if select_hls_audio_rendition(audio_master, audio_selected):
                 raise DownloadError("Nested separate-audio HLS is not supported")
     elif explicit_audio_url:
-        audio_playlist, _audio_text, audio_master, audio_selected = select_hls_media(
+        audio_playlist, audio_playlist_text, audio_master, audio_selected = select_hls_media(
             explicit_audio_url,
             headers,
             cancel=cancel,
@@ -2502,26 +2956,29 @@ def hls_fast_download(
             authorize_hls_playlist(audio_master, purpose="HLS audio master child")
             if audio_master.protection == "drm":
                 raise DownloadError("DRM/SAMPLE-AES audio HLS is metadata-only")
-            if audio_master.encrypted or audio_master.protection == "aes128":
-                raise DownloadError(f"AES-128 audio HLS is not supported in FluxCatch {VERSION}")
             if select_hls_audio_rendition(audio_master, audio_selected):
                 raise DownloadError("Nested separate-audio HLS is not supported")
 
     if audio_playlist:
         validate_hls_static_media(audio_playlist, label="audio")
 
-    planned_playlists: list[tuple[str, HlsPlaylist]]
+    planned_playlists: list[tuple[str, HlsPlaylist, str]]
     if extract_audio and audio_playlist:
-        planned_playlists = [("audio", audio_playlist)]
+        planned_playlists = [("audio", audio_playlist, audio_playlist_text)]
     elif audio_playlist:
-        planned_playlists = [("video", playlist), ("audio", audio_playlist)]
+        planned_playlists = [("video", playlist, playlist_text), ("audio", audio_playlist, audio_playlist_text)]
     else:
-        planned_playlists = [("media", playlist)]
+        planned_playlists = [("media", playlist, playlist_text)]
+    # AES-128 segments are staged raw and decrypted by FFmpeg's local HLS
+    # demuxer against a rewritten local playlist; no network access past the
+    # pinned client, and no plaintext without FFmpeg present.
+    if any(current.encrypted and current.protection == "aes128" for _label, current, _text in planned_playlists) and not ffmpeg:
+        raise DownloadError("AES-128 HLS requires FFmpeg")
 
-    temp_dir = Path(tempfile.mkdtemp(prefix="fluxcatch-hls-", dir=str(target.parent)))
+    temp_dir = resume_segment_work_dir(target, url, "fluxcatch-hls-", "hls")
     total_segments = sum(
         len(current.segments) + (1 if current.init_map else 0)
-        for _label, current in planned_playlists
+        for _label, current, _text in planned_playlists
     )
     progress.total = 0
     completed = 0
@@ -2529,21 +2986,32 @@ def hls_fast_download(
     completed_lock = threading.Lock()
     abort = threading.Event()
 
-    def fetch_file(label: str, current: HlsPlaylist, index: int, segment: HlsSegment) -> Path:
+    def fetch_file(label: str, current: HlsPlaylist, index: int, segment: HlsSegment, dest_name: str | None = None) -> Path:
         nonlocal completed, downloaded_bytes
         if cancel.is_set():
             raise Cancelled()
         if abort.is_set():
             raise DownloadError("HLS download aborted")
-        dest = temp_dir / label / f"{index:08d}.part"
+        dest = temp_dir / label / (dest_name or f"{index:08d}.part")
+        staging = dest.with_name(dest.name + ".tmp")
         extra: dict[str, str] = {}
+        expected_size = 0
         if segment.byte_range:
             amount_offset = segment.byte_range.split("@", 1)
             if len(amount_offset) == 2:
                 amount, offset = map(int, amount_offset)
+                expected_size = amount
                 extra["Range"] = f"bytes={offset}-{offset + amount - 1}"
+        # Objects renamed into place by an earlier, paused attempt are complete.
+        if staged_file_complete(dest, expected_size):
+            with completed_lock:
+                completed += 1
+                downloaded_bytes += dest.stat().st_size
+                elapsed = max(0.001, time.monotonic() - progress.started)
+                progress.report({"status": "downloading", "bytes": downloaded_bytes, "total": 0, "progress": completed / total_segments, "speed": int(downloaded_bytes / elapsed), "message": f"分片 {completed}/{total_segments}"}, force=completed >= total_segments)
+            return dest
         last_error: Exception | None = None
-        for attempt in range(4):
+        for attempt in range(6):
             response = None
             attempt_bytes = 0
             try:
@@ -2558,7 +3026,7 @@ def hls_fast_download(
                     validate_range_response(response, offset, offset + amount - 1)
                 elif response.status != 200:
                     raise DownloadError("Unexpected HLS segment response status")
-                fd = _open_private(dest, truncate=True)
+                fd = _open_private(staging, truncate=True)
                 with os.fdopen(fd, "wb", closefd=True) as output:
                     while True:
                         if cancel.is_set():
@@ -2574,14 +3042,20 @@ def hls_fast_download(
                             downloaded_bytes += len(block)
                     if segment.byte_range and attempt_bytes != int(segment.byte_range.split("@", 1)[0]):
                         raise DownloadError("HLS byte-range response ended early")
+                    output.flush()
+                    os.fsync(output.fileno())
+                # Only a whole object becomes reusable staging state.
+                os.replace(staging, dest)
                 with completed_lock:
                     completed += 1
                     elapsed = max(0.001, time.monotonic() - progress.started)
                     progress.report({"status": "downloading", "bytes": downloaded_bytes, "total": 0, "progress": completed / total_segments, "speed": int(downloaded_bytes / elapsed), "message": f"分片 {completed}/{total_segments}"}, force=completed >= total_segments)
                 return dest
             except Cancelled:
+                staging.unlink(missing_ok=True)
                 raise
             except NetworkPolicyDownloadError:
+                staging.unlink(missing_ok=True)
                 abort.set()
                 raise
             except Exception as error:  # noqa: BLE001
@@ -2589,17 +3063,78 @@ def hls_fast_download(
                 if attempt_bytes:
                     with completed_lock:
                         downloaded_bytes = max(0, downloaded_bytes - attempt_bytes)
+                staging.unlink(missing_ok=True)
                 dest.unlink(missing_ok=True)
-                if attempt < 3:
-                    _retry_wait(cancel, min(4.0, 0.35 * (2**attempt)), abort)
+                if attempt < 5:
+                    _retry_wait(cancel, min(8.0, 0.5 * (2**attempt)), abort)
             finally:
                 if response is not None:
                     response.close()
         raise DownloadError(f"HLS {label} segment {index} failed: {last_error}")
 
-    def stage_playlist(label: str, current: HlsPlaylist) -> Path:
+    def fetch_hls_key(current: HlsPlaylist, key_url: str, dest: Path) -> None:
+        last_error: Exception | None = None
+        for attempt in range(5):
+            response = None
+            try:
+                response = request(
+                    key_url,
+                    scope_subresource_headers(current.url, [key_url], current.request_headers),
+                    timeout=30,
+                )
+                key_bytes = response.read(32)
+                if len(key_bytes) != 16:
+                    raise DownloadError(f"HLS key response has {len(key_bytes)} bytes, expected 16")
+                fd = _open_private(dest, truncate=True)
+                with os.fdopen(fd, "wb", closefd=True) as output:
+                    output.write(key_bytes)
+                    output.flush()
+                    os.fsync(output.fileno())
+                return
+            except Cancelled:
+                raise
+            except NetworkPolicyDownloadError:
+                raise
+            except Exception as error:  # noqa: BLE001 - retry transient key fetches
+                last_error = error
+                dest.unlink(missing_ok=True)
+                if attempt < 4:
+                    _retry_wait(cancel, min(8.0, 0.5 * (2**attempt)))
+            finally:
+                if response is not None:
+                    response.close()
+        raise DownloadError(f"HLS key fetch failed: {last_error}")
+
+    def rewrite_playlist_local(current: HlsPlaylist, text: str, key_files: dict[str, str]) -> str:
+        init_name = STAGED_INIT_NAME if current.init_map else None
+        segment_names = [staged_segment_name(index, segment.url) for index, segment in enumerate(current.segments)]
+        rewritten: list[str] = []
+        segment_cursor = 0
+        for line in text.splitlines():
+            if line.startswith("#EXT-X-KEY:"):
+                attrs = parse_attrs(line.split(":", 1)[1])
+                key_uri = attrs.get("URI", "")
+                # The raw playlist may carry a relative key URI; the staged
+                # map is keyed by the resolved absolute URL.
+                local_name = None
+                try:
+                    local_name = key_files.get(str(urllib.parse.urljoin(current.url, key_uri)))
+                except Exception:
+                    local_name = None
+                if key_uri and local_name:
+                    line = re.sub(r'URI="[^"]*"', f'URI="{local_name}"', line)
+            elif line.startswith("#EXT-X-MAP:") and init_name:
+                line = re.sub(r'URI="[^"]*"', f'URI="{init_name}"', line)
+            elif line and not line.startswith("#"):
+                if segment_cursor < len(segment_names):
+                    line = segment_names[segment_cursor]
+                    segment_cursor += 1
+            rewritten.append(line)
+        return "\n".join(rewritten) + "\n"
+
+    def stage_playlist(label: str, current: HlsPlaylist, text: str) -> Path:
         track_dir = temp_dir / label
-        track_dir.mkdir(mode=0o700)
+        track_dir.mkdir(mode=0o700, exist_ok=True)
         init_file: Path | None = None
         if current.init_map:
             init_file = fetch_file(
@@ -2607,13 +3142,14 @@ def hls_fast_download(
                 current,
                 -1,
                 HlsSegment(current.init_map, byte_range=current.init_map_range),
+                dest_name=STAGED_INIT_NAME,
             )
         worker_count = max(1, min(24, workers))
         pool = concurrent.futures.ThreadPoolExecutor(max_workers=worker_count)
         files: list[Path] = []
         try:
             arguments = (
-                (label, current, index, segment)
+                (label, current, index, segment, staged_segment_name(index, segment.url))
                 for index, segment in enumerate(current.segments)
             )
             files.extend(_bounded_executor_results(
@@ -2630,6 +3166,22 @@ def hls_fast_download(
         files.sort()
         if cancel.is_set():
             raise Cancelled()
+        if current.encrypted and current.protection == "aes128":
+            # Stage the raw (still encrypted) objects plus the key material and
+            # hand FFmpeg a local playlist; decryption happens inside the local
+            # HLS demuxer with no further network access.
+            key_files: dict[str, str] = {}
+            for key_index, key_url in enumerate(dict.fromkeys(current.key_urls)):
+                key_name = f"key{key_index}.bin"
+                fetch_hls_key(current, key_url, track_dir / key_name)
+                key_files[key_url] = key_name
+            index_file = temp_dir / label / "index.m3u8"
+            fd = _open_private(index_file, truncate=True)
+            with os.fdopen(fd, "w", closefd=True) as output:
+                output.write(rewrite_playlist_local(current, text, key_files))
+                output.flush()
+                os.fsync(output.fileno())
+            return index_file
         joined = temp_dir / f"joined-{label}{'.mp4' if init_file else '.ts'}"
         fd = _open_private(joined, truncate=True)
         with os.fdopen(fd, "wb", closefd=True) as output:
@@ -2643,11 +3195,19 @@ def hls_fast_download(
             os.fsync(output.fileno())
         return joined
 
+    keep_work_dir = False
     try:
         local = {
-            label: stage_playlist(label, current)
-            for label, current in planned_playlists
+            label: stage_playlist(label, current, text)
+            for label, current, text in planned_playlists
         }
+        def input_args(path: Path) -> list[str]:
+            # Staged AES playlists reference locally renamed objects; the hls
+            # demuxer needs the permissive extension flag to open them. The
+            # crypto protocol whitelist is granted per-input by
+            # local_only_ffmpeg_args for staged .m3u8 files only.
+            return (["-allowed_extensions", "ALL"] if path.suffix == ".m3u8" else []) + ["-i", str(path)]
+
         if extract_audio:
             assert ffmpeg is not None
             source_playlist = audio_playlist or playlist
@@ -2658,8 +3218,7 @@ def hls_fast_download(
                 "-hide_banner",
                 "-nostdin",
                 "-y",
-                "-i",
-                str(source),
+                *input_args(source),
                 "-vn",
                 "-c:a",
                 "libmp3lame",
@@ -2687,10 +3246,8 @@ def hls_fast_download(
                 "-hide_banner",
                 "-nostdin",
                 "-y",
-                "-i",
-                str(local["video"]),
-                "-i",
-                str(local["audio"]),
+                *input_args(local["video"]),
+                *input_args(local["audio"]),
                 "-map",
                 "0:v:0",
                 "-map",
@@ -2712,13 +3269,44 @@ def hls_fast_download(
         joined = local["media"]
         if ffmpeg:
             progress.status("remuxing", "正在无损封装")
+            if joined.suffix == ".m3u8":
+                args = [
+                    ffmpeg,
+                    "-hide_banner",
+                    "-nostdin",
+                    "-y",
+                    *input_args(joined),
+                    "-map",
+                    "0:v:0?",
+                    "-map",
+                    "0:a:0?",
+                    *output_codecs(target),
+                    "-progress",
+                    "pipe:1",
+                    "-nostats",
+                    str(target),
+                ]
+                return run_ffmpeg(
+                    args,
+                    target,
+                    cancel,
+                    progress,
+                    expected_duration=hls_media_duration(playlist),
+                )
             return ffmpeg_remux(joined, target, cancel, progress, ffmpeg)
         if target.suffix.lower() != joined.suffix:
             target = unique_path(target.parent, f"{target.stem}{joined.suffix}")
         joined.chmod(0o600)
         return commit_file(joined, target)
+    except Cancelled:
+        if is_pause(cancel):
+            # Keep every whole segment; the next job with this name reuses them.
+            keep_work_dir = True
+            write_segment_checkpoint(target, url, temp_dir, "hls")
+        raise
     finally:
-        shutil.rmtree(temp_dir, ignore_errors=True)
+        if not keep_work_dir:
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 def external_network_process_error(tool: str) -> DownloadError:
@@ -2746,7 +3334,10 @@ def ffmpeg_download(
 
 def ffmpeg_remux(source: Path, target: Path, cancel: threading.Event, progress: Progress, ffmpeg: str) -> Path:
     args = [ffmpeg, "-hide_banner", "-nostdin", "-y", "-i", str(source), "-map", "0:v:0?", "-map", "0:a:0?", *output_codecs(target), "-progress", "pipe:1", "-nostats", str(target)]
-    return run_ffmpeg(args, target, cancel, progress)
+    # The source is a finished local file, so its duration is known up front
+    # and the conversion phase can report a real 0–100% instead of nothing.
+    duration = float(describe_media(source, ffmpeg).get("duration") or 0)
+    return run_ffmpeg(args, target, cancel, progress, expected_duration=duration, activity="正在转换格式")
 
 
 def ffmpeg_download_pair(
@@ -3051,7 +3642,11 @@ def local_only_ffmpeg_args(args: list[str]) -> list[str]:
         source_path = Path(source)
         if not source_path.is_absolute() or source_path.is_symlink() or not source_path.is_file():
             raise DownloadError("FFmpeg input must be an existing local regular file")
-        result.extend(["-protocol_whitelist", "file", "-i", str(source_path)])
+        # Staged AES playlists open their locally staged encrypted segments
+        # through the crypto protocol; it only ever wraps local files, so the
+        # no-network guarantee holds. Everything else stays file-only.
+        whitelist = "file,crypto" if source_path.suffix == ".m3u8" else "file"
+        result.extend(["-protocol_whitelist", whitelist, "-i", str(source_path)])
         index += 2
     return result
 
@@ -3120,12 +3715,13 @@ def run_ffmpeg(
                 detail += f" · 已处理 {_media_time(out_time)}"
         if effective_rate > 0 and math.isfinite(effective_rate):
             detail += f" · {effective_rate:.2f}×"
-        progress.emit({
+        event: dict[str, Any] = {
             "type": "progress",
             "jobId": progress.job_id,
             "filename": progress.filename,
-            "status": "downloading",
-            "progress": fraction,
+            # A local FFmpeg pass is its own phase. Reporting it as
+            # "downloading" made a finished transfer's bar snap back to 0%.
+            "status": "remuxing",
             "bytes": total_size,
             "total": 0,
             # FFmpeg exposes output size, not network input bytes. For MP3 this
@@ -3134,7 +3730,12 @@ def run_ffmpeg(
             # honest speed signal.
             "speed": int(total_size / elapsed) if report_output_speed else 0,
             "message": detail,
-        })
+        }
+        # Without a known duration there is no honest fraction; omit the key
+        # so the extension keeps the last value instead of resetting the bar.
+        if known_duration or phase == "end":
+            event["progress"] = fraction
+        progress.emit(event)
 
     def consume_progress_line(line: str) -> None:
         nonlocal total_size, out_time, media_rate, saw_out_time_us
@@ -3220,7 +3821,7 @@ def run_ffmpeg(
         if not staging.exists() or staging.stat().st_size == 0:
             raise DownloadError("FFmpeg produced no output")
         staging.chmod(0o600)
-        commit_file(staging, target)
+        target = commit_file(staging, target)
         success = True
         return target
     finally:
@@ -3253,6 +3854,124 @@ def youtube_download(
     raise external_network_process_error("yt-dlp")
 
 
+def ffprobe_path(ffmpeg: str | None) -> str | None:
+    """Locate ffprobe next to the configured ffmpeg (Homebrew installs both)."""
+    candidates: list[Path] = []
+    if ffmpeg:
+        candidates.append(Path(ffmpeg).with_name("ffprobe"))
+    found = shutil.which("ffprobe")
+    if found:
+        candidates.append(Path(found))
+    for candidate in candidates:
+        try:
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return str(candidate)
+        except OSError:
+            continue
+    return None
+
+
+def _positive_number(value: Any) -> float:
+    try:
+        result = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
+    return result if math.isfinite(result) and result > 0 else 0.0
+
+
+def describe_media(path: Path, ffmpeg: str | None) -> dict[str, Any]:
+    """Read container, duration, dimensions and codecs of a finished file.
+
+    Best effort only: a probe failure never fails the job. The result feeds
+    the extension's download history (duration, resolution and codec chips).
+    """
+    probe = ffprobe_path(ffmpeg)
+    if not probe:
+        return {}
+    try:
+        completed = subprocess.run(
+            [probe, "-v", "error", "-print_format", "json", "-show_format", "-show_streams", "-i", str(path)],
+            capture_output=True,
+            timeout=MEDIA_PROBE_TIMEOUT_SECONDS,
+            check=False,
+        )
+        data = json.loads(completed.stdout.decode("utf-8", "replace") or "{}")
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    fmt = data.get("format") if isinstance(data.get("format"), dict) else {}
+    streams = [item for item in data.get("streams") or [] if isinstance(item, dict)]
+    video = next(
+        (item for item in streams
+         if item.get("codec_type") == "video" and (item.get("disposition") or {}).get("attached_pic") != 1),
+        None,
+    )
+    audio = next((item for item in streams if item.get("codec_type") == "audio"), None)
+    duration = _positive_number(fmt.get("duration")) or _positive_number((video or audio or {}).get("duration"))
+    container = str(fmt.get("format_name") or "").split(",", 1)[0].strip()[:32]
+    result: dict[str, Any] = {}
+    if duration:
+        result["duration"] = round(duration, 2)
+    if container:
+        result["container"] = container
+    if video:
+        width, height = int(_positive_number(video.get("width"))), int(_positive_number(video.get("height")))
+        if width and height:
+            result["width"], result["height"] = width, height
+        codec = str(video.get("codec_name") or "")[:32]
+        if codec:
+            result["videoCodec"] = codec
+    if audio:
+        codec = str(audio.get("codec_name") or "")[:32]
+        if codec:
+            result["audioCodec"] = codec
+    bitrate = _positive_number(fmt.get("bit_rate"))
+    if bitrate:
+        result["bitrate"] = int(bitrate)
+    return result
+
+
+def make_thumbnail(path: Path, ffmpeg: str | None, duration: float = 0.0) -> str | None:
+    """Render one small JPEG poster frame as a data URL, or None.
+
+    The frame is written to a private temporary directory and read back, so
+    FFmpeg keeps its file-only protocol whitelist. Output is capped so the
+    extension's history record stays small enough for chrome.storage.
+    """
+    if not ffmpeg:
+        return None
+    seek = min(3.0, duration * 0.1) if duration and duration > 1 else 0.0
+    work_dir = Path(tempfile.mkdtemp(prefix="fluxcatch-thumb-"))
+    try:
+        for scale, quality in ((360, 8), (240, 14)):
+            output = work_dir / f"poster-{scale}.jpg"
+            args = [
+                ffmpeg, "-hide_banner", "-nostdin", "-y", "-v", "error",
+                *(["-ss", f"{seek:.2f}"] if seek else []),
+                "-i", str(path),
+                "-frames:v", "1", "-vf", f"scale={scale}:-2", "-q:v", str(quality),
+                str(output),
+            ]
+            try:
+                subprocess.run(
+                    resource_limited_ffmpeg_args(local_only_ffmpeg_args(args)),
+                    capture_output=True,
+                    timeout=MEDIA_PROBE_TIMEOUT_SECONDS,
+                    check=False,
+                )
+                payload = output.read_bytes()
+            except (OSError, subprocess.SubprocessError, DownloadError):
+                return None
+            if not payload:
+                return None
+            if len(payload) <= HISTORY_THUMBNAIL_MAX_BYTES:
+                return "data:image/jpeg;base64," + base64.b64encode(payload).decode("ascii")
+        return None
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
+
+
 class Host:
     def __init__(self) -> None:
         self.write_lock = threading.Lock()
@@ -3260,14 +3979,19 @@ class Host:
         self.jobs_lock = threading.Lock()
         self.targets_lock = threading.Lock()
         self.reserved_targets: set[Path] = set()
-        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="fluxcatch-job")
+        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=MAX_CONCURRENT_JOBS + 2, thread_name_prefix="fluxcatch-job")
+        # Admitted jobs beyond the user's concurrency setting wait here; the
+        # setting travels with every download message and applies at once.
+        self.job_limit = DEFAULT_CONCURRENT_JOBS
+        self.running_jobs = 0
+        self.slots = threading.Condition()
         self.ffmpeg_capabilities = probe_ffmpeg(os.environ.get("FLUXCATCH_FFMPEG") or None)
         self.ffmpeg = self.ffmpeg_capabilities.path or None
         self.ytdlp_capabilities = probe_ytdlp(os.environ.get("FLUXCATCH_YTDLP") or None)
         self.ytdlp = None
-        configured = os.environ.get("FLUXCATCH_DOWNLOAD_DIR")
-        self.download_dir = Path(configured).expanduser() if configured else Path.home() / "Downloads" / "FluxCatch"
-        self.download_dir.mkdir(parents=True, exist_ok=True)
+        self.config = load_host_config()
+        self.download_dir = resolve_download_dir(self.config)
+        self.known_download_dirs = [path for path in known_download_dirs(self.config) if path != self.download_dir]
         cleanup_stale_workdirs(self.download_dir)
 
     def send(self, message: dict[str, Any]) -> None:
@@ -3293,20 +4017,71 @@ class Host:
                 "protocolVersion": NATIVE_PROTOCOL_VERSION,
                 "capabilityProfileVersion": CAPABILITY_PROFILE_VERSION,
                 "ffmpeg": bool(self.ffmpeg),
+                "downloadDir": str(self.download_dir),
                 "capabilities": {
                     "ffmpeg": self.ffmpeg_capabilities.as_dict(),
                     "ytdlp": self.ytdlp_capabilities.as_dict(),
                     "dashPlanner": "static-v1",
                     "dashPair": "direct-v1",
                     "externalNetworkProcesses": "disabled",
+                    "fileActions": "finder-v1",
+                    "pause": PAUSE_CAPABILITY,
                 },
             })
             return
-        if kind == "cancel":
+        if kind in FILE_ACTIONS:
+            self.send(self.handle_file_action(kind, message))
+            return
+        if kind in {"cancel", "pause"}:
             with self.jobs_lock:
                 event = self.jobs.get(str(message.get("jobId") or ""))
             if event:
+                # A pause keeps resumable state on disk; a cancel that follows
+                # a pause request wins, so partial files never outlive intent.
+                if isinstance(event, JobControl):
+                    event.reason = "pause" if kind == "pause" else "cancel"
                 event.set()
+            return
+        if kind == "choose_folder":
+            # The picker blocks for as long as the user looks at it; keep the
+            # reader loop free for pings and cancels meanwhile.
+            self.executor.submit(self.handle_choose_folder, message)
+            return
+        if kind == "discard":
+            reply: dict[str, Any] = {"type": "file_action_result", "requestId": message.get("requestId"), "action": "discard"}
+            try:
+                reply.update({"ok": True, **discard_partial_download(self.download_dir, str(message.get("filename") or ""))})
+            except Exception as error:  # noqa: BLE001 - reported (redacted) to the extension
+                reply.update({"ok": False, "error": redact_text(error)})
+            self.send(reply)
+            return
+        if kind == "inspect_hls":
+            # Fetch a media playlist through the pinned client with the
+            # headers the page itself used. Several CDNs reject the
+            # extension's own fetches (hotlink referer checks), which used to
+            # leave cards without duration/quality metadata.
+            request_id = message.get("requestId")
+            try:
+                inspect_url = valid_url(message.get("url"))
+                inspect_headers = clean_headers(message.get("headers"))
+                manifest = fetch_manifest(inspect_url, inspect_headers, threading.Event())
+                inspect_text = manifest.text
+                if len(inspect_text.encode("utf-8")) > 1_500_000:
+                    raise DownloadError("HLS playlist exceeds the inspection size limit")
+                self.send({
+                    "type": "inspect_hls_result",
+                    "requestId": request_id,
+                    "ok": True,
+                    "text": inspect_text,
+                    "finalUrl": manifest.final_url,
+                })
+            except Exception as error:  # noqa: BLE001 - surfaced verbatim to the extension
+                self.send({
+                    "type": "inspect_hls_result",
+                    "requestId": request_id,
+                    "ok": False,
+                    "error": str(error),
+                })
             return
         if kind != "download":
             self.send({"type": "error", "requestId": message.get("requestId"), "error": "Unknown request type"})
@@ -3327,7 +4102,7 @@ class Host:
                     "code": "host_busy",
                 }
             else:
-                cancel = threading.Event()
+                cancel = JobControl()
                 self.jobs[job_id] = cancel
         if rejection is not None:
             self.send(rejection)
@@ -3347,18 +4122,46 @@ class Host:
                 "message": detail,
             })
 
+    def _acquire_job_slot(self, limit: int, cancel: threading.Event, job_id: str, filename: str) -> None:
+        with self.slots:
+            self.job_limit = limit
+            announced = False
+            while self.running_jobs >= self.job_limit:
+                if cancel.is_set():
+                    raise Cancelled()
+                if not announced:
+                    announced = True
+                    self.send({"type": "progress", "jobId": job_id, "filename": filename, "status": "queued", "progress": 0, "message": QUEUED_MESSAGE})
+                self.slots.wait(0.25)
+            self.running_jobs += 1
+
+    def _release_job_slot(self) -> None:
+        with self.slots:
+            self.running_jobs = max(0, self.running_jobs - 1)
+            self.slots.notify_all()
+
     def run_job(self, job_id: str, message: dict[str, Any], cancel: threading.Event) -> None:
         filename = safe_filename(message.get("filename"), "media.mp4")
         source_suffix = Path(filename).suffix or ".bin"
         reserved_target: Path | None = None
         work_dir: Path | None = None
+        started = time.monotonic()
         options = message.get("options") if isinstance(message.get("options"), dict) else {}
         network_token = set_current_network_policy(NetworkPolicy(
             allow_private_network_media=options.get("allowPrivateNetworkMedia") is True,
         ))
+        slot_held = False
         try:
             if cancel.is_set():
                 raise Cancelled()
+            self._acquire_job_slot(
+                bounded_int(options.get("concurrentJobs"), 1, MAX_CONCURRENT_JOBS, DEFAULT_CONCURRENT_JOBS),
+                cancel,
+                job_id,
+                filename,
+            )
+            slot_held = True
+            started = time.monotonic()
             kind = str(message.get("mediaKind") or "video").strip().lower()
             url = valid_url(message.get("videoUrl") or options.get("videoUrl") or message.get("url")) if kind == "dash_pair" else valid_url(message.get("url"))
             headers = clean_headers(message.get("headers"))
@@ -3406,11 +4209,14 @@ class Host:
             elif kind in {"hls", "dash", "youtube"} or options.get("convert"):
                 filename = f"{Path(filename).stem}.{container}"
             direct_resumable = kind not in {"hls", "dash", "dash_pair", "youtube"} and not extract_audio and not options.get("convert")
+            # Staged-segment jobs resume from their pause marker under the
+            # same output name, exactly like a direct checkpoint.
+            segment_resumable = kind in {"hls", "dash"}
             with self.targets_lock:
                 target = unique_path(
                     self.download_dir,
                     filename,
-                    allow_checkpoint=direct_resumable,
+                    allow_checkpoint=direct_resumable or segment_resumable,
                     reserved=self.reserved_targets,
                 )
                 self.reserved_targets.add(target)
@@ -3531,6 +4337,7 @@ class Host:
                             target,
                             cancel,
                             progress,
+                            expected_duration=float(describe_media(raw_target, self.ffmpeg).get("duration") or 0),
                             activity="正在提取音频",
                             report_output_speed=False,
                         )
@@ -3538,13 +4345,27 @@ class Host:
                         target = ffmpeg_remux(raw_target, target, cancel, progress, self.ffmpeg)
                     raw_target.unlink(missing_ok=True)
 
-            self.send({"type": "complete", "jobId": job_id, "filename": target.name, "status": "completed", "progress": 1, "path": str(target), "size": target.stat().st_size})
+            self.send(self.completion_message(job_id, target, started=started, extract_audio=extract_audio))
         except Cancelled:
-            self.send({"type": "cancelled", "jobId": job_id, "filename": filename, "status": "cancelled", "message": "任务已取消"})
+            if is_pause(cancel):
+                self.send({
+                    "type": "paused",
+                    "jobId": job_id,
+                    "filename": filename,
+                    "status": "paused",
+                    "message": PAUSED_MESSAGE,
+                    # The name the resuming job must ask for so unique_path
+                    # hands back the same checkpoint/staging state.
+                    "targetName": reserved_target.name if reserved_target is not None else filename,
+                })
+            else:
+                self.send({"type": "cancelled", "jobId": job_id, "filename": filename, "status": "cancelled", "message": "任务已取消"})
         except Exception as error:  # noqa: BLE001 - report all job failures to Chrome
             detail = redact_text(error)
             self.send({"type": "failed", "jobId": job_id, "filename": filename, "status": "failed", "error": detail, "message": detail})
         finally:
+            if slot_held:
+                self._release_job_slot()
             if work_dir is not None:
                 shutil.rmtree(work_dir, ignore_errors=True)
             if reserved_target is not None:
@@ -3553,6 +4374,132 @@ class Host:
             with self.jobs_lock:
                 self.jobs.pop(job_id, None)
             reset_current_network_policy(network_token)
+
+    def completion_message(self, job_id: str, target: Path, *, started: float, extract_audio: bool = False) -> dict[str, Any]:
+        """Describe a published file for the extension's download history.
+
+        Besides the path and size, the record carries duration/resolution/
+        codec facts from ffprobe and one small poster frame so finished rows
+        are recognisable at a glance. Every extra is best effort.
+        """
+        media = describe_media(target, self.ffmpeg)
+        thumbnail = None if extract_audio else make_thumbnail(target, self.ffmpeg, float(media.get("duration") or 0))
+        return {
+            "type": "complete",
+            "jobId": job_id,
+            "filename": target.name,
+            "status": "completed",
+            "progress": 1,
+            "path": str(target),
+            "size": target.stat().st_size,
+            "message": COMPLETE_MESSAGE,
+            "media": media,
+            "thumbnail": thumbnail,
+            "elapsedMs": int((time.monotonic() - started) * 1000),
+            "downloadDir": str(self.download_dir),
+        }
+
+    # ---- File actions ------------------------------------------------------
+    def handle_choose_folder(self, message: dict[str, Any]) -> None:
+        reply: dict[str, Any] = {"type": "file_action_result", "requestId": message.get("requestId"), "action": "choose_folder"}
+        try:
+            if message.get("reset") is True:
+                chosen = default_download_dir()
+            else:
+                chosen = choose_folder_dialog(self.download_dir)
+                if chosen is None:
+                    reply.update({"ok": False, "error": "cancelled"})
+                    self.send(reply)
+                    return
+            self.set_download_dir(validate_download_dir(str(chosen)))
+            reply.update({"ok": True, "downloadDir": str(self.download_dir)})
+        except Exception as error:  # noqa: BLE001 - reported (redacted) to the extension
+            reply.update({"ok": False, "error": redact_text(error)})
+        self.send(reply)
+
+    def set_download_dir(self, directory: Path) -> None:
+        """Switch the save folder and remember the previous ones, so files
+        published there remain openable through the confined file actions."""
+        with self.targets_lock:
+            previous = self.download_dir
+            if previous != directory and previous not in self.known_download_dirs:
+                self.known_download_dirs.insert(0, previous)
+            self.known_download_dirs = [path for path in self.known_download_dirs if path != directory][:MAX_KNOWN_DOWNLOAD_DIRS]
+            self.download_dir = directory
+            self.config = {
+                **self.config,
+                "downloadDir": str(directory) if directory != default_download_dir() else "",
+                "knownDownloadDirs": [str(path) for path in self.known_download_dirs],
+            }
+            if os.environ.get("FLUXCATCH_DOWNLOAD_DIR") is None:
+                save_host_config(self.config)
+        cleanup_stale_workdirs(directory)
+
+    def managed_path(self, value: Any, *, allow_directory: bool = False) -> Path:
+        """Resolve a path the extension asks to act on and confine it to the
+        download folder. Symlinks, traversal and foreign roots fail closed: the
+        host only ever opens, reveals or trashes files it published itself."""
+        raw = value if isinstance(value, str) else ""
+        if not raw or len(raw) > 2048 or "\x00" in raw:
+            raise DownloadError("Path is invalid")
+        candidate = Path(raw)
+        if not candidate.is_absolute():
+            raise DownloadError("Path must be absolute")
+        if candidate.is_symlink():
+            raise DownloadError("Symlinks are not managed")
+        roots = [self.download_dir.resolve(), *(path.resolve() for path in getattr(self, "known_download_dirs", []))]
+        root = roots[0]
+        try:
+            resolved = candidate.resolve(strict=True)
+        except (OSError, RuntimeError) as error:
+            raise DownloadError("File no longer exists") from error
+        if not any(resolved == base or resolved.is_relative_to(base) for base in roots):
+            raise DownloadError("Path is outside the download folder")
+        root = next(base for base in roots if resolved == base or resolved.is_relative_to(base))
+        if resolved == root or resolved.is_dir():
+            if not allow_directory:
+                raise DownloadError("Path is not a file")
+            return resolved
+        if not resolved.is_file():
+            raise DownloadError("Path is not a regular file")
+        relative_parts = resolved.relative_to(root).parts
+        if any(part.startswith(TEMP_WORK_PREFIXES) or is_stale_partial_name(part) for part in relative_parts):
+            raise DownloadError("Unfinished files cannot be opened")
+        return resolved
+
+    def handle_file_action(self, action: str, message: dict[str, Any]) -> dict[str, Any]:
+        reply: dict[str, Any] = {"type": "file_action_result", "requestId": message.get("requestId"), "action": action}
+        try:
+            if action == "stat":
+                items: list[dict[str, Any]] = []
+                raw_paths = message.get("paths") if isinstance(message.get("paths"), list) else []
+                for raw in raw_paths[:MAX_FILE_STAT_PATHS]:
+                    item: dict[str, Any] = {"path": raw if isinstance(raw, str) else "", "exists": False}
+                    try:
+                        metadata = self.managed_path(raw).stat()
+                        item.update({"exists": True, "size": metadata.st_size, "mtime": int(metadata.st_mtime * 1000)})
+                    except DownloadError:
+                        pass
+                    items.append(item)
+                reply.update({"ok": True, "items": items})
+                return reply
+            if action == "open_folder":
+                run_opener([OPEN_COMMAND, str(self.download_dir)])
+                reply["ok"] = True
+                return reply
+            path = self.managed_path(message.get("path"))
+            if action == "reveal":
+                run_opener([OPEN_COMMAND, "-R", str(path)])
+            elif action == "open":
+                run_opener([OPEN_COMMAND, str(path)])
+            elif action == "trash":
+                move_to_trash(path)
+            else:
+                raise DownloadError("Unknown file action")
+            reply["ok"] = True
+        except Exception as error:  # noqa: BLE001 - reported (redacted) to the extension
+            reply.update({"ok": False, "error": redact_text(error)})
+        return reply
 
     def close(self) -> None:
         with self.jobs_lock:

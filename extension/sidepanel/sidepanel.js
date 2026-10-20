@@ -5,6 +5,20 @@ import { friendlyDashMessage } from "../lib/job-presentation.js";
 import { createToastController, restoreFocus, withPendingAction } from "../ui/interactions.js";
 import { captureMediaRefresh, isMediaRefreshCurrent } from "./refresh-guard.js";
 import { bindUiI18n } from "../ui/i18n.js";
+import { compareJobs, createJobActions, createJobTile, createTransferControls, estimateRemaining, finishedMetaParts, runFileAction } from "../ui/job-rows.js";
+import { pushSpeedSample, renderSegmentMap, renderSpeedGraph, segmentsFromMessage } from "../ui/speed-graph.js";
+
+// Recent speed samples per live job, for the speed graph in its row.
+const speedSamples = new Map();
+
+function recordSpeed(job) {
+  if (!job?.jobId) return;
+  if (isTerminal(job.status)) {
+    speedSamples.delete(job.jobId);
+    return;
+  }
+  speedSamples.set(job.jobId, pushSpeedSample(speedSamples.get(job.jobId), job.speed));
+}
 
 let initStarted = false;
 await bindUiI18n();
@@ -77,12 +91,14 @@ port.onMessage.addListener((message) => {
     const previous = index >= 0 ? state.jobs[index] : null;
     if (index >= 0) state.jobs[index] = message.job;
     else state.jobs.unshift(message.job);
+    recordSpeed(message.job);
     announceJobChange(previous, message.job);
     sortJobs();
     renderJobs();
   }
   if (message?.type === "JOBS_UPDATED" && Array.isArray(message.jobs)) {
     state.jobs = message.jobs;
+    for (const job of state.jobs) recordSpeed(job);
     sortJobs();
     renderJobs();
   }
@@ -121,6 +137,49 @@ function bindEvents() {
       showToast("页面扫描结果已更新", "success");
     }, { pendingText: "", successText: "已扫描" });
   });
+  $("#urlDownloadButton").addEventListener("click", (event) => {
+    const form = $("#urlForm");
+    form.hidden = !form.hidden;
+    event.currentTarget.setAttribute("aria-expanded", String(!form.hidden));
+    if (!form.hidden) $("#urlInput").focus({ preventScroll: true });
+  });
+  $("#urlForm").addEventListener("submit", (event) => {
+    event.preventDefault();
+    const submit = event.currentTarget.querySelector("button[type=submit]");
+    const url = String($("#urlInput").value || "").trim();
+    void runUiAction(submit, `sidepanel:url-download:${url}`, async () => {
+      if (!/^https?:\/\/\S+$/i.test(url)) throw new Error("请输入 http 或 https 的媒体地址");
+      if (!Number.isInteger(state.tabId)) throw new Error("当前没有可扫描的页面");
+      const granted = await chrome.permissions.request({ permissions: ["nativeMessaging"] });
+      if (!granted) throw new Error("请先允许使用本地下载引擎，再继续下载");
+      requireNativeHostReady(await refreshNativeHost());
+      await call({ type: "DOWNLOAD_URL", tabId: state.tabId, url, options: {} });
+      $("#urlInput").value = "";
+      showToast("本地下载任务已开始", "success");
+      await refreshMedia().catch(() => {});
+      const jobsResult = await call({ type: "GET_JOBS" });
+      state.jobs = jobsResult.jobs || state.jobs;
+      sortJobs();
+      renderJobs();
+    }, { pendingText: "", successText: "已开始" });
+  });
+  $("#downloadAllButton").addEventListener("click", (event) => {
+    const items = state.items.filter((item) => item.kind !== "segment");
+    void runUiAction(event.currentTarget, `sidepanel:download-all:${state.tabId}`, async () => {
+      if (!items.length) throw new Error("没有可下载的媒体");
+      if (items.some((item) => mediaNeedsLocalEngine(item))) {
+        const granted = await chrome.permissions.request({ permissions: ["nativeMessaging"] });
+        if (!granted) throw new Error("请先允许使用本地下载引擎，再继续下载");
+        requireNativeHostReady(await refreshNativeHost());
+      }
+      const result = await call({ type: "DOWNLOAD_BATCH", tabId: state.tabId, candidates: items.map(candidateReference), options: {} });
+      showToast(result.failed ? `已开始 ${result.started} 个下载，${result.failed} 个失败` : `已开始 ${result.started} 个下载`, result.failed ? "warning" : "success");
+      const jobsResult = await call({ type: "GET_JOBS" });
+      state.jobs = jobsResult.jobs || state.jobs;
+      sortJobs();
+      renderJobs();
+    }, { pendingText: "", successText: "已开始" });
+  });
   $("#pingButton").addEventListener("click", (event) => void runUiAction(event.currentTarget, "sidepanel:ping-host", async () => {
     const host = await refreshNativeHost();
     requireNativeHostReady(host);
@@ -137,6 +196,9 @@ function bindEvents() {
     showToast(result.removed ? `已清理 ${result.removed} 个已结束任务` : "没有可清理的已结束任务", result.removed ? "success" : "warning");
     if ($("#clearCompletedButton").disabled) restoreFocus($("#scanButton"));
   });
+  $("#historyButton").addEventListener("click", (event) => void runUiAction(event.currentTarget, "sidepanel:open-history", () => call({ type: "OPEN_DOWNLOADS_PAGE" }), {
+    pendingText: "", successDurationMs: 0
+  }));
 
   chrome.tabs.onActivated?.addListener(() => void refreshAll());
   chrome.tabs.onUpdated?.addListener((tabId, changeInfo) => {
@@ -203,6 +265,7 @@ function renderPageContext() {
 }
 
 function renderMedia() {
+  $("#downloadAllButton").hidden = state.items.filter((item) => item.kind !== "segment").length < 2;
   const focusedMediaId = document.activeElement?.dataset?.mediaId || "";
   const list = $("#mediaList");
   list.replaceChildren();
@@ -318,6 +381,7 @@ function renderJobs() {
 }
 
 function createJobRow(job) {
+  if (isTerminal(job.status)) return createEndedRow(job);
   const row = document.createElement("li");
   row.className = `job-row ${job.status || "queued"}`;
 
@@ -346,6 +410,28 @@ function createJobRow(job) {
   bar.style.width = `${Math.round(clampProgress(job.progress) * 100)}%`;
   progress.append(bar);
 
+  // The speed graph (with its reflection) once there is a trend to show, and
+  // the segment map while the engine reports "分片 n/m" for a stream.
+  const extras = [];
+  const samples = speedSamples.get(job.jobId) || [];
+  if (job.status === "downloading" && samples.length > 1) {
+    const graph = document.createElement("div");
+    graph.className = "job-graph";
+    renderSpeedGraph(graph, samples, { width: 320, height: 44, label: `${title.textContent} 下载速度` });
+    extras.push(graph);
+  }
+  const segments = segmentsFromMessage(job.message);
+  if (segments) {
+    const map = document.createElement("div");
+    map.className = "job-segments";
+    renderSegmentMap(map, {
+      done: segments.done,
+      total: segments.total,
+      active: job.status === "downloading" ? Math.min(8, Math.max(0, segments.total - segments.done)) : 0
+    }, { label: `${title.textContent} 分片进度` });
+    extras.push(map);
+  }
+
   const foot = document.createElement("div");
   foot.className = "job-foot";
   const message = document.createElement("span");
@@ -355,22 +441,91 @@ function createJobRow(job) {
   const speed = document.createElement("span");
   speed.className = "job-speed";
   speed.textContent = !isTerminal(job.status) && Number(job.speed) > 0 ? `${humanBytes(job.speed)}/s` : byteSummary(job);
+  const remaining = estimateRemaining(job);
+  if (remaining) {
+    const eta = document.createElement("span");
+    eta.className = "job-eta";
+    eta.textContent = remaining;
+    speed.append(eta);
+  }
   foot.append(message, speed);
   if (!isTerminal(job.status)) {
-    const cancel = document.createElement("button");
-    cancel.className = "cancel-button";
-    cancel.dataset.jobId = job.jobId;
-    cancel.type = "button";
-    cancel.textContent = "取消";
-    cancel.setAttribute("aria-label", `取消 ${title.textContent}`);
-    cancel.addEventListener("click", () => void runUiAction(cancel, `sidepanel:cancel-job:${job.jobId}`, async () => {
-      await call({ type: "CANCEL_JOB", jobId: job.jobId });
-      showToast("已发送取消请求", "success");
-    }, { pendingText: "", successText: "✓" }));
-    foot.append(cancel);
+    if (job.status === "paused" || job.status === "pausing") row.classList.add("paused");
+    foot.append(createTransferControls(job, handleTransferControl));
   }
-  row.append(head, progress, foot);
+  row.append(head, progress, ...extras, foot);
   return row;
+}
+
+async function handleTransferControl(action, job, button) {
+  const key = `sidepanel:transfer:${action}:${job.jobId}`;
+  if (action === "pause") {
+    await runUiAction(button, key, async () => {
+      await call({ type: "PAUSE_JOB", jobId: job.jobId });
+      showToast("已发送暂停请求", "success");
+    }, { pendingText: "", successText: "✓" });
+    return;
+  }
+  if (action === "resume") {
+    await runUiAction(button, key, async () => {
+      await call({ type: "RESUME_JOB", jobId: job.jobId });
+      showToast("已继续下载", "success");
+    }, { pendingText: "", successText: "✓" });
+    return;
+  }
+  await runUiAction(button, key, async () => {
+    await call({ type: "CANCEL_JOB", jobId: job.jobId });
+    showToast("已发送取消请求", "success");
+  }, { pendingText: "", successText: "✓" });
+}
+
+function createEndedRow(job) {
+  const row = document.createElement("li");
+  row.className = `job-row ended ${job.status}`;
+  const main = document.createElement("div");
+  main.className = "job-main";
+  const head = document.createElement("div");
+  head.className = "job-head";
+  const title = document.createElement("h3");
+  title.className = "job-title";
+  title.textContent = job.filename || "media";
+  title.title = title.textContent;
+  const stateText = document.createElement("span");
+  stateText.className = `job-state ${job.status === "completed" ? "done" : job.status}`;
+  stateText.textContent = statusLabel(job.status);
+  head.append(title, stateText);
+  const meta = document.createElement("p");
+  meta.className = "job-meta-line";
+  meta.textContent = finishedMetaParts(job, { message: job.status === "failed" ? friendlyJobMessage(job) : "" }).join(" · ");
+  meta.title = meta.textContent;
+  main.append(head, meta, createJobActions(job, handleJobAction));
+  row.append(createJobTile(job, { size: 46 }), main);
+  return row;
+}
+
+async function handleJobAction(action, job, button) {
+  const key = `sidepanel:job:${action}:${job.jobId}`;
+  if (action === "remove") {
+    await runUiAction(button, key, async () => {
+      const result = await call({ type: "REMOVE_HISTORY", jobId: job.jobId });
+      state.jobs = result.jobs || state.jobs.filter((item) => item.jobId !== job.jobId);
+      sortJobs();
+      renderJobs();
+    }, { pendingText: "", successDurationMs: 0 });
+    return;
+  }
+  if (action === "retry") {
+    await runUiAction(button, key, async () => {
+      const result = await call({ type: "RETRY_JOB", jobId: job.jobId });
+      showToast(result.method === "native" ? "本地下载任务已开始" : "浏览器下载已开始", "success");
+    }, { pendingText: "", successText: "✓", successDurationMs: 0 });
+    return;
+  }
+  if (action === "source") {
+    await runUiAction(button, key, () => call({ type: "OPEN_JOB_SOURCE", jobId: job.jobId }), { pendingText: "", successDurationMs: 0 });
+    return;
+  }
+  await runUiAction(button, key, () => runFileAction(job, action, call), { pendingText: "", successText: "✓", successDurationMs: 600 });
 }
 
 function nativeFailureReasonFromMessage(message) {
@@ -401,6 +556,7 @@ function normalizeNativeHostStatus(status = {}) {
 function nativeHostIssueMessage(status = {}) {
   if (status.needsPermission) return "请先允许使用本地下载引擎，再继续操作";
   if (status.failureReason === "api_unavailable") {
+    if (status.selfHealing) return "本地下载引擎正在自动完成连接，FluxCatch 会在几秒内重新加载，之后即可下载";
     return status.recoveryBlocked || status.restartRequired
       ? "Chrome 尚未恢复本地下载引擎连接接口；请完全退出并重新启动 Chrome 后重试"
       : "授权已生效，但 Chrome 的本地下载引擎连接接口尚未就绪；请打开设置页完成自动恢复后重试";
@@ -529,7 +685,7 @@ function showToast(message, type = "success") {
 }
 
 function sortJobs() {
-  state.jobs.sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0));
+  state.jobs.sort(compareJobs);
 }
 
 function announceJobChange(previous, current) {
@@ -548,6 +704,7 @@ function announceJobChange(previous, current) {
 function mediaChips(item) {
   const stream = isStreamKind(item);
   const chips = [{ label: streamTypeLabel(item), className: stream ? "stream" : "" }];
+  if (item.recommended) chips.push({ label: "推荐", className: "quality" });
   if (item.height) chips.push({ label: `${item.height}p`, className: "quality" });
   const grouped = Array.isArray(item.variants) && item.variants.length > 0;
   if (item.trackHints
@@ -692,7 +849,6 @@ function friendlyErrorMessage(message) {
   }
   return raw.replace(/高速下载功能|本地(?:高速|下载)?引擎/g, "本地下载引擎");
 }
-
 // Module scripts normally finish while readyState is "interactive" and before
 // DOMContentLoaded, but the await above can suspend evaluation past the event on
 // slow starts, leaving the late listener registration missed. Initialize now

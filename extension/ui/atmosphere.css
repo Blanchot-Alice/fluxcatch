@@ -1,0 +1,76 @@
+/* FluxCatch atmosphere — the one procedural background component.
+   Applied automatically to <body>, or to any element carrying .fc-atmosphere
+   (used by the preview to pin a theme on a subtree).
+
+   Layer 1 (::before): two to three very large, very soft radial light fields in
+   lilac, pond and apricot, 6–12% opacity, placed to suggest light falling from
+   the upper left. They drift at ≤ 0.5 px/s over a 120 s cycle.
+   Layer 2 (::after): a canvas weave made from a single SVG feTurbulence
+   filter at 5% (light) / 7% (dark) opacity, blended as soft light.
+
+   No raster assets: the only url() here is an inline SVG filter. */
+
+body,
+.fc-atmosphere {
+  position:relative;
+  isolation:isolate;
+  background-color:var(--bg-canvas);
+}
+
+body::before,
+.fc-atmosphere::before {
+  content:"";
+  position:fixed;
+  inset:-12%;
+  z-index:-1;
+  pointer-events:none;
+  background:
+    radial-gradient(ellipse 72% 58% at 16% 8%, var(--light-field-1), transparent 72%),
+    radial-gradient(ellipse 64% 68% at 88% 28%, var(--light-field-2), transparent 72%),
+    radial-gradient(ellipse 82% 56% at 52% 104%, var(--light-field-3), transparent 72%);
+  animation:fc-drift 120s var(--ease-standard) infinite alternate;
+  will-change:transform;
+}
+
+body::after,
+.fc-atmosphere::after {
+  content:"";
+  position:fixed;
+  inset:0;
+  z-index:-1;
+  pointer-events:none;
+  opacity:var(--grain-opacity);
+  mix-blend-mode:soft-light;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='g' x='0' y='0' width='100%25' height='100%25'><feTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='2' stitchTiles='stitch' seed='7'/><feColorMatrix type='saturate' values='0'/></filter><rect width='100%25' height='100%25' filter='url(%23g)'/></svg>");
+  background-size:180px 180px;
+}
+
+/* A scoped atmosphere clips to its own box instead of the viewport. */
+.fc-atmosphere {
+  overflow:hidden;
+}
+
+.fc-atmosphere::before,
+.fc-atmosphere::after {
+  position:absolute;
+}
+
+@keyframes fc-drift {
+  from { transform:translate3d(0,0,0); }
+  to { transform:translate3d(-56px,28px,0); }
+}
+
+/* Still water: no drift when motion is reduced, and none while a preview
+   explicitly asks for it. */
+@media (prefers-reduced-motion: reduce) {
+  body::before,
+  .fc-atmosphere::before {
+    animation:none;
+  }
+}
+
+[data-motion="reduced"] body::before,
+[data-motion="reduced"] .fc-atmosphere::before,
+[data-motion="reduced"].fc-atmosphere::before {
+  animation:none;
+}

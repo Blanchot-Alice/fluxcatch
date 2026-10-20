@@ -192,6 +192,16 @@ function hostMatchesSuffix(hostname, suffix) {
   return Boolean(expected) && (hostname === expected || hostname.endsWith(`.${expected}`));
 }
 
+function registrableDomainOf(value) {
+  try {
+    const host = value.includes("://") ? new URL(value).hostname : value;
+    const labels = String(host).toLowerCase().split(".").filter(Boolean);
+    return labels.length >= 2 ? labels.slice(-2).join(".") : "";
+  } catch {
+    return "";
+  }
+}
+
 function normalizedOrigin(value) {
   try {
     const url = new URL(value);
@@ -264,8 +274,12 @@ export function evaluateNetworkRequest({
       ...observedMediaUrls.map(normalizedOrigin),
       ...allowedThumbnailOrigins.map(normalizedOrigin)
     ].filter(Boolean));
+    // Sites serve their own posters from sibling CDNs (assets-cdn.example.tv
+    // for example.tv); an exact-origin match would reject the site's own
+    // cover art, so the registrable domain of an allowlisted origin counts.
+    const allowedDomains = new Set([...allowedOrigins].map(registrableDomainOf).filter(Boolean));
     const adapterAllowed = adapterImageHosts.some((suffix) => hostMatchesSuffix(url.hostname.toLowerCase(), suffix));
-    if (!allowedOrigins.has(url.origin) && !adapterAllowed) {
+    if (!allowedOrigins.has(url.origin) && !allowedDomains.has(registrableDomainOf(url.hostname)) && !adapterAllowed) {
       return { allowed: false, reason: "thumbnail_origin_not_allowlisted", url: url.href };
     }
   }

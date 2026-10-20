@@ -1,53 +1,180 @@
-/* FluxCatch shared design tokens — Monet morning-mist lily pond. */
+/* FluxCatch design tokens — the Monet translation (see DESIGN.md).
+   Two hours of one scene: "Morning" (light) and "Dusk" (dark). Colour belongs
+   to state and moment, never to a brand swatch. No pure black, no pure white,
+   cool violet shadows, warm cream ground.
+
+   Every historical variable name (--canvas, --ink, --primary …) is kept as an
+   alias so page styles and the designer keep working; the Monet names are the
+   source of truth. Values the static tests measure (--muted, --surface,
+   --primary-action, --on-primary, --success-action, --on-success,
+   --control-border) are written as literal hex in every theme block. */
+
+@font-face {
+  font-family: "Fraunces";
+  font-style: normal;
+  font-weight: 300 700;
+  font-display: swap;
+  src: url("fonts/Fraunces-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+/* UI face: IBM Plex Sans, variable in weight and width. Rendered at 94%
+   width and 400/500 only, so Latin text stays quiet beside the serif. */
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-weight: 100 700;
+  font-stretch: 85% 100%;
+  font-display: swap;
+  src: url("fonts/IBMPlexSans-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-weight: 100 700;
+  font-stretch: 85% 100%;
+  font-display: swap;
+  src: url("fonts/IBMPlexSans-latin-ext.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+/* ===================== Morning (light) ===================== */
 :root {
   color-scheme: light;
 
-  --canvas:#F1F2F2;
-  --surface:#FCFCFB;
-  --surfaceSubtle:#E7EAE9;
-  --ink:#343B39;
-  --muted:#626E6A;
-  --border:#CCD2CF;
-  --control-border:#89948F;
+  /* Ground and surfaces: primed cream canvas, tonal steps instead of lines. */
+  --bg-canvas:#F4F0E9;
+  --surface:#FAF7F2;
+  --surface-raised:#FDFBF8;
+  --surface-cool:#EAEFF2;
+  --surface-sunken:#ECE6DE;
 
-  --primary:#5E8F84;
-  --primary-strong:#466F66;
-  --primary-action:#466F66;
-  --primaryHover:#365A52;
-  --on-primary:#FFFFFF;
-  --accent:#C78FA0;
-  --accent-strong:#925365;
-  --lavender:#8E82AD;
-  --lavender-strong:#695D8B;
-  --success:#5E8F6E;
-  --success-strong:#447151;
-  --success-action:#447151;
-  --on-success:#FFFFFF;
-  --warning:#C69A5B;
-  --warning-strong:#7B5926;
-  --danger:#BC6A5C;
-  --danger-strong:#914D42;
-  --mist-blue:#7FA8BC;
-  --mist-strong:#486D80;
-  --rise-gold:#D9B87A;
-  --rise-pink:#D3A5B4;
+  /* Text: deep indigo-violet is the darkest tone in the app. */
+  --text-primary:#2B2E4A;
+  --text-secondary:#4F5476;
+  --text-muted:#5F6382;
+  --text-on-accent:#FAF7F2;
 
-  --primary-tint:rgba(94,143,132,.12);
-  --accent-tint:rgba(199,143,160,.15);
-  --warning-tint:rgba(198,154,91,.15);
-  --danger-tint:rgba(188,106,92,.12);
-  --lavender-tint:rgba(142,130,173,.12);
-  --mist-tint:rgba(127,168,188,.13);
+  /* Hues, each from a canvas family; "ink" variants are the same hue carried
+     dark enough to read as small text (≥ 4.5:1 on every surface). */
+  --pond:#4E7FA2;
+  --pond-soft:#7FA6C4;
+  --pond-deep:#3E6E92;
+  --pond-ink:#3B6A8D;
+  --lilac:#9A8CC4;
+  --lilac-ink:#5F5490;
+  --celadon:#8FB8A3;
+  --celadon-deep:#37735A;
+  --celadon-ink:#2F6A52;
+  --ochre:#D9A24F;
+  --ochre-ink:#8A5E12;
+  --apricot:#E7B089;
+  --rose:#E3AFB4;
+  --rose-ink:#9E4652;
+  --vermilion:#D8603B;
+  --vermilion-ink:#AF421D;
+  --harbour:#8A9BAE;
+  --harbour-ink:#57667B;
 
-  --font:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
-  --mono:ui-monospace,SFMono-Regular,Consolas,Menlo,monospace;
+  /* Light on water: shadows are violet, lines are translucent indigo. */
+  --shadow-ambient:rgba(78,70,130,.12);
+  --shadow-ambient-float:rgba(78,70,130,.19);
+  --shadow-focus:rgba(78,127,162,.35);
+  --line-soft:rgba(43,46,74,.10);
+  --line-strong:rgba(43,46,74,.18);
+  --control-border:#768498;
+  --control-border-mix:62%;
+
+  /* Tints: a hue laid thinly over the surface, for chips, hover and selection. */
+  --pond-tint:rgba(127,166,196,.16);
+  --lilac-tint:rgba(154,140,196,.20);
+  --celadon-tint:rgba(143,184,163,.24);
+  --ochre-tint:rgba(217,162,79,.20);
+  --rose-tint:rgba(227,175,180,.28);
+  --vermilion-tint:rgba(216,96,59,.14);
+  --harbour-tint:rgba(138,155,174,.18);
+  --selection:rgba(127,166,196,.14);
+  --hover-halo:rgba(154,140,196,.24);
+
+  /* Procedural atmosphere (see atmosphere.css). */
+  --light-field-1:rgba(154,140,196,.12);
+  --light-field-2:rgba(127,166,196,.10);
+  --light-field-3:rgba(231,176,137,.11);
+  --grain-opacity:.05;
+
+  /* Historical aliases ------------------------------------------------- */
+  --canvas:var(--bg-canvas);
+  --surfaceSubtle:var(--surface-cool);
+  --ink:var(--text-primary);
+  --muted:#5F6382;
+  --border:var(--line-strong);
+  --primary:#4E7FA2;
+  --primary-strong:var(--pond-ink);
+  --primary-action:#3E6E92;
+  --primaryHover:#355F80;
+  --on-primary:#FAF7F2;
+  --accent:var(--rose-ink);
+  --accent-strong:var(--rose-ink);
+  --lavender:var(--lilac);
+  --lavender-strong:var(--lilac-ink);
+  --success:var(--celadon);
+  --success-strong:var(--celadon-ink);
+  --success-action:#37735A;
+  --on-success:#FAF7F2;
+  --warning:var(--ochre);
+  --warning-strong:var(--ochre-ink);
+  --danger:var(--vermilion);
+  --danger-strong:var(--vermilion-ink);
+  --mist-blue:var(--pond-soft);
+  --mist-strong:var(--pond-ink);
+  --rise-gold:var(--ochre);
+  --rise-pink:var(--rose);
+  --primary-tint:var(--pond-tint);
+  --accent-tint:var(--rose-tint);
+  --warning-tint:var(--ochre-tint);
+  --danger-tint:var(--vermilion-tint);
+  --lavender-tint:var(--lilac-tint);
+  --mist-tint:var(--pond-tint);
+  --success-tint:var(--celadon-tint);
+  --fill:rgba(78,70,130,.08);
+  --fill-strong:rgba(78,70,130,.14);
+  --fill-soft:rgba(78,70,130,.05);
+  --separator:var(--line-soft);
+  --separator-strong:var(--line-strong);
+  --material:rgba(250,247,242,.76);
+  --material-surface:rgba(250,247,242,.82);
+  --scrim:rgba(28,33,64,.42);
+  --blur:blur(16px) saturate(120%);
+
+  /* Typography: soft humanist serif for titles, quiet sans for UI and data. */
+  --font:"IBM Plex Sans","Inter",-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Segoe UI","Microsoft YaHei",sans-serif;
+  --font-display:"Fraunces","Source Serif 4","New York","Songti SC","Noto Serif CJK SC",Georgia,serif;
+  --font-stretch:94%;
+  --weight-display:400;
+  --weight-display-strong:450;
+  --weight-ui:400;
+  --weight-ui-strong:500;
+  --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,monospace;
+  --text-11:11px;
+  --text-12:12px;
+  --text-13:13px;
+  --text-15:15px;
+  --text-18:18px;
+  --text-24:24px;
+  --text-32:32px;
   --text-page-title:24px;
-  --text-section-title:15px;
+  --text-section-title:18px;
   --text-label:13px;
-  --text-control:14px;
+  --text-control:13px;
   --text-body:13px;
   --text-help:12px;
+  --leading-body:1.5;
+  --tracking-title:-.015em;
+  --tracking-tight:-.005em;
 
+  /* Space, shape, elevation. */
   --space-1:4px;
   --space-2:8px;
   --space-3:12px;
@@ -55,105 +182,285 @@
   --space-6:24px;
   --space-8:32px;
   --space-12:48px;
+  --row-pad-block:12px;
+  --row-pad-inline:14px;
+  --list-gap:2px;
+  --stack-gap:16px;
 
-  --r-control:9px;
-  --r-row:13px;
-  --r-panel:18px;
+  --r-control:6px;
+  --r-row:10px;
+  --r-panel:14px;
+  --r-pill:999px;
   --ui-section-gap:16px;
   --ui-first-second-gap:12px;
   --ui-content-width:720px;
   --ui-font-scale:1;
-  --ui-radius:18px;
-  --shadow-sm:0 1px 3px rgba(51,74,66,.06);
-  --shadow-md:0 10px 28px rgba(51,74,66,.10);
-  --focus-ring:0 0 0 3px var(--primary-tint);
+  --ui-radius:14px;
 
-  --control-height:44px;
-  --action-height:44px;
-  --action-height-secondary:40px;
-  --target-min:40px;
-  --motion-fast:140ms;
-  --motion-base:160ms;
-  --motion-slow:250ms;
-  --ease-standard:cubic-bezier(.2,.8,.2,1);
+  --shadow-sm:0 2px 14px rgba(78,70,130,.08);
+  --shadow-card:0 4px 28px var(--shadow-ambient);
+  --shadow-md:0 4px 28px var(--shadow-ambient);
+  --shadow-float:0 8px 44px var(--shadow-ambient-float);
+  --shadow-segment:0 2px 12px var(--shadow-ambient);
+  --focus-ring:0 0 0 2px rgba(78,127,162,.6),0 0 0 6px var(--shadow-focus);
+
+  --control-height:40px;
+  --action-height:40px;
+  --action-height-secondary:36px;
+  --target-min:36px;
+
+  /* Motion: slow and water-like, no overshoot. */
+  --motion-fast:220ms;
+  --motion-base:220ms;
+  --motion-slow:360ms;
+  --motion-state:600ms;
+  --motion-theme:800ms;
+  --ease-standard:cubic-bezier(.22,.61,.36,1);
+  --ease-spring:cubic-bezier(.22,.61,.36,1);
+
+  /* A day passing over a haystack: progress warms as it fills. */
+  --progress-gradient:linear-gradient(90deg,var(--lilac) 0%,var(--pond-soft) 45%,var(--ochre) 100%);
 }
 
+/* Explicit light scope for previews that pin a theme on a subtree. */
+[data-theme="light"] {
+  color-scheme: light;
+  --bg-canvas:#F4F0E9;
+  --surface:#FAF7F2;
+  --surface-raised:#FDFBF8;
+  --surface-cool:#EAEFF2;
+  --surface-sunken:#ECE6DE;
+  --text-primary:#2B2E4A;
+  --text-secondary:#4F5476;
+  --text-muted:#5F6382;
+  --text-on-accent:#FAF7F2;
+  --pond:#4E7FA2;
+  --pond-soft:#7FA6C4;
+  --pond-deep:#3E6E92;
+  --pond-ink:#3B6A8D;
+  --lilac:#9A8CC4;
+  --lilac-ink:#5F5490;
+  --celadon:#8FB8A3;
+  --celadon-deep:#37735A;
+  --celadon-ink:#2F6A52;
+  --ochre:#D9A24F;
+  --ochre-ink:#8A5E12;
+  --apricot:#E7B089;
+  --rose:#E3AFB4;
+  --rose-ink:#9E4652;
+  --vermilion:#D8603B;
+  --vermilion-ink:#AF421D;
+  --harbour:#8A9BAE;
+  --harbour-ink:#57667B;
+  --shadow-ambient:rgba(78,70,130,.12);
+  --shadow-ambient-float:rgba(78,70,130,.19);
+  --shadow-focus:rgba(78,127,162,.35);
+  --line-soft:rgba(43,46,74,.10);
+  --line-strong:rgba(43,46,74,.18);
+  --control-border:#768498;
+  --control-border-mix:62%;
+  --pond-tint:rgba(127,166,196,.16);
+  --lilac-tint:rgba(154,140,196,.20);
+  --celadon-tint:rgba(143,184,163,.24);
+  --ochre-tint:rgba(217,162,79,.20);
+  --rose-tint:rgba(227,175,180,.28);
+  --vermilion-tint:rgba(216,96,59,.14);
+  --harbour-tint:rgba(138,155,174,.18);
+  --selection:rgba(127,166,196,.14);
+  --hover-halo:rgba(154,140,196,.24);
+  --light-field-1:rgba(154,140,196,.12);
+  --light-field-2:rgba(127,166,196,.10);
+  --light-field-3:rgba(231,176,137,.11);
+  --grain-opacity:.05;
+  --muted:#5F6382;
+  --primary:#4E7FA2;
+  --primary-action:#3E6E92;
+  --primaryHover:#355F80;
+  --on-primary:#FAF7F2;
+  --success-action:#37735A;
+  --on-success:#FAF7F2;
+  --fill:rgba(78,70,130,.08);
+  --fill-strong:rgba(78,70,130,.14);
+  --fill-soft:rgba(78,70,130,.05);
+  --material:rgba(250,247,242,.76);
+  --material-surface:rgba(250,247,242,.82);
+  --scrim:rgba(28,33,64,.42);
+  --shadow-sm:0 2px 14px rgba(78,70,130,.08);
+  --focus-ring:0 0 0 2px rgba(78,127,162,.6),0 0 0 6px var(--shadow-focus);
+}
+
+/* ===================== Dusk (dark) ===================== */
 [data-theme="dark"] {
   color-scheme: dark;
-  --canvas:#141816;
-  --surface:#1C211F;
-  --surfaceSubtle:#272C29;
-  --ink:#E9EBE7;
-  --muted:#A9B2AD;
-  --border:#3D4742;
-  --control-border:#69756F;
-  --primary:#8CBDB0;
-  --primary-strong:#9AC8BC;
-  --primary-action:#4D796F;
-  --primaryHover:#527F75;
-  --accent:#D3A5B4;
-  --accent-strong:#E0B3C2;
-  --lavender:#B4A7D0;
-  --lavender-strong:#C0B4DB;
-  --success:#86B08C;
-  --success-strong:#9AC39F;
-  --success-action:#527B5A;
-  --on-success:#FFFFFF;
-  --warning:#D4B072;
-  --warning-strong:#E1C283;
-  --danger:#CE8272;
-  --danger-strong:#DF9586;
-  --mist-blue:#9CC3D6;
-  --mist-strong:#B0D2E1;
-  --rise-gold:#E2C68A;
-  --rise-pink:#E0B3C2;
-  --primary-tint:rgba(140,189,176,.13);
-  --accent-tint:rgba(211,165,180,.15);
-  --warning-tint:rgba(212,176,114,.14);
-  --danger-tint:rgba(206,130,114,.13);
-  --lavender-tint:rgba(180,167,208,.13);
-  --mist-tint:rgba(156,195,214,.14);
-  --shadow-sm:0 1px 3px rgba(0,0,0,.28);
-  --shadow-md:0 10px 28px rgba(0,0,0,.38);
+  --bg-canvas:#1C2140;
+  --surface:#252B4D;
+  --surface-raised:#2E355A;
+  --surface-cool:#2A3356;
+  --surface-sunken:#181C36;
+  --text-primary:#EFE9E0;
+  --text-secondary:#B9B6CC;
+  --text-muted:#9A9FBA;
+  --text-on-accent:#1C2140;
+  --pond:#7FB0D0;
+  --pond-soft:#5E8DAE;
+  --pond-deep:#7FB0D0;
+  --pond-ink:#8DBAD6;
+  --lilac:#B5A7DE;
+  --lilac-ink:#B5A7DE;
+  --celadon:#9FCDB5;
+  --celadon-deep:#9FCDB5;
+  --celadon-ink:#9FCDB5;
+  --ochre:#E6B86A;
+  --ochre-ink:#E6B86A;
+  --apricot:#EDBFA0;
+  --rose:#E9BFC3;
+  --rose-ink:#E9BFC3;
+  --vermilion:#E8785A;
+  --vermilion-ink:#EC8468;
+  --harbour:#6F7E95;
+  --harbour-ink:#97A4B8;
+  --shadow-ambient:rgba(10,12,32,.45);
+  --shadow-ambient-float:rgba(10,12,32,.62);
+  --shadow-focus:rgba(127,176,208,.35);
+  --line-soft:rgba(239,233,224,.08);
+  --line-strong:rgba(239,233,224,.16);
+  --control-border:#7C8AA2;
+  --control-border-mix:62%;
+  --pond-tint:rgba(127,176,208,.18);
+  --lilac-tint:rgba(181,167,222,.22);
+  --celadon-tint:rgba(159,205,181,.22);
+  --ochre-tint:rgba(230,184,106,.20);
+  --rose-tint:rgba(233,191,195,.22);
+  --vermilion-tint:rgba(232,120,90,.18);
+  --harbour-tint:rgba(111,126,149,.24);
+  --selection:rgba(127,176,208,.16);
+  --hover-halo:rgba(181,167,222,.22);
+  --light-field-1:rgba(181,167,222,.10);
+  --light-field-2:rgba(127,176,208,.10);
+  --light-field-3:rgba(237,191,160,.07);
+  --grain-opacity:.07;
+  --muted:#9A9FBA;
+  --primary:#7FB0D0;
+  --primary-action:#7FB0D0;
+  --primaryHover:#95C0DA;
+  --on-primary:#1C2140;
+  --success-action:#9FCDB5;
+  --on-success:#1C2140;
+  --fill:rgba(239,233,224,.07);
+  --fill-strong:rgba(239,233,224,.12);
+  --fill-soft:rgba(239,233,224,.045);
+  --material:rgba(37,43,77,.76);
+  --material-surface:rgba(46,53,90,.82);
+  --scrim:rgba(10,12,32,.55);
+  --shadow-sm:0 2px 14px rgba(10,12,32,.3);
+  --focus-ring:0 0 0 2px rgba(127,176,208,.6),0 0 0 6px var(--shadow-focus);
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     color-scheme: dark;
-    --canvas:#141816;
-    --surface:#1C211F;
-    --surfaceSubtle:#272C29;
-    --ink:#E9EBE7;
-    --muted:#A9B2AD;
-    --border:#3D4742;
-    --control-border:#69756F;
-    --primary:#8CBDB0;
-    --primary-strong:#9AC8BC;
-    --primary-action:#4D796F;
-    --primaryHover:#527F75;
-    --accent:#D3A5B4;
-    --accent-strong:#E0B3C2;
-    --lavender:#B4A7D0;
-    --lavender-strong:#C0B4DB;
-    --success:#86B08C;
-    --success-strong:#9AC39F;
-    --success-action:#527B5A;
-    --on-success:#FFFFFF;
-    --warning:#D4B072;
-    --warning-strong:#E1C283;
-    --danger:#CE8272;
-    --danger-strong:#DF9586;
-    --mist-blue:#9CC3D6;
-    --mist-strong:#B0D2E1;
-    --rise-gold:#E2C68A;
-    --rise-pink:#E0B3C2;
-    --primary-tint:rgba(140,189,176,.13);
-    --accent-tint:rgba(211,165,180,.15);
-    --warning-tint:rgba(212,176,114,.14);
-    --danger-tint:rgba(206,130,114,.13);
-    --lavender-tint:rgba(180,167,208,.13);
-    --mist-tint:rgba(156,195,214,.14);
-    --shadow-sm:0 1px 3px rgba(0,0,0,.28);
-    --shadow-md:0 10px 28px rgba(0,0,0,.38);
+    --bg-canvas:#1C2140;
+    --surface:#252B4D;
+    --surface-raised:#2E355A;
+    --surface-cool:#2A3356;
+    --surface-sunken:#181C36;
+    --text-primary:#EFE9E0;
+    --text-secondary:#B9B6CC;
+    --text-muted:#9A9FBA;
+    --text-on-accent:#1C2140;
+    --pond:#7FB0D0;
+    --pond-soft:#5E8DAE;
+    --pond-deep:#7FB0D0;
+    --pond-ink:#8DBAD6;
+    --lilac:#B5A7DE;
+    --lilac-ink:#B5A7DE;
+    --celadon:#9FCDB5;
+    --celadon-deep:#9FCDB5;
+    --celadon-ink:#9FCDB5;
+    --ochre:#E6B86A;
+    --ochre-ink:#E6B86A;
+    --apricot:#EDBFA0;
+    --rose:#E9BFC3;
+    --rose-ink:#E9BFC3;
+    --vermilion:#E8785A;
+    --vermilion-ink:#EC8468;
+    --harbour:#6F7E95;
+    --harbour-ink:#97A4B8;
+    --shadow-ambient:rgba(10,12,32,.45);
+    --shadow-ambient-float:rgba(10,12,32,.62);
+    --shadow-focus:rgba(127,176,208,.35);
+    --line-soft:rgba(239,233,224,.08);
+    --line-strong:rgba(239,233,224,.16);
+    --control-border:#7C8AA2;
+  --control-border-mix:62%;
+    --pond-tint:rgba(127,176,208,.18);
+    --lilac-tint:rgba(181,167,222,.22);
+    --celadon-tint:rgba(159,205,181,.22);
+    --ochre-tint:rgba(230,184,106,.20);
+    --rose-tint:rgba(233,191,195,.22);
+    --vermilion-tint:rgba(232,120,90,.18);
+    --harbour-tint:rgba(111,126,149,.24);
+    --selection:rgba(127,176,208,.16);
+    --hover-halo:rgba(181,167,222,.22);
+    --light-field-1:rgba(181,167,222,.10);
+    --light-field-2:rgba(127,176,208,.10);
+    --light-field-3:rgba(237,191,160,.07);
+    --grain-opacity:.07;
+    --muted:#9A9FBA;
+    --primary:#7FB0D0;
+    --primary-action:#7FB0D0;
+    --primaryHover:#95C0DA;
+    --on-primary:#1C2140;
+    --success-action:#9FCDB5;
+    --on-success:#1C2140;
+    --fill:rgba(239,233,224,.07);
+    --fill-strong:rgba(239,233,224,.12);
+    --fill-soft:rgba(239,233,224,.045);
+    --material:rgba(37,43,77,.76);
+    --material-surface:rgba(46,53,90,.82);
+    --scrim:rgba(10,12,32,.55);
+    --shadow-sm:0 2px 14px rgba(10,12,32,.3);
+    --focus-ring:0 0 0 2px rgba(127,176,208,.6),0 0 0 6px var(--shadow-focus);
+  }
+}
+
+/* Density: comfortable by default; compact tightens rows and stacks only. */
+[data-density="compact"] {
+  --row-pad-block:7px;
+  --row-pad-inline:12px;
+  --list-gap:0px;
+  --stack-gap:12px;
+  --ui-section-gap:12px;
+}
+
+/* More contrast: lines step up to 25% and text moves one step darker/lighter. */
+@media (prefers-contrast: more) {
+  :root,
+  [data-theme="light"] {
+    --line-soft:rgba(43,46,74,.25);
+    --line-strong:rgba(43,46,74,.34);
+    --text-secondary:#3A3F62;
+    --text-muted:#4A4F70;
+    --muted:#4A4F70;
+    --control-border-mix:100%;
+  }
+  [data-theme="dark"] {
+    --line-soft:rgba(239,233,224,.25);
+    --line-strong:rgba(239,233,224,.34);
+    --text-secondary:#D3D0E0;
+    --text-muted:#B4B8CC;
+    --muted:#B4B8CC;
+    --control-border-mix:100%;
+  }
+}
+
+@media (prefers-contrast: more) and (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --line-soft:rgba(239,233,224,.25);
+    --line-strong:rgba(239,233,224,.34);
+    --text-secondary:#D3D0E0;
+    --text-muted:#B4B8CC;
+    --muted:#B4B8CC;
+    --control-border-mix:100%;
   }
 }

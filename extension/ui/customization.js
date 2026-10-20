@@ -5,8 +5,8 @@ export const DEFAULT_UI_CUSTOMIZATION = Object.freeze({
   sectionGap: 16,
   contentWidth: 720,
   fontScale: 1,
-  radius: 18,
-  accentColor: "#466F66",
+  radius: 14,
+  accentColor: "#3E6E92",
   pageTitle: "FluxCatch 设置",
   pageDescription: "调整下载体验，并确认当前构建真正可用的能力。",
   runtimeTitle: "运行身份与能力概览",
@@ -125,10 +125,13 @@ function contrastRatio(left, right) {
   return (values[0] + 0.05) / (values[1] + 0.05);
 }
 
+// Text on a chosen accent is the cream or the indigo of the palette, never
+// pure white or pure black (DESIGN.md §1.2).
+const TEXT_ON_ACCENT_LIGHT = "#FAF7F2";
+const TEXT_ON_ACCENT_DARK = "#2B2E4A";
+
 function textOnAccent(accent) {
-  const light = "#FFFFFF";
-  const dark = "#000000";
-  return contrastRatio(accent, light) >= contrastRatio(accent, dark) ? light : dark;
+  return contrastRatio(accent, TEXT_ON_ACCENT_LIGHT) >= contrastRatio(accent, TEXT_ON_ACCENT_DARK) ? TEXT_ON_ACCENT_LIGHT : TEXT_ON_ACCENT_DARK;
 }
 
 function mixHex(left, right, rightWeight) {
@@ -157,14 +160,19 @@ export function applyUiCustomization(value, { root = globalThis.document?.docume
     style.setProperty("--ui-content-width", `${customization.contentWidth}px`);
     style.setProperty("--ui-font-scale", String(customization.fontScale));
     style.setProperty("--ui-radius", `${customization.radius}px`);
-    style.setProperty("--r-control", `${Math.max(6, Math.round(customization.radius * 0.5))}px`);
+    style.setProperty("--r-control", `${Math.max(6, Math.round(customization.radius * 0.45))}px`);
     style.setProperty("--r-row", `${Math.max(8, Math.round(customization.radius * 0.72))}px`);
     style.setProperty("--r-panel", `${customization.radius}px`);
     style.setProperty("--primary-action", accent);
     style.setProperty("--primary", accent);
-    style.setProperty("--primaryHover", mixHex(accent, onAccent === "#FFFFFF" ? "#000000" : "#FFFFFF", 0.16));
+    style.setProperty("--primaryHover", mixHex(accent, onAccent === TEXT_ON_ACCENT_LIGHT ? TEXT_ON_ACCENT_DARK : TEXT_ON_ACCENT_LIGHT, 0.16));
     style.setProperty("--primary-tint", `rgba(${red},${green},${blue},.14)`);
     style.setProperty("--on-primary", onAccent);
+    style.setProperty("--pond", accent);
+    style.setProperty("--pond-deep", accent);
+    style.setProperty("--pond-ink", accent);
+    style.setProperty("--pond-tint", `rgba(${red},${green},${blue},.16)`);
+    style.setProperty("--text-on-accent", onAccent);
   }
   updateCopy(copyRoot, customization);
   return customization;

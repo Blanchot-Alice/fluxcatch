@@ -14,11 +14,13 @@ import {
 const EXTENSION = new URL("../extension/", import.meta.url);
 const CJK = /[\u4e00-\u9fff]/;
 
-const HTML_FILES = ["popup/popup.html", "sidepanel/sidepanel.html", "options/options.html"];
+const HTML_FILES = ["popup/popup.html", "sidepanel/sidepanel.html", "options/options.html", "downloads/downloads.html"];
 const JS_FILES = [
   "popup/popup.js",
   "sidepanel/sidepanel.js",
   "options/options.js",
+  "downloads/downloads.js",
+  "ui/job-rows.js",
   "background.js",
   "ui/customization.js",
   "ui/interactions.js",

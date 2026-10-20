@@ -18,6 +18,7 @@ import {
 const VALID_STATE = Object.freeze({
   concurrentFragments: 8,
   concurrentRanges: 8,
+  concurrentJobs: 3,
   outputContainer: "mp4",
   minimumKiB: 500,
   filenameTemplate: "{title}",
@@ -196,6 +197,7 @@ test("validateSettings enforces integer numeric boundaries", () => {
   for (const [field, min, max] of [
     ["concurrentFragments", 1, 24],
     ["concurrentRanges", 1, 24],
+    ["concurrentJobs", 1, 6],
     ["minimumKiB", 0, 102400]
   ]) {
     assert.equal(validateSettings({ ...VALID_STATE, [field]: min }).valid, true, `${field} accepts minimum`);

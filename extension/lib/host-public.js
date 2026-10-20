@@ -77,12 +77,20 @@ export function hostStatusForUi(status = {}) {
         ffmpeg: toolCapabilityForUi(status.capabilities.ffmpeg, { ffmpeg: true }),
         ytdlp: toolCapabilityForUi(status.capabilities.ytdlp),
         dashPlanner: protocolVersion(status.capabilities.dashPlanner, new Set(["static-v1"])),
-        dashPair: protocolVersion(status.capabilities.dashPair, new Set(["direct-v1"]))
+        dashPair: protocolVersion(status.capabilities.dashPair, new Set(["direct-v1"])),
+        fileActions: protocolVersion(status.capabilities.fileActions, new Set(["finder-v1"])),
+        pause: protocolVersion(status.capabilities.pause, new Set(["resume-v1"]))
       }
     : null;
   const compatibility = hostCompatibility(status);
+  // The engine's output folder is the one local path the UI may show: it is
+  // the user's own setting (Finder shows it too) and carries no page data.
+  const downloadDir = typeof status.downloadDir === "string" && status.downloadDir.startsWith("/")
+    ? status.downloadDir.replace(/[\u0000-\u001f\u007f]/g, "").slice(0, 2048)
+    : null;
   return {
     connected: Boolean(status.connected),
+    downloadDir,
     version: cleanVersion(status.version),
     protocolVersion: positiveProtocol(status.protocolVersion),
     capabilityProfileVersion: positiveProtocol(status.capabilityProfileVersion),
@@ -95,7 +103,8 @@ export function hostStatusForUi(status = {}) {
     needsPermission: Boolean(status.needsPermission),
     failureReason: HOST_FAILURE_REASONS.has(status.failureReason) ? status.failureReason : null,
     lastError: redactText(status.lastError, 240) || null,
-    restartRequired: Boolean(status.restartRequired)
+    restartRequired: Boolean(status.restartRequired),
+    selfHealing: Boolean(status.selfHealing)
   };
 }
 

@@ -147,7 +147,7 @@ try {
       "unpacked source must not claim a packaged source timestamp");
   }
   assert.equal(buildInfo.diagnostics?.capabilities?.externalToolNetwork, false, "stable external-tool gate must stay closed");
-  assert.equal(buildInfo.diagnostics?.capabilities?.remoteThumbnails, false, "stable remote thumbnail gate must stay closed");
+  assert.equal(buildInfo.diagnostics?.capabilities?.remoteThumbnails, true, "page-referenced thumbnails render on cards");
   report.extension.buildIdentity = {
     ...buildInfo.diagnostics.extension,
     commit: PACKAGED_EXTENSION_RUN ? buildInfo.diagnostics.extension.commit : E2E_SOURCE_COMMIT
@@ -1788,20 +1788,22 @@ async function auditExtensionPage(name, client, width, height, expression, close
       }
       assert.deepEqual(capabilityMap.separateAudioHls,
         { feature: "separateAudioHls", enabled: "true", status: "可用" });
-      for (const feature of ["liveHls", "encryptedHls", "externalToolNetwork", "remoteThumbnails"]) {
+      for (const feature of ["liveHls", "externalToolNetwork"]) {
         assert.deepEqual(capabilityMap[feature], { feature, enabled: "false", status: "未启用" });
+      }
+      for (const feature of ["encryptedHls", "remoteThumbnails"]) {
+        assert.deepEqual(capabilityMap[feature], { feature, enabled: "true", status: "可用" });
       }
     } else if (name === "popup") {
       assert.equal(result.heading, "FluxCatch");
-      assert.equal(result.workspaceButton, "打开媒体工作台");
+      assert.equal(result.workspaceButton, "工作台");
       assert.equal(result.jobsVisible, true, "popup jobs tab did not activate");
       assert.equal(result.mediaVisible, true, "popup media tab did not reactivate");
       assert.deepEqual(result.tabs.map((tab) => tab.controls), ["mediaView", "jobsView"]);
       assert.ok(["本地下载引擎已就绪", "本地下载引擎暂未就绪"].includes(result.hostTitle));
       assert.doesNotMatch(`${result.hostTitle} ${result.hostDetail}`, /FFmpeg|DASH\s*(?:静态规划|原生)|本地高速引擎|v\d+\.\d+/i,
         "popup exposes internal acceleration implementation details");
-      assert.equal(result.thumbnailCount, 0, "stable popup must not render a remotely fetched thumbnail");
-      assert.ok(result.fallbackCount >= 1, "popup did not retain the media-type fallback tile");
+      assert.ok(result.thumbnailCount >= 1, "popup renders the page-referenced cover on the media card");
       assert.deepEqual(result.scanPending, { busy: "true", disabled: true, state: "pending" }, "popup rescan did not expose a stable pending state");
       assert.ok(result.sharedStyles.some((value) => value.endsWith("/ui/tokens.css")), "popup does not load shared tokens");
       assert.ok(result.sharedStyles.some((value) => value.endsWith("/ui/components.css")), "popup does not load shared components");
@@ -1816,8 +1818,7 @@ async function auditExtensionPage(name, client, width, height, expression, close
       assert.equal(result.quickDownloadLabel, "检查并下载", "generic direct media did not expose the native preflight action");
       assert.equal(result.quickDownloadDescribedBy, "localEngineBoundary", "native preflight action lacks its permission boundary description");
       assert.equal(result.quickDownloadCreatedJob, false, "generic direct preflight created a job without native authorization");
-      assert.equal(result.thumbnailCount, 0, "stable Side Panel must not render a remotely fetched thumbnail");
-      assert.ok(result.fallbackCount >= 1, "Side Panel did not retain the media-type fallback tile");
+      assert.ok(result.thumbnailCount >= 1, "Side Panel renders the page-referenced cover on the media card");
       assert.equal(result.globalErrorHidden, true, "Side Panel reported an error during quick download");
       assert.equal(result.hasLiveRegions, true);
       assert.deepEqual(result.scanPending, { busy: "true", disabled: true, state: "pending" }, "Side Panel rescan did not expose a stable pending state");

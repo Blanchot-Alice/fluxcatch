@@ -88,6 +88,8 @@ for (const [surface, source] of [["popup", popupSource], ["side panel", sidepane
     assert.match(helpers.nativeHostIssueMessage({ failureReason: "connection_failed" }), /连接失败/);
     assert.match(helpers.nativeHostIssueMessage({ failureReason: "api_unavailable", recoveryBlocked: true }), /完全退出并重新启动 Chrome/);
     assert.match(helpers.nativeHostIssueMessage({ failureReason: "api_unavailable", restartRequired: true }), /完全退出并重新启动 Chrome/);
+    assert.match(helpers.nativeHostIssueMessage({ failureReason: "api_unavailable", selfHealing: true }), /自动完成连接|重新加载/);
+    assert.doesNotMatch(helpers.nativeHostIssueMessage({ failureReason: "api_unavailable", selfHealing: true }), /设置页|完全退出/);
 
     const legacyStatus = helpers.normalizeNativeHostStatus({ connected: false, lastError: "chrome.runtime.connectNative is not a function" });
     assert.equal(legacyStatus.failureReason, "api_unavailable");

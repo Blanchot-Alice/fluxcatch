@@ -1,4 +1,7 @@
-/* Shared, behavior-neutral UI primitives. Page styles own layout and density. */
+/* Shared, behaviour-neutral UI primitives in the Monet idiom (see DESIGN.md):
+   serif titles, quiet sans UI, tonal surfaces, translucent indigo lines,
+   violet ambient shadows, water-slow motion. Page styles own layout and
+   density; everything here stays low specificity. */
 * {
   box-sizing:border-box;
   margin:0;
@@ -11,8 +14,42 @@ body {
 
 body {
   font-family:var(--font);
-  color:var(--ink);
-  background:var(--canvas);
+  font-size:var(--text-body);
+  font-weight:var(--weight-ui);
+  font-stretch:var(--font-stretch);
+  line-height:var(--leading-body);
+  color:var(--text-primary);
+  background-color:var(--bg-canvas);
+  -webkit-font-smoothing:antialiased;
+  text-rendering:optimizeLegibility;
+  font-synthesis:none;
+  font-optical-sizing:auto;
+}
+
+/* Titles: Fraunces at book weight with its optical size left to the browser
+   and the soft axis off, so the serif reads crisp rather than plump. Small
+   headings (≤ 13px) stay in the sans. */
+h1,
+h2,
+.display {
+  font-family:var(--font-display);
+  font-weight:var(--weight-display);
+  letter-spacing:var(--tracking-title);
+  font-stretch:normal;
+  font-variation-settings:"SOFT" 0,"WONK" 0;
+}
+
+h3,
+h4 {
+  letter-spacing:var(--tracking-tight);
+  font-weight:var(--weight-ui-strong);
+}
+
+p,
+li,
+dd,
+small {
+  overflow-wrap:anywhere;
 }
 
 button,
@@ -26,6 +63,21 @@ button {
   cursor:pointer;
   min-width:var(--target-min);
   min-height:var(--target-min);
+  -webkit-tap-highlight-color:transparent;
+}
+
+a {
+  color:var(--pond-ink);
+}
+
+code,
+kbd,
+samp {
+  font-family:var(--mono);
+}
+
+::selection {
+  background:var(--selection);
 }
 
 [hidden] {
@@ -44,7 +96,13 @@ button {
   border:0 !important;
 }
 
-/* Brand mark */
+/* Figures: sizes, speeds and ETAs line up. */
+.tabular,
+.num {
+  font-variant-numeric:tabular-nums;
+}
+
+/* Brand mark: lily pad, ripple, blossom on a cream disc. */
 .mark {
   display:inline-block;
 }
@@ -55,27 +113,18 @@ button {
   display:block;
 }
 
-.mark svg .c-primary,
-.mark .c-primary {
-  fill:var(--primary);
-}
+.mark .c-cream { fill:var(--surface); }
+.mark .c-pond { fill:var(--pond); }
+.mark .c-celadon { fill:var(--celadon); }
+.mark .c-rose { fill:var(--rose); }
+.mark .s-pond { stroke:var(--pond); }
+.mark .c-primary { fill:var(--pond); }
+.mark .c-accent { fill:var(--rose); }
+.mark .c-ink { fill:var(--text-primary); }
+.mark .s-ink { stroke:var(--text-primary); }
 
-.mark svg .c-accent,
-.mark .c-accent {
-  fill:var(--accent);
-}
-
-.mark svg .c-ink,
-.mark .c-ink {
-  fill:var(--ink);
-}
-
-.mark svg .s-ink,
-.mark .s-ink {
-  stroke:var(--ink);
-}
-
-/* Forms */
+/* Forms: sunken wells with a soft cool edge; the edge firms up under
+   prefers-contrast and on focus the pond ring takes over. */
 input:not([type="checkbox"]):not([type="radio"]),
 select {
   min-height:var(--control-height);
@@ -84,65 +133,98 @@ select {
 input:not([type="checkbox"]):not([type="radio"]),
 select,
 textarea {
-  border:1px solid var(--control-border);
+  border:1px solid color-mix(in srgb,var(--control-border) var(--control-border-mix),transparent);
   border-radius:var(--r-control);
-  color:var(--ink);
-  background:var(--surface);
+  color:var(--text-primary);
+  background:var(--surface-sunken);
+  box-shadow:none;
   transition:
-    border-color var(--motion-base) ease,
-    box-shadow var(--motion-base) ease;
+    border-color var(--motion-base) var(--ease-standard),
+    box-shadow var(--motion-base) var(--ease-standard),
+    background-color var(--motion-base) var(--ease-standard);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color:var(--text-muted);
+  opacity:1;
+}
+
+select {
+  appearance:none;
+  -webkit-appearance:none;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'><path d='M2.5 4.5 6 8l3.5-3.5' fill='none' stroke='%235F6382' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+  background-repeat:no-repeat;
+  background-position:right 10px center;
+  padding-right:30px !important;
 }
 
 input:not([type="checkbox"]):not([type="radio"]):focus,
 select:focus,
 textarea:focus {
-  border-color:var(--primary-strong);
-  box-shadow:var(--focus-ring);
+  border-color:var(--pond);
+  background:var(--surface);
+  box-shadow:0 0 0 6px var(--shadow-focus);
 }
 
 button:focus-visible,
 input:focus-visible,
 select:focus-visible,
 textarea:focus-visible,
-summary:focus-visible {
-  outline:2px solid var(--primary-strong);
+summary:focus-visible,
+a:focus-visible {
+  outline:2px solid color-mix(in srgb,var(--pond) 60%,transparent);
   outline-offset:2px;
+  box-shadow:0 0 0 6px var(--shadow-focus);
+}
+
+input:not([type="checkbox"]):not([type="radio"]):focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline:2px solid color-mix(in srgb,var(--pond) 60%,transparent);
+  outline-offset:0;
 }
 
 button:disabled,
 [aria-disabled="true"] {
   cursor:not-allowed;
-  opacity:.56;
+  opacity:.5;
 }
 
-/* Button variants use existing page class names without changing the DOM. */
+/* Button variants use existing page class names without changing the DOM.
+   Primary: pond fill. Secondary: tonal lilac fill. Quiet: pond text only. */
 :where(.save-btn,.download-button,.primary,.dl-btn) {
   border:0;
   border-radius:var(--r-control);
-  color:var(--on-primary,#fff);
-  background:var(--primary-action);
+  color:var(--text-on-accent);
+  background:var(--pond-deep);
   font-family:var(--font);
-  font-weight:650;
+  font-weight:500;
+  letter-spacing:var(--tracking-tight);
+  box-shadow:0 2px 12px color-mix(in srgb,var(--pond) 22%,transparent);
   transition:
-    background-color var(--motion-base) ease,
-    border-color var(--motion-base) ease,
-    box-shadow var(--motion-base) ease,
-    color var(--motion-base) ease,
+    background-color var(--motion-base) var(--ease-standard),
+    border-color var(--motion-base) var(--ease-standard),
+    box-shadow var(--motion-base) var(--ease-standard),
+    color var(--motion-base) var(--ease-standard),
+    opacity var(--motion-base) var(--ease-standard),
     transform var(--motion-fast) var(--ease-standard);
 }
 
 :where(.secondary-btn,.secondary,.media-download) {
-  border:1px solid var(--control-border);
+  border:1px solid transparent;
   border-radius:var(--r-control);
-  color:var(--primary-strong);
-  background:var(--surface);
+  color:var(--text-primary);
+  background:var(--fill);
   font-family:var(--font);
-  font-weight:650;
+  font-weight:500;
+  letter-spacing:var(--tracking-tight);
   transition:
-    background-color var(--motion-base) ease,
-    border-color var(--motion-base) ease,
-    box-shadow var(--motion-base) ease,
-    color var(--motion-base) ease,
+    background-color var(--motion-base) var(--ease-standard),
+    border-color var(--motion-base) var(--ease-standard),
+    box-shadow var(--motion-base) var(--ease-standard),
+    color var(--motion-base) var(--ease-standard),
+    opacity var(--motion-base) var(--ease-standard),
     transform var(--motion-fast) var(--ease-standard);
 }
 
@@ -150,16 +232,18 @@ button:disabled,
   border:0;
   background:transparent;
   font-family:var(--font);
+  font-weight:500;
+  letter-spacing:var(--tracking-tight);
   cursor:pointer;
   transition:
-    background-color var(--motion-base) ease,
-    color var(--motion-base) ease,
-    opacity var(--motion-base) ease,
+    background-color var(--motion-base) var(--ease-standard),
+    color var(--motion-base) var(--ease-standard),
+    opacity var(--motion-base) var(--ease-standard),
     transform var(--motion-fast) var(--ease-standard);
 }
 
 button:active:not(:disabled):not([aria-disabled="true"]) {
-  transform:translateY(1px) scale(.99);
+  transform:scale(.99);
 }
 
 button[data-ui-state="pending"] {
@@ -170,34 +254,34 @@ button[data-ui-state="pending"] {
 button[data-ui-state="pending"]::before {
   content:"";
   display:inline-block;
-  width:14px;
-  height:14px;
+  width:13px;
+  height:13px;
   margin-right:7px;
   vertical-align:-2px;
   border:2px solid currentColor;
   border-right-color:transparent;
   border-radius:50%;
-  animation:fc-spin 700ms linear infinite;
+  animation:fc-spin 900ms linear infinite;
 }
 
 button[data-ui-state="success"] {
-  border-color:var(--success-strong);
-  color:var(--success-strong);
-  background:color-mix(in srgb,var(--surface) 76%,var(--success) 24%);
+  border-color:transparent;
+  color:var(--celadon-ink);
+  background:var(--celadon-tint);
 }
 
 :where(.save-btn,.download-button,.primary,.dl-btn)[data-ui-state="success"] {
-  color:var(--on-success,#fff);
-  background:var(--success-action,var(--success-strong));
+  color:var(--on-success);
+  background:var(--success-action);
 }
 
 button[data-ui-state="failure"] {
-  border-color:var(--danger-strong);
-  color:var(--danger-strong);
-  background:var(--danger-tint);
+  border-color:transparent;
+  color:var(--vermilion-ink);
+  background:var(--vermilion-tint);
 }
 
-/* Switch */
+/* Switch: harbour when off, pond when on, a cream knob. */
 .opt-check {
   cursor:pointer;
   position:relative;
@@ -212,13 +296,13 @@ button[data-ui-state="failure"] {
 }
 
 .switch {
-  width:34px;
-  height:19px;
-  border-radius:10px;
-  background:var(--control-border);
+  width:40px;
+  height:24px;
+  border-radius:var(--r-pill);
+  background:var(--harbour);
   position:relative;
   flex:none;
-  transition:background-color 200ms ease;
+  transition:background-color var(--motion-slow) var(--ease-standard);
 }
 
 .switch::after {
@@ -226,30 +310,66 @@ button[data-ui-state="failure"] {
   position:absolute;
   top:2px;
   left:2px;
-  width:15px;
-  height:15px;
+  width:20px;
+  height:20px;
   border-radius:50%;
-  background:#fff;
-  box-shadow:0 1px 3px rgba(0,0,0,.2);
-  transition:left 200ms ease;
+  background:var(--surface);
+  box-shadow:0 2px 8px var(--shadow-ambient);
+  transition:left var(--motion-slow) var(--ease-standard);
 }
 
 .opt-check input:checked + .switch {
-  background:var(--primary-action);
+  background:var(--pond);
 }
 
 .opt-check input:checked + .switch::after {
-  left:17px;
+  left:18px;
 }
 
 .opt-check input:focus-visible + .switch {
-  outline:2px solid var(--primary-strong);
+  outline:2px solid color-mix(in srgb,var(--pond) 60%,transparent);
   outline-offset:3px;
+  box-shadow:0 0 0 6px var(--shadow-focus);
 }
 
-/* Status, badges and notices */
+/* Segmented control: tonal well, the active segment lifted a step. */
+:where(.segmented) {
+  display:inline-flex;
+  padding:3px;
+  gap:0;
+  border-radius:calc(var(--r-control) + 3px);
+  background:var(--fill);
+}
+
+:where(.segmented) button {
+  border:0;
+  border-radius:var(--r-control);
+  background:transparent;
+  color:var(--text-secondary);
+  font-weight:500;
+  transition:background-color var(--motion-base) var(--ease-standard),color var(--motion-base) var(--ease-standard),box-shadow var(--motion-base) var(--ease-standard);
+}
+
+:where(.segmented) button.active,
+:where(.segmented) button[aria-selected="true"] {
+  background:var(--surface);
+  color:var(--text-primary);
+  font-weight:500;
+  box-shadow:var(--shadow-segment);
+}
+
+/* Status, badges and notices: a hue laid thin behind text in the full hue. */
 :where(.badge,.chip,.count) {
-  font-weight:700;
+  font-weight:500;
+}
+
+:where(.chip,.job-chip) {
+  border-radius:var(--r-pill);
+}
+
+:where(.count) {
+  border-radius:var(--r-pill);
+  font-variant-numeric:tabular-nums;
 }
 
 :where(.status-dot,.host-card .dot) {
@@ -257,47 +377,183 @@ button[data-ui-state="failure"] {
   height:9px;
   border-radius:50%;
   flex:none;
-  background:var(--warning-strong);
-  box-shadow:0 0 0 4px var(--warning-tint);
+  background:var(--ochre);
+  box-shadow:0 0 0 3px var(--ochre-tint);
 }
 
 :where(.status-dot.ok,.host-card .dot.ok) {
-  background:var(--success-strong);
-  box-shadow:0 0 0 4px color-mix(in srgb,var(--success) 14%,transparent);
+  background:var(--celadon);
+  box-shadow:0 0 0 3px var(--celadon-tint);
 }
 
 :where(.status-dot.bad,.host-card .dot.bad) {
-  background:var(--danger-strong);
-  box-shadow:0 0 0 4px var(--danger-tint);
+  background:var(--vermilion);
+  box-shadow:0 0 0 3px var(--vermilion-tint);
 }
 
 .notice {
-  border:1px solid color-mix(in srgb,var(--danger) 45%,var(--border));
+  border:1px solid transparent;
   border-radius:var(--r-row);
-  background:var(--danger-tint);
+  background:var(--vermilion-tint);
 }
 
-/* Toasts */
+/* Progress: a day passing over a haystack. The gradient is painted on the
+   track and the fill (any child sized by width) uncovers it; ::after covers
+   the remainder in the track tone, with a soft trailing edge. */
+:where(.progress) {
+  position:relative;
+  display:flex;
+  overflow:hidden;
+  border-radius:var(--r-pill);
+  background:var(--progress-gradient);
+}
+
+:where(.progress) > * {
+  position:relative;
+  flex:none;
+  height:100%;
+  overflow:hidden;
+  background:transparent;
+  border-radius:inherit;
+  transition:width var(--motion-slow) var(--ease-standard);
+}
+
+:where(.progress) > *::after {
+  content:"";
+  position:absolute;
+  inset:0;
+  width:40%;
+  background:linear-gradient(90deg,transparent,color-mix(in srgb,var(--text-on-accent) 12%,transparent),transparent);
+  transform:translateX(-120%);
+  animation:fc-shimmer 2.4s linear infinite;
+}
+
+:where(.progress)::after {
+  content:"";
+  flex:1 1 auto;
+  min-width:0;
+  background:linear-gradient(90deg,transparent,var(--fill-strong) 6px);
+  background-color:var(--surface-sunken);
+}
+
+:where(.progress)::before {
+  content:"";
+  position:absolute;
+  inset:0;
+  border-radius:inherit;
+  pointer-events:none;
+}
+
+:where(.paused) .progress,
+.progress.is-paused {
+  background:color-mix(in srgb,var(--lilac) 60%,var(--surface));
+}
+
+:where(.paused) .progress > *::after,
+.progress.is-paused > *::after {
+  animation:none;
+}
+
+:where(.completed) .progress,
+.progress.is-complete {
+  background:color-mix(in srgb,var(--celadon) 70%,var(--surface));
+  transition:background var(--motion-state) var(--ease-standard);
+}
+
+:where(.completed) .progress::before,
+.progress.is-complete::before {
+  animation:fc-ripple 700ms var(--ease-standard) 1 forwards;
+}
+
+:where(.completed) .progress > *::after,
+.progress.is-complete > *::after {
+  animation:none;
+}
+
+:where(.failed,.cancelled) .progress,
+.progress.is-failed {
+  background:color-mix(in srgb,var(--vermilion) 45%,var(--surface));
+}
+
+:where(.failed,.cancelled) .progress > *::after,
+.progress.is-failed > *::after {
+  animation:none;
+}
+
+/* Segment map: the one dash field, low contrast, pond and celadon. */
+.fc-segments {
+  display:flex;
+  gap:3px;
+  width:100%;
+  height:6px;
+}
+
+.fc-segments > i {
+  flex:1 1 0;
+  min-width:2px;
+  border-radius:2px;
+  background:var(--pond-tint);
+  transition:background-color var(--motion-slow) var(--ease-standard);
+}
+
+.fc-segments > i.active { background:var(--pond-soft); }
+.fc-segments > i.done { background:var(--celadon); }
+
+/* Reflection: the one literal water. A mirrored, blurred, faint copy. */
+.fc-reflection {
+  position:relative;
+}
+
+.fc-reflection-copy {
+  display:block;
+  margin-top:2px;
+  transform:scaleY(-1);
+  filter:blur(10px);
+  opacity:.2;
+  pointer-events:none;
+  -webkit-mask-image:linear-gradient(to top,transparent 10%,rgba(0,0,0,.9));
+  mask-image:linear-gradient(to top,transparent 10%,rgba(0,0,0,.9));
+}
+
+/* Speed graph: area in pond fading to transparent, gridlines in soft lines. */
+.fc-speed {
+  display:block;
+  width:100%;
+  height:auto;
+  overflow:visible;
+}
+
+.fc-speed .grid { stroke:var(--line-soft); stroke-width:1; }
+/* .area keeps its per-chart gradient through the fill attribute. */
+.fc-speed .line { fill:none; stroke:var(--pond); stroke-width:1.5; stroke-linejoin:round; stroke-linecap:round; }
+
+/* Toasts: small pills tinted by their meaning, text in the full hue. */
 :where(#toast,.toast) {
   z-index:20;
-  color:var(--ink);
-  background:var(--surface);
-  box-shadow:var(--shadow-md);
+  color:var(--text-primary);
+  background:var(--material-surface);
+  backdrop-filter:var(--blur);
+  -webkit-backdrop-filter:var(--blur);
+  box-shadow:var(--shadow-float);
   line-height:1.4;
 }
 
 :where(#toast,.toast)[data-toast-type="success"] {
-  border-color:color-mix(in srgb,var(--success) 52%,var(--border));
+  color:var(--celadon-ink);
+  background:color-mix(in srgb,var(--celadon) 18%,var(--material-surface));
+  border-color:transparent;
 }
 
 :where(#toast,.toast)[data-toast-type="warning"] {
-  border-color:color-mix(in srgb,var(--warning) 62%,var(--border));
-  background:color-mix(in srgb,var(--surface) 86%,var(--warning-tint));
+  color:var(--ochre-ink);
+  background:color-mix(in srgb,var(--ochre) 18%,var(--material-surface));
+  border-color:transparent;
 }
 
 :where(#toast,.toast)[data-toast-type="error"] {
-  border-color:color-mix(in srgb,var(--danger) 60%,var(--border));
-  background:color-mix(in srgb,var(--surface) 84%,var(--danger-tint));
+  color:var(--vermilion-ink);
+  background:color-mix(in srgb,var(--vermilion) 18%,var(--material-surface));
+  border-color:transparent;
 }
 
 .toast-message {
@@ -312,16 +568,16 @@ button[data-ui-state="failure"] {
   padding:0;
   border:0;
   border-radius:var(--r-control);
-  color:var(--danger-strong);
+  color:var(--text-muted);
   background:transparent;
   font-size:20px;
 }
 
 /* Disclosure */
 .install-guide {
-  border:1px solid var(--border);
+  border:1px solid transparent;
   border-radius:var(--r-control);
-  background:var(--surfaceSubtle);
+  background:var(--fill-soft);
 }
 
 .install-guide summary {
@@ -329,33 +585,94 @@ button[data-ui-state="failure"] {
   list-style:none;
 }
 
+summary::-webkit-details-marker {
+  display:none;
+}
+
 /* Loading */
 .spinner {
   width:16px;
   height:16px;
-  border:2px solid var(--border);
-  border-top-color:var(--primary);
+  border:2px solid var(--fill-strong);
+  border-top-color:var(--pond);
   border-radius:50%;
-  animation:fc-spin 800ms linear infinite;
+  animation:fc-spin 900ms linear infinite;
 }
 
 @keyframes fc-spin {
   to { transform:rotate(360deg); }
 }
 
-@media (hover:hover) {
-  button:hover:not(:disabled):not([aria-disabled="true"]) {
-    transform:translateY(-1px);
-    box-shadow:var(--shadow-sm);
-  }
+@keyframes fc-shimmer {
+  to { transform:translateX(320%); }
+}
 
+@keyframes fc-ripple {
+  from { box-shadow:0 0 0 0 color-mix(in srgb,var(--celadon) 30%,transparent); }
+  to { box-shadow:0 0 0 8px color-mix(in srgb,var(--celadon) 0%,transparent); }
+}
+
+/* Theme cross-fade: the light changing, not the UI flipping. Applied briefly
+   by the preview while a theme switch settles. */
+.fc-theme-fading,
+.fc-theme-fading *,
+.fc-theme-fading *::before,
+.fc-theme-fading *::after {
+  transition:
+    background-color var(--motion-theme) var(--ease-standard),
+    color var(--motion-theme) var(--ease-standard),
+    border-color var(--motion-theme) var(--ease-standard),
+    box-shadow var(--motion-theme) var(--ease-standard),
+    fill var(--motion-theme) var(--ease-standard),
+    stroke var(--motion-theme) var(--ease-standard) !important;
+}
+
+/* Scrollbars stay thin and quiet on every surface. */
+* {
+  scrollbar-width:thin;
+  scrollbar-color:var(--fill-strong) transparent;
+}
+
+::-webkit-scrollbar {
+  width:8px;
+  height:8px;
+}
+
+::-webkit-scrollbar-track {
+  background:transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background:var(--fill-strong);
+  border-radius:8px;
+  border:2px solid transparent;
+  background-clip:padding-box;
+}
+
+@media (hover:hover) {
   :where(.save-btn,.download-button,.primary,.dl-btn):hover:not(:disabled) {
     background:var(--primaryHover);
+    box-shadow:0 4px 18px color-mix(in srgb,var(--pond) 30%,transparent);
   }
 
   :where(.secondary-btn,.secondary,.media-download):hover:not(:disabled) {
-    border-color:var(--primary-strong);
-    color:var(--primary-strong);
+    background:var(--fill-strong);
+  }
+
+  :where(.quiet-button,.text-button,.foot-btn,.host-card .link):hover:not(:disabled) {
+    background:var(--hover-halo);
+  }
+
+  :where(.segmented) button:hover:not(.active):not([aria-selected="true"]) {
+    color:var(--text-primary);
+  }
+}
+
+@media (prefers-contrast: more) {
+  input:not([type="checkbox"]):not([type="radio"]),
+  select,
+  textarea {
+    border-color:var(--control-border);
   }
 }
 
@@ -366,13 +683,23 @@ button[data-ui-state="failure"] {
     scroll-behavior:auto !important;
     animation-duration:.01ms !important;
     animation-iteration-count:1 !important;
-    transition-duration:.01ms !important;
+    transition-duration:200ms !important;
+  }
+
+  :root {
+    --motion-theme:200ms;
+    --motion-state:200ms;
+  }
+
+  :where(.progress) > *::after,
+  :where(.progress)::before {
+    animation:none !important;
   }
 
   .spinner {
     animation:none;
-    border-color:var(--border);
-    border-top-color:var(--primary);
+    border-color:var(--fill-strong);
+    border-top-color:var(--pond);
   }
 
   button,
@@ -380,4 +707,11 @@ button[data-ui-state="failure"] {
   button:active {
     transform:none !important;
   }
+}
+
+/* The preview's motion toggle mirrors the media query. */
+[data-motion="reduced"] :where(.progress) > *::after,
+[data-motion="reduced"] :where(.progress)::before,
+[data-motion="reduced"] .spinner {
+  animation:none !important;
 }

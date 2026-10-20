@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FluxCatch 下载记录</title>
+  <link rel="stylesheet" href="../ui/tokens.css">
+  <link rel="stylesheet" href="../ui/components.css">
+  <link rel="stylesheet" href="../ui/atmosphere.css">
+  <link rel="stylesheet" href="downloads.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="mark" aria-hidden="true">
+        <svg viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="64" cy="64" r="60" class="c-cream"/>
+          <circle cx="64" cy="64" r="58.5" fill="none" class="s-pond" stroke-opacity=".35" stroke-width="3"/>
+          <path d="M22 100q42-13 84 0" fill="none" class="s-pond" stroke-width="5" stroke-linecap="round"/>
+          <path d="M34 112q30-9 60 0" fill="none" class="s-pond" stroke-opacity=".5" stroke-width="4" stroke-linecap="round"/>
+          <path d="M52.4 26A34 34 0 1 1 32 46.4L64 58Z" class="c-celadon"/>
+          <circle cx="92" cy="36" r="9" class="c-rose"/>
+        </svg>
+      </span>
+      <span class="brand-copy"><strong>FluxCatch</strong><small>下载记录</small></span>
+    </div>
+    <div class="topbar-actions">
+      <button id="newDownloadButton" class="quiet-button" type="button" aria-expanded="false" aria-controls="urlForm">新建下载</button>
+      <button id="folderButton" class="quiet-button" type="button" title="打开 FluxCatch 下载文件夹">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4.2l2 2H19.5A1.5 1.5 0 0 1 21 8.5v9A1.5 1.5 0 0 1 19.5 19h-15A1.5 1.5 0 0 1 3 17.5z"/></svg>
+        <span>打开文件夹</span>
+      </button>
+      <button id="settingsButton" class="icon-button" type="button" aria-label="打开设置" title="打开设置">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.25A3.25 3.25 0 1 0 12 8.75a3.25 3.25 0 0 0 0 6.5Z"/><path d="M19.1 13.1a7.8 7.8 0 0 0 .05-1.1 7.8 7.8 0 0 0-.05-1.1l2-1.55-2-3.46-2.45.98a8.2 8.2 0 0 0-1.9-1.1L14.4 3.15h-4.8l-.35 2.62a8.2 8.2 0 0 0-1.9 1.1L4.9 5.89l-2 3.46 2 1.55A7.8 7.8 0 0 0 4.85 12c0 .37.02.74.05 1.1l-2 1.55 2 3.46 2.45-.98a8.2 8.2 0 0 0 1.9 1.1l.35 2.62h4.8l.35-2.62a8.2 8.2 0 0 0 1.9-1.1l2.45.98 2-3.46-2-1.55Z"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <main>
+    <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true" hidden></div>
+
+    <section class="page-head" aria-labelledby="pageTitle">
+      <div class="page-head-copy">
+        <h1 id="pageTitle">下载记录</h1>
+        <p id="pageSummary" class="page-summary">正在读取记录…</p>
+      </div>
+      <p id="folderNote" class="folder-note" data-no-i18n hidden></p>
+    </section>
+
+    <form id="urlForm" class="url-form" hidden>
+      <label class="sr-only" for="urlInput">媒体地址</label>
+      <input id="urlInput" type="url" autocomplete="off" spellcheck="false" placeholder="粘贴视频、音频或播放列表地址" maxlength="4096" required>
+      <button type="submit" class="secondary-btn">开始下载</button>
+      <small>链接下载由本地下载引擎保存；权限仅在你点击“开始下载”后请求。</small>
+    </form>
+
+    <section id="activeSection" class="active-section" aria-labelledby="activeHeading" hidden>
+      <header class="section-head">
+        <h2 id="activeHeading">正在进行</h2>
+        <span id="activeCount" class="count" aria-label="0 个进行中">0</span>
+      </header>
+      <ul id="activeList" class="jobs-list" aria-label="进行中的下载"></ul>
+    </section>
+
+    <div id="notifyBanner" class="notify-banner" hidden>
+      <div><strong>下载完成后通知你</strong><small>系统通知自带“在 Finder 中显示”和“打开”按钮，只需授权一次。</small></div>
+      <div class="notify-banner-actions"><button id="notifyEnableButton" type="button" class="secondary-btn">开启通知</button><button id="notifyDismissButton" type="button" class="text-button">不用了</button></div>
+    </div>
+
+    <section class="toolbar" aria-label="筛选下载记录">
+      <div class="segmented" role="tablist" aria-label="按状态筛选">
+        <button type="button" class="active" role="tab" aria-selected="true" data-filter="all">全部<span class="count" id="countAll">0</span></button>
+        <button type="button" role="tab" aria-selected="false" data-filter="completed">已完成<span class="count" id="countCompleted">0</span></button>
+        <button type="button" role="tab" aria-selected="false" data-filter="failed">失败与取消<span class="count" id="countFailed">0</span></button>
+      </div>
+      <label class="search"><span class="sr-only">搜索文件名或来源</span><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></svg><input id="searchInput" type="search" placeholder="搜索文件名或来源" autocomplete="off"></label>
+      <button id="clearHistoryButton" class="quiet-button danger" type="button" disabled>清空记录</button>
+    </section>
+
+    <div id="loadingState" class="loading-state" role="status" aria-live="polite"><span class="spinner" aria-hidden="true"></span><span>正在读取下载记录…</span></div>
+    <div id="errorState" class="notice error-notice" role="alert" hidden><div><strong>下载记录读取失败</strong><p id="errorText">请重试。</p></div><button id="retryButton" class="text-button" type="button">重试</button></div>
+
+    <section id="historySection" class="history" aria-live="polite" hidden></section>
+
+    <div id="emptyState" class="empty-state" role="status" hidden>
+      <div class="radar" aria-hidden="true"><i class="core"></i><span class="ring r1"></span><span class="ring r2"></span><span class="ring r3"></span></div>
+      <h3 id="emptyTitle">还没有下载记录</h3>
+      <p id="emptyCopy">在视频页面点击工具栏图标开始下载；本地引擎保存的文件都会记在这里，并可直接在 Finder 中显示。</p>
+    </div>
+
+    <p class="page-foot">本地引擎保存的文件不会出现在 Chrome 自己的下载列表里；这里是它们的完整记录。记录只保存在这台电脑上。</p>
+  </main>
+
+  <div id="menuLayer" class="menu-layer" hidden>
+    <div id="rowMenu" class="row-menu" role="menu" aria-label="更多操作"></div>
+  </div>
+
+  <script type="module" src="downloads.js"></script>
+</body>
+</html>

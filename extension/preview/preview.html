@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FluxCatch 组件预览</title>
+  <link rel="stylesheet" href="../ui/tokens.css">
+  <link rel="stylesheet" href="../ui/components.css">
+  <link rel="stylesheet" href="../ui/atmosphere.css">
+  <link rel="stylesheet" href="preview.css">
+</head>
+<body>
+  <header class="preview-bar">
+    <div class="preview-title">
+      <span class="mark" aria-hidden="true">
+        <svg viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="64" cy="64" r="60" class="c-cream"/>
+          <circle cx="64" cy="64" r="58.5" fill="none" class="s-pond" stroke-opacity=".35" stroke-width="3"/>
+          <path d="M22 100q42-13 84 0" fill="none" class="s-pond" stroke-width="5" stroke-linecap="round"/>
+          <path d="M34 112q30-9 60 0" fill="none" class="s-pond" stroke-opacity=".5" stroke-width="4" stroke-linecap="round"/>
+          <path d="M52.4 26A34 34 0 1 1 32 46.4L64 58Z" class="c-celadon"/>
+          <circle cx="92" cy="36" r="9" class="c-rose"/>
+        </svg>
+      </span>
+      <div>
+        <h1>组件预览 · Component preview</h1>
+        <p>两个时刻的同一片水面：左为清晨（浅色），右为黄昏（深色）。所有颜色、纹理与动效均由 token 与代码生成，无任何图片资源。</p>
+      </div>
+    </div>
+    <div class="preview-controls" role="group" aria-label="预览设置">
+      <label>密度 Density
+        <select id="densitySelect">
+          <option value="comfortable">舒适 comfortable</option>
+          <option value="compact">紧凑 compact</option>
+        </select>
+      </label>
+      <label>动效 Motion
+        <select id="motionSelect">
+          <option value="full">完整 full</option>
+          <option value="reduced">减弱 reduced</option>
+        </select>
+      </label>
+      <label>页面主题 Page theme
+        <select id="themeSelect">
+          <option value="system">跟随系统 system</option>
+          <option value="light">清晨 morning</option>
+          <option value="dark">黄昏 dusk</option>
+        </select>
+      </label>
+      <button id="replayButton" type="button" class="secondary-btn">重放下载 Replay</button>
+    </div>
+  </header>
+
+  <main class="preview-panes">
+    <section class="preview-pane fc-atmosphere" data-theme="light" aria-labelledby="lightHeading">
+      <h2 id="lightHeading" class="pane-heading">清晨 · Morning</h2>
+      <div class="pane-body" data-pane="light"></div>
+    </section>
+    <section class="preview-pane fc-atmosphere" data-theme="dark" aria-labelledby="darkHeading">
+      <h2 id="darkHeading" class="pane-heading">黄昏 · Dusk</h2>
+      <div class="pane-body" data-pane="dark"></div>
+    </section>
+  </main>
+
+  <template id="componentTemplate">
+    <section class="pv-block" data-component="sidebar" aria-label="窗口框架与侧栏 Window chrome and sidebar">
+      <h3 class="pv-label">1 · 窗口框架与侧栏 <span>Window chrome / sidebar</span></h3>
+      <div class="pv-window">
+        <aside class="pv-sidebar">
+          <div class="pv-sidebar-brand"><strong>FluxCatch</strong><small>Keep What You See.</small></div>
+          <nav aria-label="分类">
+            <a class="is-current" href="#"><span>全部</span><i class="count">12</i></a>
+            <a href="#"><span>进行中</span><i class="count rose">2</i></a>
+            <a href="#"><span>已完成</span><i class="count">9</i></a>
+            <a href="#"><span>失败</span><i class="count">1</i></a>
+            <a href="#"><span>已排程</span><i class="count">0</i></a>
+          </nav>
+        </aside>
+        <div class="pv-window-main">
+          <div class="pv-toolbar">
+            <div class="segmented" role="tablist"><button type="button" class="active" role="tab" aria-selected="true">媒体<span class="count">4</span></button><button type="button" role="tab" aria-selected="false">任务<span class="count">2</span></button></div>
+            <button type="button" class="dl-btn">开始下载</button>
+          </div>
+          <p class="pv-note">frosted chrome · tonal nav hover · count chips in harbour and rose</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="pv-block" data-component="list-row" aria-label="下载列表行 Download list rows">
+      <h3 class="pv-label">2 · 下载列表行 <span>Download list rows</span></h3>
+      <ul class="pv-list">
+        <li class="pv-row is-live" data-demo="live">
+          <div class="pv-row-head"><strong class="pv-name">Lecture 12 · Pharmacokinetics.mp4</strong><span class="pv-state">下载中</span></div>
+          <div class="pv-row-sub"><span class="pv-domain">lecturecast.ucl.ac.uk</span><span class="pv-figures"><b data-demo-bytes>0 MB</b> / 812 MB · <b data-demo-speed>0 KB/s</b> · <i data-demo-eta>剩余 —</i></span></div>
+          <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" data-demo-bar><i style="width:0%"></i></div>
+          <div class="pv-row-actions"><button type="button" class="job-control" data-demo-pause><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13M16 5.5v13"/></svg><span>暂停</span></button><button type="button" class="job-control danger-control">取消</button></div>
+        </li>
+        <li class="pv-row is-paused">
+          <div class="pv-row-head"><strong class="pv-name">Keynote Highlights.m4a</strong><span class="pv-state paused">‖ 已暂停</span></div>
+          <div class="pv-row-sub"><span class="pv-domain">developer.apple.com</span><span class="pv-figures">21.4 MB / 48.3 MB</span></div>
+          <div class="progress is-paused" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="44"><i style="width:44%"></i></div>
+          <div class="pv-row-actions"><button type="button" class="job-control"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5v14l11-7z" fill="currentColor" stroke="none"/></svg><span>继续</span></button></div>
+        </li>
+        <li class="pv-row is-selected">
+          <div class="pv-row-head"><strong class="pv-name">Interstellar Trailer 4K.mp4</strong><span class="pv-state done">✓ 已完成</span></div>
+          <div class="pv-row-sub"><span class="pv-domain">youtube.com</span><span class="pv-figures">2.35 GB · 2:28 · 2160p</span></div>
+          <div class="progress is-complete" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="100"><i style="width:100%"></i></div>
+        </li>
+        <li class="pv-row">
+          <div class="pv-row-head"><strong class="pv-name">Behind the Scenes.webm</strong><span class="pv-state wait">等待中</span></div>
+          <div class="pv-row-sub"><span class="pv-domain">vimeo.com</span><span class="pv-figures">— / 310 MB</span></div>
+          <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i style="width:0%"></i></div>
+        </li>
+        <li class="pv-row is-failed">
+          <div class="pv-row-head"><strong class="pv-name">Live Session.m3u8</strong><span class="pv-state bad">× 下载失败</span></div>
+          <div class="pv-row-sub"><span class="pv-domain">example.tv</span><span class="pv-figures bad">源站在第 12 个片段后返回 403</span></div>
+          <div class="progress is-failed" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="25"><i style="width:25%"></i></div>
+        </li>
+      </ul>
+    </section>
+
+    <section class="pv-block" data-component="active-card" aria-label="进行中详情卡 Active-download detail card">
+      <h3 class="pv-label">3 · 进行中详情卡 <span>Active-download card</span></h3>
+      <article class="pv-card">
+        <div class="pv-card-head"><div><h4 class="display pv-card-title">Lecture 12 · Pharmacokinetics.mp4</h4><p class="pv-domain">lecturecast.ucl.ac.uk · 8 条连接</p></div><span class="pv-state" data-demo-state>下载中</span></div>
+        <div class="progress pv-card-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" data-demo-bar><i style="width:0%"></i></div>
+        <div class="pv-card-figures"><span><b data-demo-bytes>0 MB</b> / 812 MB</span><span><b data-demo-speed>0 KB/s</b></span><span data-demo-eta>剩余 —</span><span data-demo-percent>0%</span></div>
+        <div class="job-segments" data-demo-segments></div>
+      </article>
+    </section>
+
+    <section class="pv-block" data-component="speed-graph" aria-label="速度图 Speed graph">
+      <h3 class="pv-label">4 · 速度图与倒影 <span>Speed graph with reflection</span></h3>
+      <div class="pv-graph job-graph" data-demo-graph></div>
+    </section>
+
+    <section class="pv-block" data-component="add-dialog" aria-label="新建下载对话框 Add-download dialog">
+      <h3 class="pv-label">5 · 新建下载 <span>Add-download dialog</span></h3>
+      <form class="pv-dialog" onsubmit="return false">
+        <h4 class="display">下载设置</h4>
+        <label>媒体地址<input type="url" value="https://example.com/talks/keynote-2026.m3u8" spellcheck="false"></label>
+        <label>保存位置<span class="pv-picker"><input type="text" value="~/Downloads/FluxCatch" readonly><button type="button" class="secondary-btn">选择…</button></span></label>
+        <div class="pv-dialog-grid">
+          <label>保存格式<select><option>MP4</option><option>MKV</option><option>WebM</option></select></label>
+          <label>排程<select><option>立即开始</option><option>今晚 23:00</option><option>手动开始</option></select></label>
+        </div>
+        <div class="pv-dialog-actions"><button type="button" class="secondary">取消</button><button type="submit" class="primary">开始下载</button></div>
+      </form>
+    </section>
+
+    <section class="pv-block" data-component="toasts" aria-label="提示与状态 Toasts and status">
+      <h3 class="pv-label">6 · 提示与状态 <span>Toasts / status pills</span></h3>
+      <div class="pv-toasts">
+        <div class="toast pv-toast" data-toast-type="success"><span class="toast-message">已保存到 ~/Downloads/FluxCatch</span></div>
+        <div class="toast pv-toast" data-toast-type="warning"><span class="toast-message">磁盘剩余不足 2 GB</span></div>
+        <div class="toast pv-toast" data-toast-type="error"><span class="toast-message">源站拒绝了第 12 个片段</span></div>
+        <div class="toast pv-toast"><span class="toast-message">本地下载任务已开始</span></div>
+      </div>
+      <div class="pv-chips">
+        <span class="job-chip done">✓ 已完成</span><span class="job-chip wait">等待中</span><span class="job-chip paused">‖ 已暂停</span><span class="job-chip bad">× 失败</span><span class="chip quality">1080p</span><span class="chip stream">HLS</span><span class="chip">MP4</span>
+      </div>
+    </section>
+
+    <section class="pv-block" data-component="empty-state" aria-label="空状态 Empty state">
+      <h3 class="pv-label">7 · 空状态 <span>Empty state</span></h3>
+      <div class="pv-empty"><p class="display">没有正在下载的内容。池水静止。</p><small>Nothing downloading. The pond is still.</small></div>
+    </section>
+
+    <section class="pv-block" data-component="settings" aria-label="设置 Settings">
+      <h3 class="pv-label">8 · 设置 <span>Settings</span></h3>
+      <div class="pv-settings">
+        <div class="pv-settings-group">
+          <h4 class="display">基础下载</h4>
+          <label class="opt-check"><input type="checkbox" checked><span class="switch" aria-hidden="true"></span><span class="txt">下载完成或失败时提醒我<small>系统通知自带“在 Finder 中显示”和“打开”按钮。</small></span></label>
+          <label class="opt-check"><input type="checkbox"><span class="switch" aria-hidden="true"></span><span class="txt">可信直链也使用本地下载引擎<small>固定 Instagram/X 直链也走本地安全下载与多连接路径。</small></span></label>
+        </div>
+        <div class="pv-settings-group">
+          <h4 class="display">性能</h4>
+          <div class="pv-presets"><button type="button" class="pv-preset">稳定 <span>4</span></button><button type="button" class="pv-preset is-current">平衡 <span>8</span></button><button type="button" class="pv-preset">高速 <span>12</span></button></div>
+          <label class="pv-field">同时进行的下载数<input type="number" value="3" min="1" max="6"></label>
+        </div>
+      </div>
+    </section>
+
+    <section class="pv-block" data-component="app-icon" aria-label="应用图标 App icon">
+      <h3 class="pv-label">9 · 应用图标 <span>App icon</span></h3>
+      <div class="pv-icons">
+        <span class="mark pv-icon-128" aria-hidden="true"><svg viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg"><circle cx="64" cy="64" r="60" class="c-cream"/><circle cx="64" cy="64" r="58.5" fill="none" class="s-pond" stroke-opacity=".35" stroke-width="3"/><path d="M22 100q42-13 84 0" fill="none" class="s-pond" stroke-width="5" stroke-linecap="round"/><path d="M34 112q30-9 60 0" fill="none" class="s-pond" stroke-opacity=".5" stroke-width="4" stroke-linecap="round"/><path d="M52.4 26A34 34 0 1 1 32 46.4L64 58Z" class="c-celadon"/><circle cx="92" cy="36" r="9" class="c-rose"/></svg></span>
+        <span class="mark pv-icon-48" aria-hidden="true"><svg viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg"><circle cx="64" cy="64" r="60" class="c-cream"/><circle cx="64" cy="64" r="58.5" fill="none" class="s-pond" stroke-opacity=".35" stroke-width="3"/><path d="M22 100q42-13 84 0" fill="none" class="s-pond" stroke-width="5" stroke-linecap="round"/><path d="M34 112q30-9 60 0" fill="none" class="s-pond" stroke-opacity=".5" stroke-width="4" stroke-linecap="round"/><path d="M52.4 26A34 34 0 1 1 32 46.4L64 58Z" class="c-celadon"/><circle cx="92" cy="36" r="9" class="c-rose"/></svg></span>
+        <span class="mark pv-icon-16" aria-hidden="true"><svg viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg"><circle cx="64" cy="64" r="60" class="c-cream"/><circle cx="64" cy="64" r="58.5" fill="none" class="s-pond" stroke-opacity=".35" stroke-width="3"/><path d="M22 100q42-13 84 0" fill="none" class="s-pond" stroke-width="5" stroke-linecap="round"/><path d="M34 112q30-9 60 0" fill="none" class="s-pond" stroke-opacity=".5" stroke-width="4" stroke-linecap="round"/><path d="M52.4 26A34 34 0 1 1 32 46.4L64 58Z" class="c-celadon"/><circle cx="92" cy="36" r="9" class="c-rose"/></svg></span>
+        <p class="pv-note">lily pad · ripple · blossom on a cream disc — procedural SVG, exported to 16/32/48/128</p>
+      </div>
+    </section>
+
+    <section class="pv-block" data-component="palette" aria-label="色板 Palette">
+      <h3 class="pv-label">色板 <span>Palette by state</span></h3>
+      <div class="pv-swatches">
+        <i style="--sw:var(--pond)"><b>pond</b><small>action</small></i>
+        <i style="--sw:var(--lilac)"><b>lilac</b><small>hover · paused</small></i>
+        <i style="--sw:var(--celadon)"><b>celadon</b><small>complete</small></i>
+        <i style="--sw:var(--ochre)"><b>ochre</b><small>warning</small></i>
+        <i style="--sw:var(--apricot)"><b>apricot</b><small>light</small></i>
+        <i style="--sw:var(--rose)"><b>rose</b><small>badge</small></i>
+        <i style="--sw:var(--vermilion)"><b>vermilion</b><small>error only</small></i>
+        <i style="--sw:var(--harbour)"><b>harbour</b><small>queued</small></i>
+      </div>
+    </section>
+  </template>
+
+  <script type="module" src="preview.js"></script>
+</body>
+</html>

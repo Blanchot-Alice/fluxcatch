@@ -12,8 +12,14 @@
     "storage",
     "webRequest"
   ],
-  "optional_permissions": ["notifications", "nativeMessaging"],
-  "host_permissions": ["http://*/*", "https://*/*"],
+  "optional_permissions": [
+    "notifications",
+    "nativeMessaging"
+  ],
+  "host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
   "background": {
     "service_worker": "background.js",
     "type": "module"
@@ -28,8 +34,12 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://*.instagram.com/*"],
-      "js": ["content/instagram-main.js"],
+      "matches": [
+        "https://*.instagram.com/*"
+      ],
+      "js": [
+        "content/instagram-main.js"
+      ],
       "run_at": "document_start",
       "all_frames": false,
       "world": "MAIN"
@@ -41,17 +51,48 @@
         "https://twitter.com/*",
         "https://*.twitter.com/*"
       ],
-      "js": ["content/x-main.js"],
+      "js": [
+        "content/x-main.js"
+      ],
       "run_at": "document_start",
       "world": "MAIN"
     },
     {
-      "matches": ["http://*/*", "https://*/*"],
-      "js": ["lib/site-extract.js", "content/content.js"],
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "lib/site-extract.js",
+        "content/content.js"
+      ],
       "run_at": "document_start",
       "all_frames": true
     }
   ],
+  "commands": {
+    "_execute_action": {
+      "suggested_key": {
+        "default": "Alt+Shift+F",
+        "mac": "Alt+Shift+F"
+      },
+      "description": "__MSG_commandOpenPopup__"
+    },
+    "open-downloads": {
+      "suggested_key": {
+        "default": "Alt+Shift+D",
+        "mac": "Alt+Shift+D"
+      },
+      "description": "__MSG_commandOpenDownloads__"
+    },
+    "open-workspace": {
+      "suggested_key": {
+        "default": "Alt+Shift+W",
+        "mac": "Alt+Shift+W"
+      },
+      "description": "__MSG_commandOpenWorkspace__"
+    }
+  },
   "icons": {
     "16": "icons/icon16.png",
     "32": "icons/icon32.png",

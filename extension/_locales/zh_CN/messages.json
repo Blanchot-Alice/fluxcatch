@@ -4,5 +4,14 @@
   },
   "extensionDescription": {
     "message": "检测当前页面请求的直链媒体、HLS 与 DASH 流，并将用户选择的资源保存到本地。"
+  },
+  "commandOpenPopup": {
+    "message": "打开 FluxCatch 弹窗"
+  },
+  "commandOpenDownloads": {
+    "message": "打开下载记录"
+  },
+  "commandOpenWorkspace": {
+    "message": "打开媒体工作台"
   }
 }

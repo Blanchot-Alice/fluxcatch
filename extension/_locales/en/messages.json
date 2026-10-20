@@ -4,5 +4,14 @@
   },
   "extensionDescription": {
     "message": "Detect direct media, HLS, and DASH streams requested by the current page and save user-selected resources locally."
+  },
+  "commandOpenPopup": {
+    "message": "Open the FluxCatch popup"
+  },
+  "commandOpenDownloads": {
+    "message": "Open the downloads page"
+  },
+  "commandOpenWorkspace": {
+    "message": "Open the media workspace"
   }
 }

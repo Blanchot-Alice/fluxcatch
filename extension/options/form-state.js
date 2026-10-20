@@ -1,6 +1,8 @@
 export const FORM_LIMITS = Object.freeze({
   concurrencyMin: 1,
   concurrencyMax: 24,
+  jobsMin: 1,
+  jobsMax: 6,
   minimumKiBMin: 0,
   minimumKiBMax: 102400,
   filenameTemplateMaxLength: 160,
@@ -24,6 +26,7 @@ const OUTPUT_CONTAINERS = new Set(["mp4", "mkv", "webm"]);
 const DEFAULT_FORM_STATE = Object.freeze({
   concurrentFragments: 8,
   concurrentRanges: 8,
+  concurrentJobs: 3,
   outputContainer: "mp4",
   minimumKiB: 500,
   filenameTemplate: "{title}",
@@ -46,6 +49,7 @@ export function normalizeFormState(value = {}) {
   return {
     concurrentFragments: canonicalNumber(source.concurrentFragments, DEFAULT_FORM_STATE.concurrentFragments),
     concurrentRanges: canonicalNumber(source.concurrentRanges, DEFAULT_FORM_STATE.concurrentRanges),
+    concurrentJobs: canonicalNumber(source.concurrentJobs, DEFAULT_FORM_STATE.concurrentJobs),
     outputContainer: canonicalText(source.outputContainer, DEFAULT_FORM_STATE.outputContainer).toLowerCase(),
     minimumKiB: canonicalNumber(source.minimumKiB, DEFAULT_FORM_STATE.minimumKiB),
     filenameTemplate: canonicalTemplate(source.filenameTemplate, DEFAULT_FORM_STATE.filenameTemplate),
@@ -185,6 +189,8 @@ export function validateSettings(value = {}) {
     FORM_LIMITS.concurrencyMin, FORM_LIMITS.concurrencyMax, "视频片段并发数");
   validateIntegerField(errors, "concurrentRanges", source.concurrentRanges,
     FORM_LIMITS.concurrencyMin, FORM_LIMITS.concurrencyMax, "大文件并发数");
+  validateIntegerField(errors, "concurrentJobs", source.concurrentJobs,
+    FORM_LIMITS.jobsMin, FORM_LIMITS.jobsMax, "同时进行的下载数");
   validateIntegerField(errors, "minimumKiB", source.minimumKiB,
     FORM_LIMITS.minimumKiBMin, FORM_LIMITS.minimumKiBMax, "最小媒体大小");
 

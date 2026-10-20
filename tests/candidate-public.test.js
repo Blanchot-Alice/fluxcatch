@@ -46,7 +46,7 @@ test("public candidate is an explicit allowlist and redacts signed queries", () 
     "generation", "groupSize", "height", "id", "kind", "lastSeen", "manifestAudioTrackCount", "manifestInspectedAt",
     "audioCandidates", "trackHints", "variants",
     "manifestProbeStatus", "manifestSize", "manifestSubtitleTrackCount", "manifestType", "manifestVariantCount",
-    "mime", "pageTitle", "provenance", "rangeSupported", "site", "source", "sourceFilenames", "sources",
+    "mime", "pageTitle", "provenance", "rangeSupported", "recommended", "site", "source", "sourceFilenames", "sources",
     "suggestedFilename", "thumbnailAdapterImageHosts", "thumbnailAllowedOrigins", "thumbnailAt", "thumbnailFrameId",
     "thumbnailSource", "thumbnailUrl", "title", "urlIsRedacted", "requiresRefresh", "width"
   ].sort());

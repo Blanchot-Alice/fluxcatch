@@ -71,6 +71,9 @@ DASH_MPD = b'''<?xml version="1.0"?>
 
 class FixtureHandler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
+    # Tests may inject {"path": {"body": bytes, "mime": str}} for generated
+    # fixtures; consulted before the fixed routes and restored by the test.
+    dynamic_routes = {}
     request_log: list[tuple[str, str]] = []
     log_lock = threading.Lock()
 
@@ -95,6 +98,16 @@ class FixtureHandler(http.server.BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Length", str(len(FILE_BYTES)))
             self.end_headers()
+        elif path == "/hotlink-page.mp4":
+            # Hotlink/expiry fallback: the CDN answers a media URL with the
+            # site's own page, declared as text/html.
+            self._bytes(
+                b"<!DOCTYPE html><html><head><title>watch page</title></head><body>full page</body></html>",
+                "text/html; charset=utf-8",
+            )
+        elif path == "/hotlink-page-untyped.mp4":
+            # Same fallback with no Content-Type; the first body bytes decide.
+            self._bytes(b"\n<html><body>untyped page</body></html>")
         elif path in {"/dash-pair/video.m4s", "/dash-pair/audio.m4s"}:
             data = DASH_PAIR_VIDEO if path.endswith("video.m4s") else DASH_PAIR_AUDIO
             self.send_response(200)
@@ -109,6 +122,33 @@ class FixtureHandler(http.server.BaseHTTPRequestHandler):
         with self.log_lock:
             self.request_log.append((path, range_header))
 
+        dynamic = FixtureHandler.dynamic_routes.get(path)
+        if dynamic is not None:
+            self._bytes(dynamic["body"], dynamic.get("mime", "application/octet-stream"))
+            return
+        if path == "/aes/index.m3u8":
+            self._bytes(
+                b"#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXT-X-MEDIA-SEQUENCE:7\n"
+                b'#EXT-X-KEY:METHOD=AES-128,URI="key.bin",IV=0x00000000000000000000000000000001\n'
+                b"#EXTINF:4,\nseg0.ts\n#EXTINF:4,\nseg1.ts\n#EXT-X-ENDLIST\n",
+                "application/vnd.apple.mpegurl",
+            )
+            return
+        if path == "/aes/key.bin":
+            self._bytes(bytes(range(16)), "application/octet-stream")
+            return
+        if path in {"/aes/seg0.ts", "/aes/seg1.ts"}:
+            self._bytes(FILE_BYTES)
+            return
+        if path == "/hotlink-page.mp4":
+            self._bytes(
+                b"<!DOCTYPE html><html><head><title>watch page</title></head><body>full page</body></html>",
+                "text/html; charset=utf-8",
+            )
+            return
+        if path == "/hotlink-page-untyped.mp4":
+            self._bytes(b"\n<html><body>untyped page</body></html>")
+            return
         if path == "/redirect.bin":
             self.send_response(302)
             self.send_header("Location", "/no-range.bin?token=REDIRECT_SECRET")
@@ -801,6 +841,122 @@ class HostTests(unittest.TestCase):
         self.assertTrue(capability.libmp3lame)
         self.assertEqual(capability.probe_error, "")
 
+    def test_aes128_hls_end_to_end_with_real_ffmpeg(self):
+        ffmpeg = shutil.which("ffmpeg")
+        if not ffmpeg:
+            self.skipTest("ffmpeg is required for the end-to-end AES-128 run")
+        key = bytes(range(16))
+        with tempfile.TemporaryDirectory() as directory:
+            source = pathlib.Path(directory) / "input.mp4"
+            key_path = pathlib.Path(directory) / "enc.key"
+            keyinfo = pathlib.Path(directory) / "keyinfo"
+            key_path.write_bytes(key)
+            keyinfo.write_text(f"key.key\n{key_path}\n000102030405060708090a0b0c0d0e0f\n", "utf-8")
+            gen = subprocess.run([
+                ffmpeg, "-hide_banner", "-loglevel", "error",
+                "-f", "lavfi", "-i", "testsrc=duration=4:size=320x240:rate=15",
+                "-f", "lavfi", "-i", "sine=duration=4",
+                "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
+                "-y", str(source),
+            ], capture_output=True)
+            if gen.returncode != 0:
+                self.skipTest(f"fixture generation failed: {gen.stderr[-120:]!r}")
+            playlist = pathlib.Path(directory) / "stream.m3u8"
+            enc = subprocess.run([
+                ffmpeg, "-hide_banner", "-loglevel", "error", "-i", str(source),
+                "-c", "copy", "-f", "hls", "-hls_time", "2", "-hls_list_size", "0",
+                "-hls_key_info_file", str(keyinfo),
+                "-hls_segment_filename", "seg%d.ts",
+                str(playlist),
+            ], capture_output=True, cwd=directory)
+            if enc.returncode != 0:
+                self.skipTest(f"encryption fixture failed: {enc.stderr[-120:]!r}")
+
+            # Real CDNs hand the playlist out with an absolute key URL.
+            text = playlist.read_text().replace('URI="key.key"', f'URI="{self.base}/aes2/key.key"')
+            FixtureHandler.dynamic_routes = {
+                "/aes2/stream.m3u8": {"body": text.encode(), "mime": "application/vnd.apple.mpegurl"},
+                "/aes2/key.key": {"body": key},
+                **{
+                    f"/aes2/seg{index}.ts": {"body": (pathlib.Path(directory) / f"seg{index}.ts").read_bytes(), "mime": "video/mp2t"}
+                    for index in range(8)
+                    if (pathlib.Path(directory) / f"seg{index}.ts").exists()
+                },
+            }
+            self.addCleanup(setattr, FixtureHandler, "dynamic_routes", {})
+
+            with tempfile.TemporaryDirectory() as out_dir:
+                target = pathlib.Path(out_dir) / "aes-out.mp4"
+                progress = host.Progress(lambda _event: None, "aes", target.name)
+                result = host.hls_fast_download(
+                    f"{self.base}/aes2/stream.m3u8", target, {}, 2,
+                    threading.Event(), progress, ffmpeg,
+                )
+                self.assertTrue(target.exists())
+                self.assertGreater(target.stat().st_size, 10_000)
+                probed = subprocess.run([
+                    shutil.which("ffprobe") or ffmpeg,
+                    "-v", "error", "-show_entries", "stream=codec_type",
+                    "-of", "csv=p=0", str(result),
+                ], capture_output=True, text=True)
+                kinds = sorted(line for line in probed.stdout.splitlines() if line)
+                self.assertEqual(kinds, ["audio", "video"], "the decrypted merge carries both tracks")
+
+    def test_inspect_hls_returns_playlist_text_through_pinned_client(self):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(os.environ, {"FLUXCATCH_DOWNLOAD_DIR": directory}):
+            native = host.Host()
+            try:
+                with mock.patch.object(native, "send") as send:
+                    native.handle({
+                        "type": "inspect_hls",
+                        "requestId": "inspect-1",
+                        "url": f"{self.base}/aes/index.m3u8",
+                        "headers": {"Referer": f"{self.base}/watch"},
+                    })
+                message = send.call_args.args[0]
+                self.assertEqual(message["type"], "inspect_hls_result")
+                self.assertEqual(message["requestId"], "inspect-1")
+                self.assertTrue(message["ok"])
+                self.assertIn("#EXT-X-KEY:METHOD=AES-128", message["text"])
+                self.assertIn("#EXTINF:4,", message["text"])
+                self.assertIn("/aes/index.m3u8", message["finalUrl"])
+
+                with mock.patch.object(native, "send") as failing_send:
+                    native.handle({
+                        "type": "inspect_hls",
+                        "requestId": "inspect-2",
+                        "url": f"{self.base}/missing-playlist.m3u8",
+                        "headers": {},
+                    })
+                failure = failing_send.call_args.args[0]
+                self.assertEqual(failure["type"], "inspect_hls_result")
+                self.assertFalse(failure["ok"])
+                self.assertTrue(failure["error"])
+            finally:
+                native.close()
+
+    def test_system_proxy_discovery_follows_runtime_changes_without_restart(self):
+        # Turning a system proxy off (or on) must never require restarting
+        # Chrome: discovery is re-read with a short cache instead of being
+        # captured once at startup.
+        with mock.patch.object(host, "_system_proxies", return_value={"https": "http://127.0.0.1:7890"}):
+            host.reset_system_proxy_cache()
+            proxied = host._system_proxy_opener()
+            self.assertIsNotNone(proxied)
+            self.assertIsNot(proxied, host.HTTP_OPENER)
+            # Inside the refresh window the cached opener is reused as-is.
+            with mock.patch.object(host, "_system_proxies", return_value={}):
+                self.assertIs(host._system_proxy_opener(), proxied)
+        host.reset_system_proxy_cache()
+        with mock.patch.object(host, "_system_proxies", return_value={}):
+            self.assertIsNone(host._system_proxy_opener(), "proxy off means direct connections with no restart")
+            with mock.patch.object(host, "_system_proxies", return_value={"https": "http://127.0.0.1:7890"}):
+                self.assertIsNone(host._system_proxy_opener(), "the cache holds until it expires")
+        host.reset_system_proxy_cache()
+        with mock.patch.object(host, "_system_proxies", return_value={"https": "http://127.0.0.1:7890"}):
+            self.assertIsNotNone(host._system_proxy_opener(), "proxy back on is picked up after expiry")
+        host.reset_system_proxy_cache()
+
     def test_ping_reports_precise_ffmpeg_capabilities(self):
         capability = host.FfmpegCapabilities(
             path="/fixture/ffmpeg",
@@ -1019,6 +1175,22 @@ class HostTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(host.DownloadError, "Protected DASH"):
             host.plan_static_dash(protected, f"{self.base}/dash/list.mpd")
+
+    def test_static_dash_planner_honors_preferred_representation(self):
+        whole_object = '''<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static" mediaPresentationDuration="PT2S"><Period><AdaptationSet mimeType="video/mp4"><Representation id="hi" bandwidth="5000000" width="1920" height="1080"><BaseURL>video-1080.m4s</BaseURL></Representation><Representation id="lo" bandwidth="2500000" width="1280" height="720"><BaseURL>video-720.m4s</BaseURL></Representation></AdaptationSet><AdaptationSet mimeType="audio/mp4"><Representation id="aud" bandwidth="128000"><BaseURL>audio.m4s</BaseURL></Representation></AdaptationSet></Period></MPD>'''
+        # Without a preference the planner keeps its best-first ladder.
+        default_video = next(track for track in host.plan_static_dash(whole_object, f"{self.base}/dash/out.mpd") if track.kind == "video")
+        self.assertEqual(default_video.representation_id, "hi")
+        # The user's dialog choice selects that exact Representation (by its
+        # document index, resolved from the opaque selector), never a substitute.
+        chosen_video = next(
+            track for track in host.plan_static_dash(whole_object, f"{self.base}/dash/out.mpd", selected_representation_index=1) if track.kind == "video"
+        )
+        self.assertEqual(chosen_video.representation_id, "lo")
+        self.assertEqual([item.url for item in chosen_video.resources], [f"{self.base}/dash/video-720.m4s"])
+        # A stale or forged preference fails loudly instead of falling back.
+        with self.assertRaisesRegex(host.UnsupportedDashError, "no longer present"):
+            host.plan_static_dash(whole_object, f"{self.base}/dash/out.mpd", selected_representation_index=7)
 
     def test_static_dash_download_fetches_tracks_then_merges_locally(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1369,6 +1541,26 @@ class HostTests(unittest.TestCase):
             self.assertFalse(target.with_suffix(".m4s.part.json").exists())
             self.assertNotIn("TOP_SECRET", "\n".join(str(path) for path in root.rglob("*")))
 
+    def test_dash_pair_disables_signed_url_checkpoints_and_startup_removes_crash_artifacts(self):
+        secret_url = f"{self.base}/file.bin?upsig=TOP_SECRET&deadline=1999999999&token=PRIVATE"
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            target = root / "video.m4s"
+            with mock.patch.object(host, "atomic_write_json") as checkpoint_write:
+                result = host.multipart_download(
+                    secret_url,
+                    target,
+                    {},
+                    2,
+                    threading.Event(),
+                    host.Progress(lambda _event: None, "signed", target.name),
+                    allow_resume=False,
+                )
+            self.assertEqual(result.read_bytes(), FILE_BYTES)
+            checkpoint_write.assert_not_called()
+            self.assertFalse(target.with_suffix(".m4s.part.json").exists())
+            self.assertNotIn("TOP_SECRET", "\n".join(str(path) for path in root.rglob("*")))
+
             crash_dir = root / ".fluxcatch-dash-pair-crashed"
             crash_dir.mkdir()
             (crash_dir / "video.m4s.part").write_bytes(b"partial")
@@ -1389,6 +1581,37 @@ class HostTests(unittest.TestCase):
                     self.assertTrue(unrelated.exists())
                 finally:
                     native.close()
+
+    def test_media_transfers_refuse_html_pages_instead_of_saving_them(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            # Typed page: the probe's Content-Type gate rejects it before any
+            # byte is written, ranged or not.
+            typed_target = root / "typed.mp4"
+            with self.assertRaisesRegex(host.HtmlMediaResponseError, "网页"):
+                host.multipart_download(
+                    f"{self.base}/hotlink-page.mp4",
+                    typed_target,
+                    {},
+                    2,
+                    threading.Event(),
+                    host.Progress(lambda _event: None, "typed", typed_target.name),
+                )
+            self.assertFalse(typed_target.exists())
+            self.assertFalse(typed_target.with_suffix(".mp4.part").exists())
+            # Untyped page: the first streamed block is sniffed and the
+            # transfer aborts without leaving a partial file behind.
+            untyped_target = root / "untyped.mp4"
+            with self.assertRaisesRegex(host.HtmlMediaResponseError, "网页"):
+                host.single_download(
+                    f"{self.base}/hotlink-page-untyped.mp4",
+                    untyped_target,
+                    {},
+                    threading.Event(),
+                    host.Progress(lambda _event: None, "untyped", untyped_target.name),
+                )
+            self.assertFalse(untyped_target.exists())
+            self.assertFalse(untyped_target.with_suffix(".mp4.part").exists())
 
     def test_dash_pair_rejects_expired_queued_job_and_track_start_expiry(self):
         capability = host.FfmpegCapabilities(path="/fixture/ffmpeg")
@@ -1941,7 +2164,7 @@ class HostTests(unittest.TestCase):
         self.assertEqual(fetched.text, "#EXTM3U\n#EXT-X-ENDLIST\n")
         self.assertEqual(attempts, [20, 20])
 
-    def test_manifest_fetch_non_timeout_failures_keep_the_old_retry_budget(self):
+    def test_manifest_fetch_non_timeout_failures_use_the_widened_retry_budget(self):
         attempts = []
 
         def failing_request(url, headers, **kwargs):  # noqa: ARG001 - fixture signature
@@ -1952,7 +2175,10 @@ class HostTests(unittest.TestCase):
             with self.assertRaisesRegex(host.DownloadError, "Manifest download failed after retries"):
                 host.fetch_manifest("https://example.test/media/index.m3u8", {})
 
-        self.assertEqual(len(attempts), 4)
+        # Connection-level bursts through local proxies (~4.5% TLS resets in
+        # the field) need a wider window than 3 quick retries: six attempts
+        # with 0.5→8s backoff ride out multi-second outages.
+        self.assertEqual(len(attempts), 6)
         self.assertTrue(all(timeout == 20 for timeout in attempts))
 
     def test_hls_redirect_final_url_and_headers_follow_the_response_chain(self):
@@ -2078,16 +2304,6 @@ class HostTests(unittest.TestCase):
             (
                 host.HlsPlaylist(
                     url=f"{self.base}/audio.m3u8",
-                    live=False,
-                    encrypted=True,
-                    protection="aes128",
-                    segments=[host.HlsSegment(f"{self.base}/seg0.ts")],
-                ),
-                "AES-128 audio HLS",
-            ),
-            (
-                host.HlsPlaylist(
-                    url=f"{self.base}/audio.m3u8",
                     live=True,
                     segments=[host.HlsSegment(f"{self.base}/seg0.ts")],
                 ),
@@ -2124,7 +2340,6 @@ class HostTests(unittest.TestCase):
             run.assert_not_called()
 
         unsupported = [
-            (host.HlsPlaylist(url=f"{self.base}/aes.m3u8", live=False, encrypted=True, protection="aes128", segments=[host.HlsSegment(f"{self.base}/seg0.ts")]), "AES-128 HLS"),
             (host.HlsPlaylist(url=f"{self.base}/discontinuous.m3u8", live=False, discontinuity=True, segments=[host.HlsSegment(f"{self.base}/seg0.ts")]), "Discontinuous HLS"),
         ]
         for playlist, message in unsupported:
@@ -2132,6 +2347,50 @@ class HostTests(unittest.TestCase):
                 with self.assertRaisesRegex(host.DownloadError, f"{message}.*0.2.5"):
                     host.hls_fast_download(playlist.url, target, {}, 1, threading.Event(), progress, "/ffmpeg")
             run.assert_not_called()
+
+    def test_aes128_hls_stages_local_playlist_and_decrypts_via_ffmpeg(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = pathlib.Path(directory) / "aes.mp4"
+            progress = host.Progress(lambda _event: None, "aes", target.name)
+            captured: dict[str, Any] = {}
+
+            def fake_ffmpeg(args, output, _cancel, _progress, **_kwargs):
+                index_argument = args[args.index("-i") + 1]
+                index_path = pathlib.Path(index_argument)
+                # The work directory is wiped once this returns, so capture
+                # every on-disk piece of evidence while it still exists.
+                captured["index_text"] = index_path.read_text("utf-8")
+                captured["staged_names"] = sorted(path.name for path in index_path.parent.iterdir())
+                captured["key_bytes"] = (index_path.parent / "key0.bin").stat().st_size
+                output.write_bytes(b"decrypted")
+                return output
+
+            with mock.patch.object(host, "run_ffmpeg", side_effect=fake_ffmpeg):
+                result = host.hls_fast_download(
+                    f"{self.base}/aes/index.m3u8",
+                    target,
+                    {},
+                    2,
+                    threading.Event(),
+                    progress,
+                    "/fixture/ffmpeg",
+                )
+            self.assertEqual(result.read_bytes(), b"decrypted")
+            text = captured["index_text"]
+            self.assertIn('#EXT-X-KEY:METHOD=AES-128,URI="key0.bin"', text, "the key URI points at the staged local key file")
+            self.assertNotIn("seg0.ts", text, "remote segment names are rewritten to staged local files")
+            self.assertIn("#EXT-X-MEDIA-SEQUENCE:7", text, "the sequence number survives the rewrite so IV derivation stays correct")
+            # Staged segments keep their real extension: ffmpeg's hls demuxer
+            # gates staged local playlists by segment file extension.
+            self.assertIn("00000000.ts", text)
+            self.assertIn("00000001.ts", text)
+            self.assertEqual(captured["key_bytes"], 16)
+            self.assertIn("00000000.ts", captured["staged_names"])
+            self.assertIn("00000001.ts", captured["staged_names"])
+            requested = [path for path, _range in FixtureHandler.request_log]
+            self.assertIn("/aes/key.bin", requested, "the key is fetched through the pinned client")
+            self.assertIn("/aes/seg0.ts", requested)
+            self.assertIn("/aes/seg1.ts", requested)
 
         malformed_durations = host.HlsPlaylist(
             url=f"{self.base}/vod.m3u8",
@@ -2330,10 +2589,13 @@ class HostTests(unittest.TestCase):
             target = root / "target.bin"
             source.write_bytes(b"new")
             target.write_bytes(b"old")
-            with self.assertRaises(host.DownloadError):
-                host.commit_file(source, target)
+            # An occupied name is never replaced; the finished bytes are
+            # published under the next free name instead of being discarded.
+            published = host.commit_file(source, target)
+            self.assertEqual(published, root / "target (1).bin")
             self.assertEqual(target.read_bytes(), b"old")
-            self.assertEqual(source.read_bytes(), b"new")
+            self.assertEqual(published.read_bytes(), b"new")
+            self.assertFalse(source.exists())
 
     def test_native_message_reader_handles_short_reads(self):
         messages = [{"type": "ping", "requestId": "one"}, {"type": "cancel", "jobId": "two"}]
@@ -2400,6 +2662,240 @@ class HostTests(unittest.TestCase):
             self.assertFalse(launcher.exists())
             self.assertFalse(installed_host.exists())
             self.assertFalse(installed_policy.exists())
+
+
+    def test_multipart_pause_keeps_checkpoint_and_resume_skips_completed_ranges(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = pathlib.Path(directory) / "paused.bin"
+            part = target.with_suffix(".bin.part")
+            checkpoint = target.with_suffix(".bin.part.json")
+            control = host.JobControl()
+            original_write = host.atomic_write_json
+
+            def pause_once_a_range_is_durable(path, value):
+                original_write(path, value)
+                if value.get("completed"):
+                    control.reason = "pause"
+                    control.set()
+
+            with mock.patch.object(host, "atomic_write_json", side_effect=pause_once_a_range_is_durable):
+                with self.assertRaises(host.Cancelled):
+                    host.multipart_download(
+                        f"{self.base}/file.bin",
+                        target,
+                        {},
+                        4,
+                        control,
+                        host.Progress(lambda _event: None, "paused", target.name),
+                    )
+            self.assertTrue(part.is_file(), "a pause keeps the part file")
+            self.assertTrue(checkpoint.is_file(), "a pause keeps the checkpoint")
+            completed = json.loads(checkpoint.read_text("utf-8"))["completed"]
+            self.assertTrue(completed)
+            requests_before = len(FixtureHandler.request_log)
+            resumed = host.multipart_download(
+                f"{self.base}/file.bin",
+                target,
+                {},
+                4,
+                threading.Event(),
+                host.Progress(lambda _event: None, "resumed", target.name),
+            )
+            later_ranges = [value for path, value in FixtureHandler.request_log[requests_before:] if path == "/file.bin"]
+            for key in completed:
+                self.assertNotIn(f"bytes={key}", later_ranges, "a resumed job never re-fetches a durable range")
+            self.assertEqual(resumed.read_bytes(), FILE_BYTES)
+            self.assertFalse(part.exists())
+            self.assertFalse(checkpoint.exists())
+            # The same output name is handed back to the resuming job.
+            part.write_bytes(b"")
+            checkpoint.write_text(json.dumps({"schemaVersion": 2}), "utf-8")
+            self.assertEqual(host.unique_path(target.parent, "paused.bin", allow_checkpoint=True), target.with_name("paused (1).bin"))
+
+    def test_hls_pause_keeps_whole_segments_and_resume_reuses_them(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            target = root / "paused.ts"
+            control = host.JobControl()
+            original_report = host.Progress.report
+
+            def pause_after_first_segment(progress, payload, *, force=False):
+                result = original_report(progress, payload, force=force)
+                if str(payload.get("message", "")).startswith("分片 1/"):
+                    control.reason = "pause"
+                    control.set()
+                return result
+
+            with mock.patch.object(host.Progress, "report", pause_after_first_segment):
+                with self.assertRaises(host.Cancelled):
+                    host.hls_fast_download(f"{self.base}/master.m3u8", target, {}, 1, control, host.Progress(lambda _event: None, "paused", target.name), None)
+            marker = target.with_suffix(".ts.part.json")
+            placeholder = target.with_suffix(".ts.part")
+            self.assertTrue(marker.is_file(), "a pause writes the segment checkpoint")
+            self.assertTrue(placeholder.is_file() and placeholder.stat().st_size == 0)
+            saved = json.loads(marker.read_text("utf-8"))
+            self.assertEqual(saved["schemaVersion"], 3)
+            self.assertEqual(saved["kind"], "hls")
+            self.assertNotIn("m3u8", json.dumps(saved), "the marker never carries the playlist URL")
+            work_dir = root / saved["workDir"]
+            self.assertTrue(work_dir.is_dir())
+            staged = sorted(path.name for path in (work_dir / "media").iterdir())
+            self.assertTrue(staged, "whole segments stay staged")
+            self.assertFalse(any(name.endswith(".tmp") for name in staged), "no half-written object survives a pause")
+            self.assertEqual(host.unique_path(root, "paused.ts", allow_checkpoint=True), target, "the resuming job gets the same name")
+            # Startup cleanup keeps the referenced directory but drops orphans.
+            orphan = root / "fluxcatch-hls-orphan"
+            orphan.mkdir()
+            host.cleanup_stale_workdirs(root)
+            self.assertTrue(work_dir.is_dir())
+            self.assertFalse(orphan.exists())
+            requests_before = len(FixtureHandler.request_log)
+            result = host.hls_fast_download(f"{self.base}/master.m3u8", target, {}, 1, threading.Event(), host.Progress(lambda _event: None, "resumed", target.name), None)
+            later = [path for path, _value in FixtureHandler.request_log[requests_before:]]
+            self.assertNotIn("/seg0.ts", later, "the first segment is reused, not re-fetched")
+            self.assertEqual(result.read_bytes(), b"".join(SEGMENTS[f"/seg{i}.ts"] for i in range(3)))
+            self.assertFalse(work_dir.exists())
+            self.assertFalse(marker.exists())
+            self.assertFalse(placeholder.exists())
+
+    def test_expired_pause_markers_and_discard_remove_every_leftover(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            kept = root / "fluxcatch-dash-kept"
+            kept.mkdir()
+            (kept / "video-default").mkdir()
+            target = root / "paused.mp4"
+            host.write_segment_checkpoint(target, "https://media.example/manifest.mpd", kept, "dash")
+            old = time.time() - host.STALE_PARTIAL_TTL_SECONDS - 10
+            os.utime(target.with_suffix(".mp4.part.json"), (old, old))
+            host.cleanup_stale_workdirs(root)
+            self.assertFalse(kept.exists(), "an expired marker no longer protects its directory")
+            self.assertFalse(target.with_suffix(".mp4.part.json").exists())
+            self.assertFalse(target.with_suffix(".mp4.part").exists())
+
+            kept.mkdir()
+            host.write_segment_checkpoint(target, "https://media.example/manifest.mpd", kept, "dash")
+            removed = host.discard_partial_download(root, "paused.mp4")["removed"]
+            self.assertEqual(sorted(removed), ["checkpoint", "part", "workDir"])
+            self.assertFalse(kept.exists())
+            self.assertEqual(host.discard_partial_download(root, "../paused.mp4")["removed"], [])
+
+    def test_job_slots_follow_the_concurrency_setting_and_announce_queueing(self):
+        sent = []
+        native = host.Host.__new__(host.Host)
+        native.send = sent.append
+        native.job_limit = host.DEFAULT_CONCURRENT_JOBS
+        native.running_jobs = 0
+        native.slots = threading.Condition()
+        first = host.JobControl()
+        native._acquire_job_slot(1, first, "job-1", "a.mp4")
+        self.assertEqual(native.running_jobs, 1)
+        second = host.JobControl()
+        acquired = threading.Event()
+
+        def wait_for_slot():
+            native._acquire_job_slot(1, second, "job-2", "b.mp4")
+            acquired.set()
+
+        waiter = threading.Thread(target=wait_for_slot, daemon=True)
+        waiter.start()
+        self.assertFalse(acquired.wait(0.6), "the second job waits while the limit is one")
+        self.assertTrue(any(event.get("status") == "queued" and event.get("jobId") == "job-2" for event in sent), "a waiting job tells Chrome it is queued")
+        native._release_job_slot()
+        self.assertTrue(acquired.wait(3.0), "releasing a slot admits the waiting job")
+        self.assertEqual(native.running_jobs, 1)
+        third = host.JobControl()
+        third.set()
+        with self.assertRaises(host.Cancelled):
+            native._acquire_job_slot(1, third, "job-3", "c.mp4")
+        native._release_job_slot()
+        self.assertEqual(native.running_jobs, 0)
+
+    def test_save_folder_config_precedence_validation_and_confinement(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            config_path = root / "config.json"
+            chosen = root / "Movies" / "FluxCatch"
+            previous = root / "Old"
+            previous.mkdir()
+            (previous / "kept.mp4").write_bytes(b"old")
+            # No config: the default folder. A chosen folder wins over it; the
+            # environment override (tests and harnesses) wins over both.
+            self.assertEqual(host.load_host_config(config_path), {})
+            host.save_host_config({"downloadDir": str(chosen), "knownDownloadDirs": [str(previous), "relative/path", str(root / "missing")]}, config_path)
+            config = host.load_host_config(config_path)
+            with mock.patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("FLUXCATCH_DOWNLOAD_DIR", None)
+                self.assertEqual(host.resolve_download_dir(config), chosen.resolve())
+                self.assertTrue(chosen.is_dir(), "a chosen folder is created on demand")
+                self.assertEqual(host.resolve_download_dir({"downloadDir": "not/absolute"}), host.default_download_dir())
+            with mock.patch.dict(os.environ, {"FLUXCATCH_DOWNLOAD_DIR": str(root / "env")}):
+                self.assertEqual(host.resolve_download_dir(config), root / "env")
+            self.assertEqual(host.known_download_dirs(config), [previous])
+            with self.assertRaises(host.DownloadError):
+                host.validate_download_dir("relative")
+            with self.assertRaises(host.DownloadError):
+                host.validate_download_dir(str(root / "fluxcatch-hls-work"))
+            link = root / "link"
+            link.symlink_to(previous)
+            with self.assertRaises(host.DownloadError):
+                host.validate_download_dir(str(link))
+
+            native = host.Host.__new__(host.Host)
+            native.targets_lock = threading.Lock()
+            native.download_dir = chosen.resolve()
+            native.known_download_dirs = [previous]
+            native.config = {}
+            inside = chosen / "new.mp4"
+            inside.write_bytes(b"new")
+            self.assertEqual(native.managed_path(str(inside)), inside.resolve())
+            self.assertEqual(native.managed_path(str(previous / "kept.mp4")), (previous / "kept.mp4").resolve(), "files saved in an earlier folder stay openable")
+            with self.assertRaises(host.DownloadError):
+                native.managed_path(str(root / "elsewhere.mp4"))
+
+            sent = []
+            native.send = sent.append
+            with mock.patch.dict(os.environ, {"FLUXCATCH_DOWNLOAD_DIR": str(root / "env")}), mock.patch.object(host, "default_download_dir", return_value=root / "Default"):
+                native.handle_choose_folder({"type": "choose_folder", "requestId": "r1", "reset": True})
+            self.assertTrue(sent[-1]["ok"], sent[-1])
+            self.assertEqual(sent[-1]["downloadDir"], str((root / "Default").resolve()))
+            self.assertEqual(native.download_dir, (root / "Default").resolve())
+            self.assertIn(chosen.resolve(), native.known_download_dirs, "the previous folder is remembered")
+            self.assertFalse((root / "nothing-written.json").exists())
+            with mock.patch.object(host, "choose_folder_dialog", return_value=None):
+                native.handle_choose_folder({"type": "choose_folder", "requestId": "r2"})
+            self.assertFalse(sent[-1]["ok"])
+            self.assertEqual(sent[-1]["error"], "cancelled")
+
+    def test_host_pause_requests_flip_the_job_control_and_report_paused(self):
+        sent = []
+        native = host.Host.__new__(host.Host)
+        native.jobs = {}
+        native.jobs_lock = threading.Lock()
+        native.targets_lock = threading.Lock()
+        native.reserved_targets = set()
+        native.write_lock = threading.Lock()
+        native.send = sent.append
+        with tempfile.TemporaryDirectory() as directory:
+            native.download_dir = pathlib.Path(directory)
+            control = host.JobControl()
+            native.jobs["job-1"] = control
+            native.handle({"type": "pause", "jobId": "job-1"})
+            self.assertTrue(control.is_set())
+            self.assertEqual(control.reason, "pause")
+            native.run_job("job-1", {"type": "download", "url": f"{self.base}/file.bin", "filename": "paused.bin"}, control)
+            self.assertEqual(sent[-1]["type"], "paused")
+            self.assertEqual(sent[-1]["status"], "paused")
+            self.assertEqual(sent[-1]["targetName"], "paused.bin")
+            self.assertNotIn("job-1", native.jobs)
+            native.jobs["job-2"] = host.JobControl()
+            native.jobs["job-2"].reason = "pause"
+            native.handle({"type": "cancel", "jobId": "job-2"})
+            self.assertEqual(native.jobs["job-2"].reason, "cancel", "a cancel after a pause request discards state")
+            native.handle({"type": "discard", "requestId": "r1", "filename": "nothing.bin"})
+            self.assertEqual(sent[-1]["action"], "discard")
+            self.assertTrue(sent[-1]["ok"])
+        self.assertEqual(host.PAUSE_CAPABILITY, "resume-v1")
 
 
 if __name__ == "__main__":
@@ -2474,6 +2970,185 @@ class ManifestFetchDeadlineTest(unittest.TestCase):
         elapsed, message = self._run_fetch(DripHandler)
         self.assertIn("获取播放列表超时", message)
         self.assertLess(elapsed, 70.0)
+
+
+class FakeBodyResponse:
+    """Minimal urllib-like response for single-stream download tests."""
+
+    def __init__(self, chunks, status=200, headers=None):
+        self.chunks = list(chunks)
+        self.status = status
+        self.headers = headers or {}
+        self.closed = False
+
+    def read(self, _size=-1):
+        return self.chunks.pop(0) if self.chunks else b""
+
+    def geturl(self):
+        return "https://media.example.test/clip.mp4"
+
+    def close(self):
+        self.closed = True
+
+
+class OutputAndFileActionTests(unittest.TestCase):
+    """Publishing, history metadata and the Finder-facing file actions."""
+
+    def _host(self, directory):
+        capability = host.FfmpegCapabilities(path="/fixture/ffmpeg", version="8.1", hls_demuxer=True, dash_demuxer=True, libmp3lame=True)
+        with mock.patch.dict(os.environ, {"FLUXCATCH_DOWNLOAD_DIR": directory}), mock.patch.object(host, "probe_ffmpeg", return_value=capability), mock.patch.object(host, "probe_ytdlp", return_value=host.YtDlpCapabilities()):
+            return host.Host()
+
+    def test_commit_file_publishes_under_next_free_name_when_occupied(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            target = root / "movie.mp4"
+            target.write_bytes(b"older file the user dropped in")
+            source = root / "movie.mp4.part"
+            source.write_bytes(b"fresh transfer")
+            published = host.commit_file(source, target)
+            self.assertEqual(published, root / "movie (1).mp4")
+            self.assertEqual(published.read_bytes(), b"fresh transfer")
+            self.assertEqual(target.read_bytes(), b"older file the user dropped in", "an occupied name is never overwritten")
+            self.assertFalse(source.exists())
+
+    def test_cleanup_collects_stale_partials_but_keeps_fresh_and_finished_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            now = time.time()
+            old = now - 9 * 86_400
+            stale_part = root / "old.mp4.part"
+            stale_checkpoint = root / "old.mp4.part.json"
+            stale_staging = root / f".old.{'0' * 32}.part.mp4"
+            fresh_part = root / "fresh.mp4.part"
+            finished = root / "movie.mp4"
+            work_dir = root / "fluxcatch-hls-crash"
+            for path in (stale_part, stale_checkpoint, stale_staging, fresh_part, finished):
+                path.write_bytes(b"x")
+            work_dir.mkdir()
+            for path in (stale_part, stale_checkpoint, stale_staging, finished):
+                os.utime(path, (old, old))
+            host.cleanup_stale_workdirs(root, now=now)
+            self.assertFalse(stale_part.exists())
+            self.assertFalse(stale_checkpoint.exists())
+            self.assertFalse(stale_staging.exists())
+            self.assertFalse(work_dir.exists())
+            self.assertTrue(fresh_part.exists(), "a week-old resumable transfer keeps its checkpoint")
+            self.assertTrue(finished.exists(), "published media is never touched")
+
+    def test_single_download_rejects_truncated_close_delimited_bodies(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = pathlib.Path(directory) / "clip.mp4"
+            progress = host.Progress(lambda _event: None, "job", target.name)
+            truncated = lambda *_args, **_kwargs: FakeBodyResponse([b"a" * 1000], headers={"Content-Type": "video/mp4"})  # noqa: E731
+            with mock.patch.object(host, "request", side_effect=truncated), mock.patch.object(host, "_retry_wait", return_value=None):
+                with self.assertRaisesRegex(host.DownloadError, "ended before Content-Length"):
+                    host.single_download("https://media.example.test/clip.mp4", target, {}, threading.Event(), progress, expected_length=2000)
+            self.assertFalse(target.exists())
+            self.assertFalse(target.with_suffix(".mp4.part").exists(), "no partial output is left behind")
+            # A non-200 answer to a media GET (e.g. 204 or a 206 to a plain
+            # request) is not media either.
+            odd = lambda *_args, **_kwargs: FakeBodyResponse([b""], status=204, headers={"Content-Type": "video/mp4"})  # noqa: E731
+            with mock.patch.object(host, "request", side_effect=odd), mock.patch.object(host, "_retry_wait", return_value=None):
+                with self.assertRaisesRegex(host.DownloadError, "unexpected media response status"):
+                    host.single_download("https://media.example.test/clip.mp4", target, {}, threading.Event(), progress)
+
+    def test_completion_message_carries_media_facts_and_poster(self):
+        with tempfile.TemporaryDirectory() as directory:
+            native = self._host(directory)
+            try:
+                target = pathlib.Path(directory) / "lesson.mp4"
+                target.write_bytes(b"0" * 4096)
+                facts = {"duration": 83.4, "width": 1280, "height": 720, "container": "mov", "videoCodec": "h264", "audioCodec": "aac"}
+                with mock.patch.object(host, "describe_media", return_value=facts) as describe, mock.patch.object(host, "make_thumbnail", return_value="data:image/jpeg;base64,AAAA") as poster:
+                    message = native.completion_message("job-1", target, started=time.monotonic() - 1.5)
+                self.assertEqual(message["type"], "complete")
+                self.assertEqual(message["path"], str(target))
+                self.assertEqual(message["size"], 4096)
+                self.assertEqual(message["message"], host.COMPLETE_MESSAGE)
+                self.assertEqual(message["media"], facts)
+                self.assertEqual(message["thumbnail"], "data:image/jpeg;base64,AAAA")
+                self.assertGreaterEqual(message["elapsedMs"], 1400)
+                self.assertEqual(message["downloadDir"], str(native.download_dir))
+                describe.assert_called_once_with(target, native.ffmpeg)
+                poster.assert_called_once_with(target, native.ffmpeg, 83.4)
+                with mock.patch.object(host, "describe_media", return_value={}), mock.patch.object(host, "make_thumbnail") as skipped:
+                    audio = native.completion_message("job-2", target, started=time.monotonic(), extract_audio=True)
+                self.assertIsNone(audio["thumbnail"])
+                skipped.assert_not_called()
+                # The ping advertises the folder and the action protocol.
+                with mock.patch.object(native, "send") as send:
+                    native.handle({"type": "ping", "requestId": "p"})
+                pong = send.call_args.args[0]
+                self.assertEqual(pong["downloadDir"], str(native.download_dir))
+                self.assertEqual(pong["capabilities"]["fileActions"], "finder-v1")
+            finally:
+                native.close()
+
+    def test_file_actions_are_confined_to_the_download_folder(self):
+        with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory() as elsewhere:
+            native = self._host(directory)
+            try:
+                root = native.download_dir.resolve()
+                inside = root / "keep.mp4"
+                inside.write_bytes(b"media")
+                partial = root / "half.mp4.part"
+                partial.write_bytes(b"...")
+                outside = pathlib.Path(elsewhere) / "secret.txt"
+                outside.write_text("private")
+                link = root / "link.mp4"
+                link.symlink_to(outside)
+                opened = []
+                with mock.patch.object(host, "run_opener", side_effect=lambda args: opened.append(args)):
+                    reveal = native.handle_file_action("reveal", {"requestId": "r1", "path": str(inside)})
+                    self.assertTrue(reveal["ok"], reveal)
+                    self.assertEqual(opened[-1], [host.OPEN_COMMAND, "-R", str(inside)])
+                    opened_file = native.handle_file_action("open", {"requestId": "r2", "path": str(inside)})
+                    self.assertTrue(opened_file["ok"])
+                    self.assertEqual(opened[-1], [host.OPEN_COMMAND, str(inside)])
+                    folder = native.handle_file_action("open_folder", {"requestId": "r3"})
+                    self.assertTrue(folder["ok"])
+                    self.assertEqual(opened[-1], [host.OPEN_COMMAND, str(native.download_dir)])
+                    for bad in (str(outside), str(link), "relative/keep.mp4", str(root), str(partial), str(root / "missing.mp4"), 42):
+                        result = native.handle_file_action("open", {"requestId": "x", "path": bad})
+                        self.assertFalse(result["ok"], bad)
+                    self.assertEqual(len(opened), 3, "no confined path ever reaches macOS")
+                    stat = native.handle_file_action("stat", {"requestId": "s", "paths": [str(inside), str(outside), str(root / "gone.mp4")]})
+                    self.assertTrue(stat["ok"])
+                    self.assertEqual([item["exists"] for item in stat["items"]], [True, False, False])
+                    self.assertEqual(stat["items"][0]["size"], 5)
+                self.assertTrue(outside.exists())
+                self.assertEqual(reveal["type"], "file_action_result")
+                self.assertEqual(reveal["requestId"], "r1")
+            finally:
+                native.close()
+
+    def test_trash_moves_the_file_into_the_user_trash_without_deleting_bytes(self):
+        with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory() as home:
+            native = self._host(directory)
+            try:
+                first = native.download_dir / "clip.mp4"
+                first.write_bytes(b"one")
+                with mock.patch.dict(os.environ, {"HOME": home}):
+                    result = native.handle_file_action("trash", {"requestId": "t1", "path": str(first)})
+                    self.assertTrue(result["ok"], result)
+                    self.assertFalse(first.exists())
+                    trashed = pathlib.Path(home) / ".Trash" / "clip.mp4"
+                    self.assertEqual(trashed.read_bytes(), b"one")
+                    second = native.download_dir / "clip.mp4"
+                    second.write_bytes(b"two")
+                    again = native.handle_file_action("trash", {"requestId": "t2", "path": str(second)})
+                    self.assertTrue(again["ok"], again)
+                    names = sorted(path.name for path in (pathlib.Path(home) / ".Trash").iterdir())
+                    self.assertEqual(len(names), 2, names)
+                    self.assertEqual(trashed.read_bytes(), b"one", "an earlier trashed file is never overwritten")
+                    outside = pathlib.Path(home) / "not-managed.mp4"
+                    outside.write_bytes(b"keep")
+                    refused = native.handle_file_action("trash", {"requestId": "t3", "path": str(outside)})
+                    self.assertFalse(refused["ok"])
+                    self.assertTrue(outside.exists())
+            finally:
+                native.close()
 
 
 if __name__ == "__main__":

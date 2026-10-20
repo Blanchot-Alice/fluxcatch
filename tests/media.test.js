@@ -100,6 +100,37 @@ test("recognizes only trusted Bilibili DASH tracks while generic m4s stays suppr
   assert.equal(classifyMedia({ url: "https://cdn.test/12345.m4s", mime: "video/iso.segment" })?.kind, "segment");
 });
 
+test("accepts the 2026-08 HEVC range and `_da2` object infix observed on live playurl responses", () => {
+  // Live BV1GJ411x7h7 playurl response (2026-08-29): re-transcoded assets ship
+  // HEVC objects as `{cid}_da2x1-1-1001xx.m4s` while their AAC audio partners
+  // keep `{cid}_da2-1-302xx.m4s`. These are the exact shapes a macOS Chrome
+  // requests, and the old 30[0-2]xx-only gate rejected the HEVC video track.
+  const hevcVideo = "https://xy39x174x253x202xy.mcdn.bilivideo.cn:8082/v1/resource/upgcxcode/99/91/137649199/137649199_da2x1-1-100110.m4s?bw=218859&deadline=1788018776";
+  const audio = "https://xy36x156x63x24xy.mcdn.bilivideo.cn:8082/v1/resource/upgcxcode/99/91/137649199/137649199_da2-1-30232.m4s?bw=103081";
+  const avcVideo = "https://upos-sz-mirrorhwo1.bilivideo.com/upgcxcode/99/91/137649199/137649199_da2-1-30032.m4s?e=SIG";
+
+  assert.equal(isBilibiliMediaUrl(hevcVideo), true, "new 1001xx representation range stays a trusted upgcxcode object");
+  assert.equal(isBilibiliMediaUrl(audio), true);
+  assert.equal(isBilibiliMediaUrl("https://xy39x174x253x202xy.mcdn.bilivideo.cn:8082/v1/resource/upgcxcode/99/91/137649199/137649199_da2x1-1-130110.m4s"), false, "unknown six-digit ranges stay out");
+
+  const video = classifyBilibiliDashTrack({ url: hevcVideo, mime: "video/mp4" });
+  assert.equal(video?.trackType, "video");
+  assert.equal(video?.representationId, "100110");
+  assert.equal(video?.height, 480, "100110 maps to quality 32 (480p) per live playurl metadata");
+  const observedAudio = classifyBilibiliDashTrack({ url: audio, mime: "audio/mp4" });
+  assert.equal(observedAudio?.trackType, "audio");
+
+  // One playback must pair across the `_da2x1` (HEVC video) and `_da2` (audio)
+  // infixes, including its AVC fallback track.
+  assert.equal(video?.assetFamily, observedAudio?.assetFamily, "HEVC video and its audio partner share one asset family");
+  assert.match(video?.assetFamily || "", /137649199-1-\{track\}$/);
+  const avc = classifyBilibiliDashTrack({ url: avcVideo, mime: "video/mp4" });
+  assert.equal(avc?.trackType, "video");
+  assert.equal(avc?.assetFamily, video?.assetFamily, "AVC fallback of the same playback joins the family");
+  assert.equal(video?.trackId, "bt-7dq5gn-6mlpy5");
+  assert.doesNotMatch(video?.trackId || "", /upgcxcode|deadline|100110/);
+});
+
 test("URL and filename normalization", () => {
   assert.equal(canonicalizeUrl("https://example.test/a.mp4#frag"), "https://example.test/a.mp4");
   assert.equal(canonicalizeUrl("file:///tmp/a"), null);

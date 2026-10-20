@@ -13,9 +13,9 @@ direct files, HLS, DASH — and saves through a policy-controlled local engine.
 No cloud. No relay. Your bytes never leave your machine except toward the site
 you are already visiting.
 
-[![Version](https://img.shields.io/badge/version-0.2.5-5E8F84?style=flat-square)](https://github.com/Blanchot-Alice/fluxcatch/releases)
+[![Version](https://img.shields.io/badge/version-0.2.5-007AFF?style=flat-square)](https://github.com/Blanchot-Alice/fluxcatch/releases)
 [![Chrome MV3](https://img.shields.io/badge/Chrome-Manifest_V3-8E82AD?style=flat-square&logo=googlechrome&logoColor=white)](https://developer.chrome.com/docs/extensions/develop/migrate)
-[![License: MIT](https://img.shields.io/badge/license-MIT-C78FA0?style=flat-square)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-FF375F?style=flat-square)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS_%2B_Chrome-486D80?style=flat-square)](docs/INSTALL.md)
 [![Tests](https://img.shields.io/github/actions/workflow/status/Blanchot-Alice/fluxcatch/ci.yml?branch=main&label=tests&style=flat-square)](../../actions)
 
@@ -42,6 +42,9 @@ picking them.
 | ⚡ **Conditional acceleration** | Parallel Range transfers when the server supports them; claimed honestly, guaranteed by nothing. |
 | 🔒 **Local-first privacy** | No telemetry, account, or relay. Cookies stay scoped to their origin and are stripped on cross-origin hops. |
 | 🛡️ **DRM stays DRM** | Protected content is detected and reported — never decrypted, never bypassed. |
+| ⏯ **Pause, resume, queue** | Pause any running job and pick it up later: direct files resume from their checkpoint, HLS/DASH reuse every whole segment already staged. A download queue (1–6 at once) keeps the rest in line, and the engine says so. |
+| 📥 **Batch and link downloads** | "Download all" for the whole page, a link icon to paste any media address, and a save folder you choose through the native macOS picker. ⌥⇧F / ⌥⇧D / ⌥⇧W open the popup, downloads and workspace. |
+| 🗂 **A real download history** | Files the local engine saves never show up in `chrome://downloads`. FluxCatch keeps its own durable record with poster frame, duration, resolution and source page, plus Open / Show in Finder / Retry / Move to Trash, in the popup, the Side Panel and a full downloads page. |
 
 ## Site adapters
 
@@ -57,9 +60,13 @@ first-class treatment:
 
 ## Interface
 
-The toolbar badge lights up as media is detected. The popup handles quick
-saves, the Side Panel is the long-download workbench, Settings explains build
-identity, privacy boundaries and local capabilities in one honest reading flow.
+The toolbar badge lights up as media is detected (and turns pool-green while
+anything downloads). The popup handles quick saves and shows the newest
+finished file with its poster frame, the Side Panel is the long-download
+workbench, the downloads page (`下载记录`) is the complete day-by-day record
+with search and Finder actions, and Settings explains build identity, privacy
+boundaries, the save location and local capabilities in one honest reading
+flow. Completion notifications lead straight to the file.
 
 | Popup | Side Panel | Download dialog |
 | :---: | :---: | :---: |

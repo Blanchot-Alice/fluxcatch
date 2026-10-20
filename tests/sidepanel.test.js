@@ -35,7 +35,7 @@ test("side panel ships complete workspace assets and accessible states", () => {
   assert.ok(html.indexOf('href="../ui/tokens.css"') < html.indexOf('href="../ui/components.css"'));
   assert.ok(html.indexOf('href="../ui/components.css"') < html.indexOf('href="sidepanel.css"'));
 
-  assert.match(tokens, /--primary:#5E8F84/);
+  assert.match(tokens, /--primary:#4E7FA2/);
   assert.match(tokens, /prefers-color-scheme:\s*dark/);
   assert.match(components, /prefers-reduced-motion:\s*reduce/);
   assert.match(components, /button:focus-visible/);
@@ -117,6 +117,6 @@ test("popup and side panel render privacy-safe thumbnails with kind fallbacks", 
   assert.match(thumbnailJs, /URL\.revokeObjectURL\(objectUrl\)/);
   assert.match(thumbnailJs, /thumbnail\.replaceWith\(fallback\)/);
 
-  assert.match(popupCss, /\.media-thumbnail\{[^}]*width:40px[^}]*height:40px[^}]*border-radius:11px[^}]*object-fit:cover/);
-  assert.match(sidepanelCss, /\.media-thumbnail \{[^}]*width:38px[^}]*height:38px[^}]*border-radius:10px[^}]*object-fit:cover/);
+  assert.match(popupCss, /\.media-thumbnail\{[^}]*width:48px[^}]*height:48px[^}]*border-radius:var\(--r-row\)[^}]*object-fit:cover/);
+  assert.match(sidepanelCss, /\.media-thumbnail \{[^}]*width:44px[^}]*height:44px[^}]*border-radius:var\(--r-row\)[^}]*object-fit:cover/);
 });

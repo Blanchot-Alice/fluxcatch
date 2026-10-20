@@ -20,9 +20,13 @@ test("checked-in build identity matches the manifest and identifies unpacked sou
   assert.equal(BUILD_IDENTITY.capabilityProfileVersion, CAPABILITY_PROFILE_VERSION);
   assert.equal(BUILD_PROFILE.channel, "github");
   assert.equal(BUILD_PROFILE.features.separateAudioHls, true);
-  for (const feature of ["liveHls", "encryptedHls", "externalToolNetwork", "remoteThumbnails"]) {
+  for (const feature of ["liveHls", "externalToolNetwork"]) {
     assert.equal(BUILD_PROFILE.features[feature], false);
   }
+  // AES-128 HLS downloads (ordinary transport encryption) and page-referenced
+  // thumbnails render on cards; both were scope cuts in 0.2.4, lifted here.
+  assert.equal(BUILD_PROFILE.features.encryptedHls, true);
+  assert.equal(BUILD_PROFILE.features.remoteThumbnails, true);
 });
 
 test("native compatibility fails closed on missing or mismatched identity", () => {

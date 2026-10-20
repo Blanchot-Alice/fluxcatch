@@ -41,29 +41,79 @@ export function parseDash(text, manifestUrl) {
   };
 }
 
+// MV3 service workers have no DOMParser, so this path is the one that runs in
+// production. It walks the tag stream with an element stack instead of a
+// single regular expression: the previous regex swallowed every self-closing
+// `<Representation …/>` up to the next closing tag, collapsing a whole ladder
+// into one entry and dropping the inherited AdaptationSet mimeType.
 function parseDashPortable(text, manifestUrl) {
   const source = String(text || "");
-  if (!/<MPD\b/i.test(source)) throw new Error("这不是有效的 DASH MPD");
+  const mpdOpen = source.match(/<MPD\b([^>]*)>/i);
+  if (!mpdOpen) throw new Error("这不是有效的 DASH MPD");
+  const mpdAttributes = attributes(mpdOpen[1] || "");
   const representations = [];
-  const repRe = /<Representation\b([^>]*)>([\s\S]*?)<\/Representation>|<Representation\b([^>]*)\/>/gi;
+  const stack = [];
   let representationIndex = 0;
-  for (const match of source.matchAll(repRe)) {
-    const attrs = attributes(match[1] || match[3] || "");
-    const body = match[2] || "";
-    const base = body.match(/<BaseURL[^>]*>([^<]+)<\/BaseURL>/i)?.[1]?.trim();
-    representations.push({
-      index: representationIndex++,
-      id: attrs.id || "",
-      mime: attrs.mimeType || "",
-      codecs: attrs.codecs || "",
-      bandwidth: Number(attrs.bandwidth || 0),
-      width: Number(attrs.width || 0) || null,
-      height: Number(attrs.height || 0) || null,
-      frameRate: attrs.frameRate || null,
-      url: base ? resolveUrl(base, manifestUrl) : null
-    });
+  let protectedContent = false;
+  const tagRe = /<\/?([\w:.-]+)\b([^>]*?)(\/?)>/g;
+  const stripped = source.replace(/<!--[\s\S]*?-->/g, "").replace(/<\?[\s\S]*?\?>/g, "");
+  for (const match of stripped.matchAll(tagRe)) {
+    const [raw, name, rawAttributes, selfClose] = match;
+    const local = name.includes(":") ? name.slice(name.lastIndexOf(":") + 1) : name;
+    const closing = raw.startsWith("</");
+    if (closing) {
+      for (let depth = stack.length - 1; depth >= 0; depth -= 1) {
+        if (stack[depth].name !== local) continue;
+        const [frame] = stack.splice(depth);
+        if (frame.name === "Representation") representations.push(finishRepresentation(frame, stack, manifestUrl, representationIndex++));
+        break;
+      }
+      continue;
+    }
+    const frame = { name: local, attrs: attributes(rawAttributes || ""), baseUrl: null };
+    if (local === "ContentProtection") protectedContent = true;
+    if (local === "BaseURL" && !selfClose) {
+      const end = stripped.indexOf("</", match.index + raw.length);
+      const value = end >= 0 ? stripped.slice(match.index + raw.length, end).trim() : "";
+      const owner = stack[stack.length - 1];
+      if (owner && value && !owner.baseUrl) owner.baseUrl = value;
+      continue;
+    }
+    if (selfClose) {
+      if (local === "Representation") representations.push(finishRepresentation(frame, stack, manifestUrl, representationIndex++));
+      continue;
+    }
+    stack.push(frame);
   }
-  return { type: attributes(source.match(/<MPD\b([^>]*)>/i)?.[1] || "").type || "static", duration: null, protected: /<ContentProtection\b/i.test(source), representations };
+  return {
+    type: mpdAttributes.type || "static",
+    duration: mpdAttributes.mediaPresentationDuration || null,
+    protected: protectedContent,
+    representations
+  };
+}
+
+function finishRepresentation(frame, stack, manifestUrl, index) {
+  const adaptation = [...stack].reverse().find((item) => item.name === "AdaptationSet") || { attrs: {} };
+  // BaseURL resolution follows the document order MPD > Period > AdaptationSet
+  // > Representation; a Representation without its own BaseURL addresses no
+  // single object (segment templates) and keeps url null.
+  let base = manifestUrl;
+  for (const ancestor of stack) {
+    if (ancestor.baseUrl && ["MPD", "Period", "AdaptationSet"].includes(ancestor.name)) base = resolveUrl(ancestor.baseUrl, base);
+  }
+  const attrs = frame.attrs || {};
+  return {
+    index,
+    id: attrs.id || "",
+    mime: attrs.mimeType || adaptation.attrs.mimeType || "",
+    codecs: attrs.codecs || adaptation.attrs.codecs || "",
+    bandwidth: Number(attrs.bandwidth || 0),
+    width: Number(attrs.width || 0) || null,
+    height: Number(attrs.height || 0) || null,
+    frameRate: attrs.frameRate || adaptation.attrs.frameRate || null,
+    url: frame.baseUrl ? resolveUrl(frame.baseUrl, base) : null
+  };
 }
 
 function attributes(source) {

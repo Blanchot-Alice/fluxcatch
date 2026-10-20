@@ -131,6 +131,13 @@ test("thumbnail policy requires a worker-derived origin or adapter image host", 
   assert.equal(evaluateNetworkRequest({ ...base, url: "https://page.example.com/poster.jpg" }).allowed, true);
   assert.equal(evaluateNetworkRequest({ ...base, url: "https://media.example.com/poster.jpg" }).allowed, true);
   assert.equal(evaluateNetworkRequest({ ...base, url: "https://i0.biliimg.com/poster.jpg" }).allowed, true);
+  // Sites serve their own posters from sibling CDNs of the same registrable
+  // domain (assets-cdn.jable.tv for jable.tv); exact-origin matching used to
+  // reject exactly those covers.
+  assert.equal(evaluateNetworkRequest({ ...base, url: "https://assets-cdn.page.example.com/poster.jpg" }).allowed, true,
+    "a same-registrable-domain CDN serves the site's own cover art");
+  assert.equal(evaluateNetworkRequest({ ...base, url: "https://page.example.org/poster.jpg" }).allowed, false,
+    "a different registrable domain stays rejected even with a similar name");
   assert.equal(evaluateNetworkRequest({ ...base, url: "https://attacker.example/poster.jpg" }).allowed, false);
   assert.equal(evaluateNetworkRequest({ ...base, url: "http://127.0.0.1/poster.jpg" }).allowed, false);
   assert.equal(evaluateNetworkRequest({ ...base, url: "https://user:pass@page.example.com/poster.jpg" }).reason, "embedded_credentials");

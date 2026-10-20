@@ -83,6 +83,16 @@ function bindFormInteractions() {
   nativePermissionButton.addEventListener("click", () => void requestNativeAccess());
   copyDiagnosticsButton.addEventListener("click", () => void copyDiagnostics());
   retrySettingsButton.addEventListener("click", () => void load());
+  document.querySelector("#openDownloadFolderButton")?.addEventListener("click", (event) => void withPendingAction(event.currentTarget, "options:open-folder", async () => {
+    const response = await chrome.runtime.sendMessage({ type: "OPEN_DOWNLOAD_FOLDER" });
+    if (!response?.ok) throw new Error(response?.error || "无法打开下载文件夹");
+  }, { pendingText: "打开中…", successText: "已打开 ✓", successDurationMs: 800, failureText: "打开失败" }).catch(() => {}));
+  document.querySelector("#chooseDownloadFolderButton")?.addEventListener("click", (event) => void changeDownloadFolder(event.currentTarget, false));
+  document.querySelector("#resetDownloadFolderButton")?.addEventListener("click", (event) => void changeDownloadFolder(event.currentTarget, true));
+  document.querySelector("#openHistoryButton")?.addEventListener("click", (event) => void withPendingAction(event.currentTarget, "options:open-history", async () => {
+    const response = await chrome.runtime.sendMessage({ type: "OPEN_DOWNLOADS_PAGE" });
+    if (!response?.ok) throw new Error(response?.error || "无法打开下载记录");
+  }, { pendingText: "", successDurationMs: 0, failureText: "打开失败" }).catch(() => {}));
   notificationInput.addEventListener("change", () => void changeNotificationPermission());
   privateNetworkInput.addEventListener("change", handlePrivateNetworkChange);
   privateNetworkDialog.addEventListener("close", finishPrivateNetworkConfirmation);
@@ -159,6 +169,7 @@ function stateFromSettings(settings) {
   return {
     concurrentFragments: settings.concurrentFragments,
     concurrentRanges: settings.concurrentRanges,
+    concurrentJobs: settings.concurrentJobs,
     outputContainer: settings.outputContainer,
     minimumKiB: Math.round(Number(settings.minimumBytes || 0) / 1024),
     filenameTemplate: settings.filenameTemplate,
@@ -177,6 +188,7 @@ function collectRawState() {
   return {
     concurrentFragments: form.elements.namedItem("concurrentFragments").value,
     concurrentRanges: form.elements.namedItem("concurrentRanges").value,
+    concurrentJobs: form.elements.namedItem("concurrentJobs").value,
     outputContainer: form.elements.namedItem("outputContainer").value,
     minimumKiB: form.elements.namedItem("minimumKiB").value,
     filenameTemplate: templateInput.value,
@@ -193,6 +205,7 @@ function writeFormState(value) {
   const state = normalizeFormState(value);
   form.elements.namedItem("concurrentFragments").value = state.concurrentFragments;
   form.elements.namedItem("concurrentRanges").value = state.concurrentRanges;
+  form.elements.namedItem("concurrentJobs").value = state.concurrentJobs;
   form.elements.namedItem("outputContainer").value = state.outputContainer;
   form.elements.namedItem("minimumKiB").value = state.minimumKiB;
   templateInput.value = state.filenameTemplate;
@@ -271,6 +284,7 @@ async function save(event) {
       const settings = {
         concurrentFragments: normalized.concurrentFragments,
         concurrentRanges: normalized.concurrentRanges,
+        concurrentJobs: normalized.concurrentJobs,
         outputContainer: normalized.outputContainer,
         liveDuration: 0,
         minimumBytes: normalized.minimumKiB * 1024,
@@ -654,7 +668,9 @@ async function refreshNativeAccess() {
 }
 
 async function recoverNativeApi(host) {
-  if (host?.failureReason !== "api_unavailable") {
+  // While the worker reloads the extension to obtain the API, this page is
+  // about to be replaced; a recovery request now would only race the reload.
+  if (host?.failureReason !== "api_unavailable" || host.selfHealing === true) {
     return { recoveryBlocked: false, diagnosticsRefreshed: false, hostStatus: host };
   }
   try {
@@ -736,12 +752,14 @@ function pingNativeHost() {
 
 export function renderHostStatus(host = {}, { permissionGranted = nativePermissionGranted, failed = false } = {}) {
   const connected = host.connected === true;
+  renderDownloadLocation(host);
   const compatible = connected && host.compatible === true;
   const mismatch = connected && host.compatible !== true;
   const failureReason = ["api_unavailable", "host_missing", "connection_failed"].includes(host.failureReason)
     ? host.failureReason
     : failed ? "connection_failed" : null;
   const nativeRestartRequired = failureReason === "api_unavailable" && host.restartRequired === true;
+  const nativeSelfHealing = failureReason === "api_unavailable" && host.selfHealing === true;
   const ffmpeg = host.capabilities?.ffmpeg;
   const ytdlp = host.capabilities?.ytdlp;
   const ffmpegInstalled = Boolean(ffmpeg ? ffmpeg.available : host.ffmpeg);
@@ -759,11 +777,11 @@ export function renderHostStatus(host = {}, { permissionGranted = nativePermissi
     setRuntimeStatus("runtimeNativeStatus", "尚未授权", "warning");
     setRuntimeStatus("runtimeFfmpegStatus", "尚未检查", "warning");
   } else if (failureReason === "api_unavailable") {
-    setMatrixStatus("capabilityNativeConnection", nativeRestartRequired ? "授权已生效 · 需要重启浏览器" : "授权已生效 · 浏览器接口待恢复", "mismatch");
-    setMatrixStatus("capabilityNativeProtocol", nativeRestartRequired ? "接口长期未恢复 · 请重启 Chrome" : "等待 Chrome 初始化连接接口", "unknown");
+    setMatrixStatus("capabilityNativeConnection", nativeSelfHealing ? "授权已生效 · 正在自动重新连接" : nativeRestartRequired ? "授权已生效 · 需要重启浏览器" : "授权已生效 · 浏览器接口待恢复", "mismatch");
+    setMatrixStatus("capabilityNativeProtocol", nativeSelfHealing ? "FluxCatch 正在重新加载" : nativeRestartRequired ? "接口长期未恢复 · 请重启 Chrome" : "等待 Chrome 初始化连接接口", "unknown");
     setMatrixStatus("capabilityFfmpeg", "等待连接后检查", "unknown");
     setMatrixStatus("capabilityYtDlp", "等待连接后检查", "unknown");
-    setRuntimeStatus("runtimeNativeStatus", nativeRestartRequired ? "需要重启浏览器" : "正在初始化连接接口", "warning");
+    setRuntimeStatus("runtimeNativeStatus", nativeSelfHealing ? "正在自动重新连接" : nativeRestartRequired ? "需要重启浏览器" : "正在初始化连接接口", "warning");
     setRuntimeStatus("runtimeFfmpegStatus", "等待本地程序", "warning");
   } else if (!connected) {
     setMatrixStatus("capabilityNativeConnection", failureReason === "host_missing" ? "未安装或未注册" : "连接失败 · 请重试", "missing");
@@ -791,9 +809,11 @@ export function renderHostStatus(host = {}, { permissionGranted = nativePermissi
   nativePermissionStatus.textContent = !permissionGranted || host.needsPermission
     ? "加速大文件、合并视频片段或转换格式时需要开启"
     : failureReason === "api_unavailable"
-      ? nativeRestartRequired
-        ? "Chrome 的连接接口长期未恢复。请完全退出并重新启动 Chrome，再返回此页点击“重新检查”。"
-        : "授权已生效，正在等待 Chrome 初始化；FluxCatch 将自动重试"
+      ? nativeSelfHealing
+        ? "授权已生效，FluxCatch 正在自动重新加载以完成连接；此页会自动刷新"
+        : nativeRestartRequired
+          ? "Chrome 的连接接口长期未恢复。请完全退出并重新启动 Chrome，再返回此页点击“重新检查”。"
+          : "授权已生效，正在等待 Chrome 初始化；FluxCatch 将自动重试"
       : failureReason === "host_missing"
         ? "已授权，但本地下载引擎未安装或未注册；请在源码根目录运行 ./scripts/native-install-wrapper.sh 后重试"
         : failureReason === "connection_failed"
@@ -810,6 +830,43 @@ function setMatrixStatus(id, text, state) {
   if (!element) return;
   element.textContent = text;
   element.dataset.state = state;
+}
+
+// The engine reports its real output folder once connected; until then the
+// row shows the documented default so the path is never blank.
+function renderDownloadLocation(host = {}) {
+  const element = document.querySelector("#downloadLocationPath");
+  if (!element) return;
+  const path = typeof host.downloadDir === "string" && host.downloadDir.startsWith("/")
+    ? host.downloadDir.replace(/^\/Users\/[^/]+(?=\/|$)/, "~")
+    : "~/Downloads/FluxCatch";
+  element.textContent = path;
+  element.title = typeof host.downloadDir === "string" && host.downloadDir ? host.downloadDir : "";
+  const reset = document.querySelector("#resetDownloadFolderButton");
+  if (reset) reset.hidden = path === "~/Downloads/FluxCatch";
+}
+
+// The folder picker is a native sheet shown by the engine; the permission
+// request stays inside this click so Chrome can prompt when needed.
+async function changeDownloadFolder(button, reset) {
+  const status = document.querySelector("#downloadLocationStatus");
+  let permissionRequest;
+  try {
+    permissionRequest = chrome.permissions.request({ permissions: ["nativeMessaging"] });
+  } catch (error) {
+    if (status) status.textContent = error?.message || "本地下载引擎授权失败";
+    return;
+  }
+  await withPendingAction(button, reset ? "options:reset-folder" : "options:choose-folder", async () => {
+    if (!await permissionRequest) throw new Error("请先允许使用本地下载引擎，再更改保存位置");
+    if (status) status.textContent = reset ? "正在恢复默认位置…" : "请在弹出的窗口中选择文件夹…";
+    const response = await chrome.runtime.sendMessage({ type: "CHOOSE_DOWNLOAD_FOLDER", reset });
+    if (!response?.ok) throw new Error(response?.error || "无法更改保存位置");
+    renderDownloadLocation({ downloadDir: response.downloadDir });
+    if (status) status.textContent = reset ? "已恢复默认保存位置" : "保存位置已更新";
+  }, { pendingText: reset ? "恢复中…" : "选择中…", successText: "完成 ✓", failureText: "未更改", successDurationMs: 900, failureDurationMs: 1200 }).catch((error) => {
+    if (status) status.textContent = error?.message || "无法更改保存位置";
+  });
 }
 
 function setRuntimeStatus(id, text, dotState) {
