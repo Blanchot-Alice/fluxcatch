@@ -1,0 +1,298 @@
+/* FluxCatch v2 tokens — design review §4 (type), §5 (grid), §8 (value ladders).
+   The only file in v2 allowed to contain colour literals (audit check h).
+
+   Colour: every brief hue keeps its OKLCH hue and chroma; only lightness moves.
+   Morning ladder L: sunken .935 · canvas .955 · surface .975 · raised .995 ·
+   text .31 / .45 / .52. Dusk ladder L: sunken .215 · canvas .25 · surface .29 ·
+   raised .33 · text .93 / .80 / .70. Status text variants are the same hue at
+   the lightness that reaches ≥ 4.6:1 on every surface of the theme (Morning:
+   darkened; Dusk: brief values kept where they already pass, vermilion and
+   harbour lightened). Values come from scripts and are checked by the audit. */
+
+@font-face {
+  font-family: "Fraunces";
+  font-style: normal;
+  font-weight: 300 700;
+  font-display: swap;
+  src: url("../fonts/Fraunces-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "Noto Serif SC";
+  font-style: normal;
+  font-weight: 400 600;
+  font-display: swap;
+  /* Build-time subset holding only the glyphs of fixed Chinese display
+     strings (scripts/build-display-font.mjs). Dynamic text never uses Display. */
+  src: url("../fonts/NotoSerifSC-display.woff2") format("woff2");
+  unicode-range: U+3000-303F, U+4E00-9FFF, U+FF00-FFEF;
+}
+
+@font-face {
+  font-family: "Instrument Sans";
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url("../fonts/InstrumentSans-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "Instrument Sans";
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url("../fonts/InstrumentSans-latin-ext.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+/* ===================== Morning ===================== */
+:root,
+[data-theme="morning"] {
+  color-scheme: light;
+
+  /* Surfaces (value ladder). */
+  --sunken: #EFE9E0;
+  --canvas: #F4F0E9;
+  --surface: #F9F6F1;
+  --raised: #FFFDFA;
+
+  /* Text. */
+  --text-primary: #2B2D49;
+  --text-secondary: #4E5371;
+  --text-muted: #64677F;
+  --text-on-accent: #F9F6F1;
+
+  /* Hues for dots, fills and tints (brief values). */
+  --pond: #4E7FA2;
+  --pond-soft: #7FA6C4;
+  --lilac: #9A8CC4;
+  --celadon: #8FB8A3;
+  --ochre: #D9A24F;
+  --apricot: #E7B089;
+  --rose: #E3AFB4;
+  --vermilion: #D8603B;
+  --harbour: #8A9BAE;
+
+  /* Text variants of the hues (≥ 4.6:1 on every Morning surface). */
+  --pond-text: #3C6D8F;
+  --pond-text-on-tint: #356687;
+  --lilac-text: #6E6095;
+  --celadon-text: #49705D;
+  --ochre-text: #8D5E00;
+  --rose-text: #885A5F;
+  --vermilion-text: #B6411A;
+  --harbour-text: #59697B;
+
+  /* Primary fill: pond hue at the lightness that carries cream text ≥ 4.6:1. */
+  --primary-fill: #437497;
+  --primary-fill-hover: #407194;
+  --primary-fill-pressed: #3D6E91;
+
+  /* Atmosphere. */
+  --shadow-float: 0 12px 32px rgba(78, 70, 130, 0.16);
+  --mist: 0 10px 18px -14px rgba(78, 70, 130, 0.22);
+  --press-inset: inset 0 1px 3px rgba(43, 45, 73, 0.16);
+  --scrim: rgba(43, 45, 73, 0.32);
+  --mask-on: black;
+  /* An invalid field's soft halo (§6.2): vermilion, shaped like the focus halo. */
+  --halo-invalid: color-mix(in oklch, var(--vermilion) 45%, transparent);
+
+  /* Pond layer touches: brief hue at the canvas lightness (§6.10). The
+     generator jitters lightness ±0.02 and clamps chroma to the sRGB gamut.
+     Dusk lists the cool hues twice: at L 0.25 rose and apricot turn to rust
+     and mud, so they keep their place but fall to under 30% of the touches. */
+  --touch-l: 0.955;
+  --touch-hues: 241.8 295.6 162.5 12.1 56.6;
+  --touch-opacity-min: 0.35;
+  --touch-opacity-max: 0.55;
+}
+
+/* ===================== Dusk ===================== */
+[data-theme="dusk"] {
+  color-scheme: dark;
+  --sunken: #131730;
+  --canvas: #1A1E3D;
+  --surface: #22284A;
+  --raised: #2B3257;
+  --text-primary: #EDE7DE;
+  --text-secondary: #BEBBD1;
+  --text-muted: #979CBB;
+  --text-on-accent: #1A1E3D;
+  --pond: #7FB0D0;
+  --pond-soft: #5E8DAE;
+  --lilac: #B5A7DE;
+  --celadon: #9FCDB5;
+  --ochre: #E6B86A;
+  --apricot: #EDBFA0;
+  --rose: #E9BFC3;
+  --vermilion: #E8785A;
+  --harbour: #6F7E95;
+  --pond-text: #7FB0D0;
+  --pond-text-on-tint: #7FB0D0;
+  --lilac-text: #B5A7DE;
+  --celadon-text: #9FCDB5;
+  --ochre-text: #E6B86A;
+  --rose-text: #E9BFC3;
+  --vermilion-text: #EF7E60;
+  --harbour-text: #90A0B8;
+  --primary-fill: #7FB0D0;
+  --primary-fill-hover: #87B8D8;
+  --primary-fill-pressed: #75A5C5;
+  --shadow-float: 0 12px 32px rgba(8, 10, 28, 0.5);
+  --mist: 0 10px 18px -14px rgba(8, 10, 28, 0.6);
+  --press-inset: inset 0 1px 3px rgba(8, 10, 28, 0.4);
+  --scrim: rgba(8, 10, 28, 0.55);
+  --mask-on: black;
+  --halo-invalid: color-mix(in oklch, var(--vermilion-text) 60%, transparent);
+  --touch-l: 0.25;
+  /* Dusk: cool hues only; rose and apricot turn brown at this lightness (§2.6). */
+  --touch-hues: 240 296.1 162;
+  --touch-opacity-min: 0.35;
+  --touch-opacity-max: 0.55;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="morning"]) {
+    color-scheme: dark;
+    --sunken: #131730;
+    --canvas: #1A1E3D;
+    --surface: #22284A;
+    --raised: #2B3257;
+    --text-primary: #EDE7DE;
+    --text-secondary: #BEBBD1;
+    --text-muted: #979CBB;
+    --text-on-accent: #1A1E3D;
+    --pond: #7FB0D0;
+    --pond-soft: #5E8DAE;
+    --lilac: #B5A7DE;
+    --celadon: #9FCDB5;
+    --ochre: #E6B86A;
+    --apricot: #EDBFA0;
+    --rose: #E9BFC3;
+    --vermilion: #E8785A;
+    --harbour: #6F7E95;
+    --pond-text: #7FB0D0;
+    --pond-text-on-tint: #7FB0D0;
+    --lilac-text: #B5A7DE;
+    --celadon-text: #9FCDB5;
+    --ochre-text: #E6B86A;
+    --rose-text: #E9BFC3;
+    --vermilion-text: #EF7E60;
+    --harbour-text: #90A0B8;
+    --primary-fill: #7FB0D0;
+    --primary-fill-hover: #87B8D8;
+    --primary-fill-pressed: #75A5C5;
+    --shadow-float: 0 12px 32px rgba(8, 10, 28, 0.5);
+    --mist: 0 10px 18px -14px rgba(8, 10, 28, 0.6);
+    --press-inset: inset 0 1px 3px rgba(8, 10, 28, 0.4);
+    --scrim: rgba(8, 10, 28, 0.55);
+    --mask-on: black;
+    --halo-invalid: color-mix(in oklch, var(--vermilion-text) 60%, transparent);
+    --touch-l: 0.25;
+    /* Dusk: cool hues only; rose and apricot turn brown at this lightness (§2.6). */
+    --touch-hues: 240 296.1 162;
+    --touch-opacity-min: 0.35;
+    --touch-opacity-max: 0.55;
+  }
+}
+
+/* ===================== Theme-independent ===================== */
+:root {
+  /* Derived tints (mixed from tokens, so no literals). */
+  --tint-pond: color-mix(in srgb, var(--pond) 12%, transparent);
+  --tint-hover: color-mix(in srgb, var(--pond-soft) 8%, transparent);
+  --tint-selected: color-mix(in srgb, var(--pond-soft) 10%, transparent);
+  --tint-vermilion: color-mix(in srgb, var(--vermilion) 10%, transparent);
+
+  /* §4 families. */
+  --font-display: "Fraunces", "Noto Serif SC", "Songti SC", serif;
+  --font-text: "Instrument Sans", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+
+  /* §4 roles: size / line-height / weight. The only text styles allowed. */
+  --wordmark-size: 17px;  --wordmark-line: 20px; --wordmark-weight: 600;
+  --display-size: 28px;   --display-line: 34px;  --display-weight: 500;
+  --empty-size: 19px;     --empty-line: 26px;    --empty-weight: 400;
+  --title-size: 15px;     --title-line: 22px;    --title-weight: 600;
+  --row-size: 13px;       --row-line: 20px;      --row-weight: 500;
+  --body-size: 13px;      --body-line: 20px;     --body-weight: 400;
+  --meta-size: 12px;      --meta-line: 18px;     --meta-weight: 400;
+  --label-size: 12px;     --label-line: 16px;    --label-weight: 600;
+
+  /* §5 grid and spacing (4px base). */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-12: 48px;
+  --column-max: 880px;
+  --gutter: 32px;
+  --lead: 56px;
+  --lead-gap: 16px;
+  --row-pad: 12px;
+  --group-above: 24px;
+  --group-below: 8px;
+
+  /* Shape. */
+  --r-control: 6px;
+  --r-thumb: 6px;
+  --r-panel: 10px;
+  --r-float: 12px;
+  --control-height: 36px;
+  --control-height-compact: 32px;
+  --icon-button: 32px;
+  --field-short: 112px;
+  --field-medium: 240px;
+  --dialog-width: 400px;
+
+  /* Motion: slow, no bounce. */
+  --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --t-press: 90ms;
+  --t-release: 160ms;
+  --t-micro: 220ms;
+  --t-state: 600ms;
+}
+
+/* §5 surface grids. Set data-surface on <html> (or <body>); text starts at
+   gutter + lead + lead-gap from the viewport edge.
+   Full pages (Downloads; default, no attribute): gutter 32 · lead 56 · gap 16 ·
+   column max 880, centred.
+   Popup (372 wide): gutter 16 · lead 32 · gap 12, text at x = 60.
+   Side panel (420 wide): gutter 20 · lead 32 · gap 12, text at x = 64.
+   Settings: the full-page values (column max 880, so the BrandMark sits where
+   it does on Downloads) plus nav 200 · nav gap 48 · content at most 680, which
+   leaves 632 inside the 880 column; the page title sits on the nav's left edge. */
+[data-surface="popup"] {
+  --gutter: 16px;
+  --lead: 32px;
+  --lead-gap: 12px;
+}
+
+[data-surface="sidepanel"] {
+  --gutter: 20px;
+  --lead: 32px;
+  --lead-gap: 12px;
+}
+
+[data-surface="settings"] {
+  --nav-width: 200px;
+  --nav-gap: 48px;
+  --content-max: 680px;
+}
+
+/* Compact density tightens rows (8px instead of 12) and control height.
+   Set data-density="compact" on the surface root or on one list. */
+[data-density="compact"] {
+  --row-pad: 8px;
+  --control-height: 32px;
+}
+
+/* Chinese text gets 2px more line-height in row, body and meta (§4). */
+:lang(zh) {
+  --row-line: 22px;
+  --body-line: 22px;
+  --meta-line: 20px;
+}

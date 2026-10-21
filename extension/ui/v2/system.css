@@ -1,0 +1,1504 @@
+/* FluxCatch v2 system: base, type roles and components (design review §4–§6).
+   Principles: one pond per view (no container inside a container), soft
+   separation (no 1px rules), colour is light (dots and tints, no blocks),
+   left-anchored text on one column. No colour literals here: tokens only. */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+}
+
+body {
+  position: relative;
+  isolation: isolate;
+  min-height: 100vh;
+  font-family: var(--font-text);
+  font-size: var(--body-size);
+  line-height: var(--body-line);
+  font-weight: var(--body-weight);
+  color: var(--text-secondary);
+  background: var(--canvas);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  font-synthesis: none;
+  font-kerning: normal;
+}
+
+h1, h2, h3, h4, p, ul, ol, figure {
+  margin: 0;
+  padding: 0;
+}
+
+ul, ol {
+  list-style: none;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+  letter-spacing: inherit;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+.sr-only {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+
+::selection {
+  background: var(--tint-selected);
+}
+
+/* ---------- type roles (the only text styles) ---------- */
+.t-wordmark { font-family: var(--font-display); font-size: var(--wordmark-size); line-height: var(--wordmark-line); font-weight: var(--wordmark-weight); color: var(--text-primary); font-variation-settings: "SOFT" 0, "WONK" 0; }
+.t-display  { font-family: var(--font-display); font-size: var(--display-size); line-height: var(--display-line); font-weight: var(--display-weight); color: var(--text-primary); font-variation-settings: "SOFT" 0, "WONK" 0; }
+.t-empty    { font-family: var(--font-display); font-size: var(--empty-size); line-height: var(--empty-line); font-weight: var(--empty-weight); color: var(--text-primary); font-variation-settings: "SOFT" 0, "WONK" 0; }
+.t-title    { font-family: var(--font-text); font-size: var(--title-size); line-height: var(--title-line); font-weight: var(--title-weight); color: var(--text-primary); }
+.t-row      { font-family: var(--font-text); font-size: var(--row-size); line-height: var(--row-line); font-weight: var(--row-weight); color: var(--text-primary); }
+.t-body     { font-family: var(--font-text); font-size: var(--body-size); line-height: var(--body-line); font-weight: var(--body-weight); color: var(--text-secondary); }
+.t-meta     { font-family: var(--font-text); font-size: var(--meta-size); line-height: var(--meta-line); font-weight: var(--meta-weight); color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.t-label    { font-family: var(--font-text); font-size: var(--label-size); line-height: var(--label-line); font-weight: var(--label-weight); color: var(--text-secondary); }
+
+/* ---------- grid ---------- */
+.column {
+  width: min(var(--column-max), calc(100% - 2 * var(--gutter)));
+  margin-inline: auto;
+}
+
+/* lead column · text column · trailing items */
+.lead-grid {
+  display: grid;
+  grid-template-columns: var(--lead) minmax(0, 1fr) auto;
+  column-gap: var(--lead-gap);
+  align-items: center;
+}
+
+.text-column {
+  padding-inline-start: calc(var(--lead) + var(--lead-gap));
+}
+
+/* ---------- top bar: no rule; a mist appears once content scrolls under it ---------- */
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  transition: box-shadow var(--t-micro) var(--ease), background-color var(--t-micro) var(--ease);
+}
+
+.topbar[data-scrolled="true"] {
+  background: var(--canvas);
+  box-shadow: var(--mist);
+}
+
+.topbar-inner {
+  min-height: 56px;
+}
+
+/* The top bar's trailing icon buttons (at most two, P2) in the lead grid's one
+   trailing cell; a second bare button would wrap onto a new grid row. */
+.bar-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+/* The last icon button's glyph ends on the column's right edge, like the
+   row overflow and every other trailing item (§5). */
+.bar-actions,
+.topbar-inner > .icon-button {
+  margin-inline-end: calc(-1 * var(--space-2));
+}
+
+/* ---------- BrandMark: logo in the lead column, wordmark on the text column ---------- */
+.brandmark {
+  display: contents;
+}
+
+.brandmark-logo {
+  justify-self: end;
+  width: 24px;
+  height: 24px;
+  display: block;
+}
+
+.brandmark[data-size="s"] .brandmark-logo {
+  width: 20px;
+  height: 20px;
+}
+
+.logo-cream { fill: var(--surface); }
+.logo-ring { fill: none; stroke: var(--pond); stroke-opacity: 0.35; }
+.logo-wave { fill: none; stroke: var(--pond); stroke-linecap: round; }
+.logo-pad { fill: var(--celadon); }
+.logo-bloom { fill: var(--rose); }
+
+/* ---------- buttons: primary · secondary · tertiary · destructive · icon ---------- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-height: var(--control-height);
+  padding: 0 var(--space-4);
+  border: 0;
+  border-radius: var(--r-control);
+  background: transparent;
+  font-family: var(--font-text);
+  font-size: var(--row-size);
+  line-height: var(--row-line);
+  font-weight: var(--row-weight);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--t-release) var(--ease), box-shadow var(--t-release) var(--ease), color var(--t-release) var(--ease), opacity var(--t-micro) var(--ease);
+}
+
+.btn svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+
+.btn:active:not(:disabled) {
+  transition-duration: var(--t-press);
+  box-shadow: var(--press-inset);
+}
+
+.btn:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.btn[aria-busy="true"] {
+  cursor: progress;
+  opacity: 0.7;
+}
+
+.btn-primary {
+  background: var(--primary-fill);
+  color: var(--text-on-accent);
+}
+
+.btn-primary:hover:not(:disabled) { background: var(--primary-fill-hover); }
+.btn-primary:active:not(:disabled) { background: var(--primary-fill-pressed); }
+
+.btn-secondary {
+  background: var(--tint-pond);
+  color: var(--pond-text-on-tint);
+}
+
+.btn-secondary:hover:not(:disabled) { background: color-mix(in srgb, var(--pond) 16%, transparent); }
+.btn-secondary:active:not(:disabled) { background: color-mix(in srgb, var(--pond) 20%, transparent); }
+
+/* Tertiary and destructive are text buttons; a negative inline margin keeps
+   their text on the grid while the hover tint has room to breathe. */
+.btn-tertiary,
+.btn-destructive {
+  min-height: var(--control-height-compact);
+  padding: 0 var(--space-2);
+  margin-inline: calc(-1 * var(--space-2));
+}
+
+.btn-tertiary { color: var(--pond-text); }
+.btn-destructive { color: var(--vermilion-text); }
+
+.btn-tertiary:hover:not(:disabled) { background: var(--tint-hover); }
+.btn-destructive:hover:not(:disabled) { background: var(--tint-vermilion); }
+.btn-tertiary:active:not(:disabled),
+.btn-destructive:active:not(:disabled) { background: color-mix(in srgb, var(--pond-soft) 14%, transparent); }
+
+.icon-button {
+  display: inline-grid;
+  place-items: center;
+  width: var(--icon-button);
+  height: var(--icon-button);
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-control);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background-color var(--t-release) var(--ease), color var(--t-release) var(--ease);
+}
+
+.icon-button svg {
+  width: 18px;
+  height: 18px;
+}
+
+.icon-button:hover:not(:disabled) { background: var(--tint-hover); color: var(--text-primary); }
+.icon-button:active:not(:disabled) { transition-duration: var(--t-press); background: color-mix(in srgb, var(--pond-soft) 14%, transparent); box-shadow: var(--press-inset); }
+.icon-button:disabled { opacity: 0.5; cursor: default; }
+
+/* Icons draw with the current colour. */
+.icon {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.icon .fill {
+  fill: currentColor;
+  stroke: none;
+}
+
+/* ---------- focus: always visible on keyboard focus ---------- */
+:focus-visible {
+  outline: 2px solid var(--pond-text);
+  outline-offset: 2px;
+}
+
+.field input:focus-visible,
+.field:focus-within {
+  outline: none;
+}
+
+/* ---------- inputs: tonal fill, no border at rest, soft halo on focus ---------- */
+.field {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-height: var(--control-height);
+  border-radius: var(--r-control);
+  background: var(--sunken);
+  transition: box-shadow var(--t-micro) var(--ease);
+}
+
+/* One focus treatment for every field: a ring that reaches 3:1 on every
+   surface, inside a soft halo (§6.2). */
+.field:focus-within {
+  box-shadow: 0 0 0 2px var(--pond-text), 0 0 0 5px color-mix(in srgb, var(--pond) 18%, transparent);
+}
+
+.field input {
+  flex: 1;
+  min-width: 0;
+  height: var(--control-height);
+  padding: 0 var(--space-3);
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-text);
+  font-size: var(--body-size);
+  line-height: var(--body-line);
+  font-weight: var(--body-weight);
+}
+
+.field input::placeholder {
+  color: var(--text-muted);
+  opacity: 1;
+  font-size: var(--body-size);
+  line-height: var(--body-line);
+  font-weight: var(--body-weight);
+}
+
+.field input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+}
+
+.field-glyph {
+  position: absolute;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+@media (prefers-contrast: more) {
+  .field { box-shadow: inset 0 0 0 1px var(--text-muted); }
+}
+
+/* ---------- segmented control: sunken track, raised selection, both themes ---------- */
+.segmented {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: calc(var(--r-control) + 2px);
+  background: var(--sunken);
+}
+
+.segmented button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-height-compact);
+  padding: 0 var(--space-3);
+  border: 0;
+  border-radius: var(--r-control);
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-text);
+  font-size: var(--row-size);
+  line-height: var(--row-line);
+  font-weight: var(--row-weight);
+  cursor: pointer;
+  transition: background-color var(--t-micro) var(--ease), color var(--t-micro) var(--ease);
+}
+
+.segmented button:is([aria-selected="true"], [aria-checked="true"]) {
+  background: var(--raised);
+  color: var(--text-primary);
+}
+
+.segmented button:hover:not([aria-selected="true"], [aria-checked="true"]):not(:disabled) {
+  color: var(--text-primary);
+}
+
+/* Press (§6.1): one value step down plus the soft inset, in 90ms. */
+.segmented button:active:not(:disabled) {
+  transition-duration: var(--t-press);
+  background: color-mix(in srgb, var(--pond-soft) 14%, transparent);
+  box-shadow: var(--press-inset);
+}
+
+.segmented button:is([aria-selected="true"], [aria-checked="true"]):active:not(:disabled) {
+  background: var(--surface);
+}
+
+.segmented button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.segmented .count {
+  font-size: var(--meta-size);
+  line-height: var(--meta-line);
+  font-weight: var(--meta-weight);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- group label: no band, no rule ---------- */
+.group-label {
+  padding-top: var(--group-above);
+  padding-bottom: var(--group-below);
+}
+
+/* ---------- status: 8px dot + a word in the status colour ---------- */
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  white-space: nowrap;
+}
+
+.status::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.status[data-tone="progress"] { color: var(--pond-text); }
+.status[data-tone="paused"] { color: var(--lilac-text); }
+.status[data-tone="queued"] { color: var(--harbour-text); }
+.status[data-tone="complete"] { color: var(--celadon-text); }
+.status[data-tone="warning"] { color: var(--ochre-text); }
+.status[data-tone="failed"] { color: var(--vermilion-text); }
+.status[data-tone="cancelled"] { color: var(--harbour-text); }
+
+/* ---------- progress: single-tone fill cooling to warm in OKLCH (§6.7) ---------- */
+.progress {
+  --p: 0;
+  position: relative;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--sunken);
+  overflow: hidden;
+}
+
+.progress[data-size="panel"] {
+  height: 6px;
+  background: var(--canvas);
+}
+
+.progress-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: calc(var(--p) * 1%);
+  border-radius: inherit;
+  background: color-mix(in oklch, var(--lilac), var(--ochre) calc(var(--p) * 1%));
+  transition: width var(--t-micro) var(--ease), background-color var(--t-state) var(--ease), opacity var(--t-state) var(--ease);
+}
+
+/* A soft highlight at the tip of the fill. */
+.progress-fill::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: -12px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  transform: translateY(-50%);
+  background: radial-gradient(circle, color-mix(in srgb, var(--surface) 40%, transparent), transparent 70%);
+  pointer-events: none;
+}
+
+.progress[data-state="paused"] .progress-fill {
+  background: color-mix(in oklch, var(--lilac) 60%, var(--sunken));
+}
+
+.progress[data-state="complete"] .progress-fill {
+  width: 100%;
+  background: var(--celadon);
+}
+
+.progress[data-state="settled"] .progress-fill {
+  width: 100%;
+  opacity: 0;
+}
+
+.progress[data-state="active"] .progress-fill::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--raised) 3%, transparent), transparent);
+  animation: pond-shimmer 2.4s linear infinite;
+}
+
+@keyframes pond-shimmer {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(100%); }
+}
+
+/* ---------- filename: middle truncation keeps the extension ---------- */
+.filename {
+  display: flex;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+/* white-space: pre keeps a space at the split ("Live Session" never reads
+   "LiveSession"); the name still never wraps. */
+.filename-head {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: pre;
+}
+
+.filename-tail {
+  flex: none;
+  white-space: pre;
+}
+
+/* ---------- empty state: one sentence, one line, at most one action ---------- */
+.empty-state {
+  display: grid;
+  justify-items: start;
+  gap: var(--space-2);
+  padding-top: var(--space-12);
+  padding-bottom: var(--space-12);
+}
+
+.empty-state .btn {
+  margin-top: var(--space-3);
+}
+
+/* A two-line sentence breaks evenly, never with an orphaned last word. */
+.t-empty {
+  text-wrap: balance;
+}
+
+/* ---------- menus and confirmations (floating) ---------- */
+.menu-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+}
+
+.menu {
+  position: absolute;
+  min-width: 220px;
+  max-width: min(360px, calc(100vw - 16px));
+  padding: var(--space-1);
+  border-radius: var(--r-float);
+  background: var(--raised);
+  box-shadow: var(--shadow-float);
+}
+
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  min-height: var(--control-height);
+  padding: 0 var(--space-3);
+  border: 0;
+  border-radius: var(--r-control);
+  background: transparent;
+  color: var(--text-primary);
+  font-family: var(--font-text);
+  font-size: var(--row-size);
+  line-height: var(--row-line);
+  font-weight: var(--row-weight);
+  text-align: start;
+  cursor: pointer;
+  transition: background-color var(--t-release) var(--ease), box-shadow var(--t-release) var(--ease);
+}
+
+.menu-item svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  color: var(--text-muted);
+}
+
+.menu-item:hover,
+.menu-item:focus-visible {
+  background: var(--tint-hover);
+  outline: none;
+}
+
+.menu-item:active {
+  transition: background-color var(--t-press) var(--ease), box-shadow var(--t-press) var(--ease);
+  background: color-mix(in srgb, var(--pond-soft) 14%, transparent);
+  box-shadow: var(--press-inset);
+}
+
+.menu-item[data-tone="destructive"] { color: var(--vermilion-text); }
+.menu-item[data-tone="destructive"] svg { color: currentColor; }
+
+.confirm {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4) var(--space-3);
+}
+
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-4);
+}
+
+/* ---------- toast: dot + text on the raised surface, bottom-left ---------- */
+.toast-region {
+  position: fixed;
+  left: var(--space-6);
+  bottom: var(--space-6);
+  z-index: 50;
+  display: grid;
+  gap: var(--space-2);
+  pointer-events: none;
+}
+
+.toast {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: min(420px, calc(100vw - 48px));
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--r-panel);
+  background: var(--raised);
+  box-shadow: var(--shadow-float);
+  color: var(--text-primary);
+  pointer-events: auto;
+  animation: toast-in var(--t-micro) var(--ease);
+}
+
+.toast .status {
+  color: inherit;
+}
+
+.toast[data-tone="success"] .status::before { background: var(--celadon); }
+.toast[data-tone="warning"] .status::before { background: var(--ochre); }
+.toast[data-tone="error"] .status::before { background: var(--vermilion); }
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* ---------- pond layer: broken colour in empty space only (§6.10) ---------- */
+.pond {
+  --col-left: max(var(--gutter), calc((100vw - var(--column-max)) / 2));
+  --col-right: calc(100vw - var(--col-left));
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-repeat: no-repeat;
+  background-position: 0 0;
+  /* Visible in the page margins; masked to nothing under the content column. */
+  -webkit-mask-image: linear-gradient(to right, var(--mask-on) 0, var(--mask-on) calc(var(--col-left) - 24px), transparent var(--col-left), transparent var(--col-right), var(--mask-on) calc(var(--col-right) + 24px));
+  mask-image: linear-gradient(to right, var(--mask-on) 0, var(--mask-on) calc(var(--col-left) - 24px), transparent var(--col-left), transparent var(--col-right), var(--mask-on) calc(var(--col-right) + 24px));
+}
+
+/* Behind an empty state the pond opens around the sentence. */
+.pond[data-open="true"] {
+  -webkit-mask-image:
+    linear-gradient(to right, var(--mask-on) 0, var(--mask-on) calc(var(--col-left) - 24px), transparent var(--col-left), transparent var(--col-right), var(--mask-on) calc(var(--col-right) + 24px)),
+    radial-gradient(ellipse 420px 180px at var(--open-x, 50%) var(--open-y, 50%), var(--mask-on) 30%, transparent 100%);
+  mask-image:
+    linear-gradient(to right, var(--mask-on) 0, var(--mask-on) calc(var(--col-left) - 24px), transparent var(--col-left), transparent var(--col-right), var(--mask-on) calc(var(--col-right) + 24px)),
+    radial-gradient(ellipse 420px 180px at var(--open-x, 50%) var(--open-y, 50%), var(--mask-on) 30%, transparent 100%);
+  -webkit-mask-composite: source-over;
+  mask-composite: add;
+}
+
+/* ======================================================================
+   Shared surface components below. DownloadRow, the focus panel and the
+   status line came from downloads/downloads.css unchanged (same selectors,
+   same order), so the Downloads page computes the same styles.
+   ====================================================================== */
+
+/* ---------- status lines (engine, notifications, loading, errors) ---------- */
+.status-line {
+  min-height: 36px;
+  padding-top: var(--space-3);
+}
+
+.status-line:empty {
+  display: none;
+}
+
+/* The dot centres on the 20px glyph axis that row glyphs and the link
+   field's glyph share (they end on the lead column's edge). */
+.status-line .line-dot {
+  justify-self: end;
+  width: 8px;
+  height: 8px;
+  margin-inline-end: calc((20px - 8px) / 2);
+  border-radius: 50%;
+  background: var(--harbour);
+}
+
+.status-line[data-tone="failed"] .line-dot { background: var(--vermilion); }
+.status-line[data-tone="progress"] .line-dot { background: var(--pond); }
+
+.status-line .line-text {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: var(--space-4);
+}
+
+.status-line .line-actions {
+  display: inline-flex;
+  gap: var(--space-4);
+}
+
+/* ---------- rows on the water: no cards, no rules ---------- */
+.rows {
+  display: grid;
+}
+
+.row {
+  position: relative;
+  display: grid;
+  grid-template-columns: var(--lead) minmax(0, 1fr) auto;
+  column-gap: var(--lead-gap);
+  align-items: center;
+  padding-block: var(--row-pad);
+  border-radius: var(--r-control);
+  transition: background-color var(--t-micro) var(--ease);
+}
+
+/* The hover tint bleeds into the gutter so text stays on the grid. */
+.row::before {
+  content: "";
+  position: absolute;
+  inset: 0 calc(-1 * var(--space-3));
+  z-index: -1;
+  border-radius: var(--r-panel);
+  background: transparent;
+  transition: background-color var(--t-micro) var(--ease);
+}
+
+.row:hover::before { background: var(--tint-hover); }
+.row[data-selected]::before { background: var(--tint-selected); }
+
+.row-lead {
+  display: grid;
+  place-items: center end;
+  height: 32px;
+  color: var(--text-muted);
+}
+
+.row-lead svg {
+  width: 20px;
+  height: 20px;
+}
+
+/* A type glyph centres on the filename's line, where the trailing actions
+   sit; a poster frame stays centred on the row. */
+.row-lead:not(:has(img)) {
+  align-self: start;
+  height: var(--row-line);
+}
+
+.row-lead img {
+  width: var(--lead);
+  height: 32px;
+  border-radius: var(--r-thumb);
+  object-fit: cover;
+}
+
+.row-main {
+  display: grid;
+  min-width: 0;
+}
+
+.row-main > p {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Trailing items sit on the filename's line, ending on the column's right edge. */
+.row-trail {
+  display: grid;
+  justify-items: end;
+  align-items: center;
+  align-self: start;
+  min-width: 0;
+  min-height: var(--control-height-compact);
+  margin-block-start: calc((var(--row-line) - var(--control-height-compact)) / 2);
+}
+
+/* Status and actions share one cell: actions replace the status on hover,
+   focus and selection, so both always end on the column's right edge. */
+.row-trail > * {
+  grid-area: 1 / 1;
+}
+
+.row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-4);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--t-micro) var(--ease);
+}
+
+.row:hover .row-actions,
+.row:focus-within .row-actions,
+.row[data-selected] .row-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.row:hover .row-trail > .status,
+.row:focus-within .row-trail > .status,
+.row[data-selected] .row-trail > .status {
+  opacity: 0;
+}
+
+.row-trail > .status {
+  transition: opacity var(--t-micro) var(--ease);
+}
+
+.row-actions .icon-button {
+  margin-inline-end: calc(-1 * var(--space-2));
+}
+
+/* Live rows keep their controls in view. */
+.row[data-live] .row-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* A live row's meta line runs under the trailing controls as well, so the
+   time left and the speed are not cut by Pause and Cancel: title and
+   trailing controls on the first line, meta on the second, the bar on the
+   third, all from the text column to the right edge. The lead spans the
+   two text lines. */
+.row[data-live] > .row-main {
+  display: contents;
+}
+
+.row[data-live] > .row-lead { grid-column: 1; grid-row: 1 / span 2; align-self: start; }
+.row[data-live] .row-title { grid-column: 2; grid-row: 1; }
+/* The 32px controls centre on the 20px title line without making that line
+   taller (they overhang 6px above and below, as in every row). */
+.row[data-live] > .row-trail {
+  grid-column: 3;
+  grid-row: 1;
+  margin-block-end: calc((var(--row-line) - var(--control-height-compact)) / 2);
+}
+.row[data-live] .row-meta { grid-column: 2 / -1; grid-row: 2; }
+
+.row[data-live] > .progress {
+  grid-column: 2 / -1;
+  grid-row: 3;
+  margin-top: var(--space-2);
+}
+
+/* A leading status hangs its dot in the gutter so its word starts on the
+   text column. The meta line gives the dot room inside its own padding box,
+   which its overflow clip does not cut. 8px dot + 4px gap: the hang fits the
+   narrowest lead gap (12px) and keeps clear of a poster frame. */
+.row-meta > .status:first-child {
+  gap: var(--space-1);
+  margin-inline-start: calc(-8px - var(--space-1));
+  margin-inline-end: var(--space-2);
+}
+
+.row-main > .row-meta:has(> .status:first-child) {
+  margin-inline-start: calc(-8px - var(--space-1));
+  padding-inline-start: calc(8px + var(--space-1));
+}
+
+.row-source [data-user-content] {
+  unicode-bidi: plaintext;
+}
+
+/* ---------- the one focus panel: the active download ---------- */
+/* The panel bleeds as far as the row hover tint (12px), so both tints share
+   two vertical edges; text stays on the grid. */
+.focus-panel {
+  margin-inline: calc(-1 * var(--space-3));
+  padding: var(--space-4) var(--space-3);
+  border-radius: var(--r-panel);
+  background: var(--surface);
+}
+
+.focus-panel .row {
+  padding-block: 0;
+}
+
+.focus-panel .row::before {
+  display: none;
+}
+
+.focus-panel .row-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.focus-progress {
+  margin-top: var(--space-3);
+  margin-inline-start: calc(var(--lead) + var(--lead-gap));
+}
+
+.focus-details {
+  margin-top: var(--space-2);
+  margin-inline-start: calc(var(--lead) + var(--lead-gap));
+}
+
+.focus-details summary {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: var(--control-height-compact);
+  margin-inline-start: calc(-1 * var(--space-2));
+  padding: 0 var(--space-2);
+  border-radius: var(--r-control);
+  color: var(--pond-text);
+  font-size: var(--row-size);
+  line-height: var(--row-line);
+  font-weight: var(--row-weight);
+  cursor: pointer;
+  list-style: none;
+  transition: background-color var(--t-release) var(--ease), box-shadow var(--t-release) var(--ease);
+}
+
+.focus-details summary::-webkit-details-marker {
+  display: none;
+}
+
+/* Open/closed cue: the chevron points right while closed, down when open
+   (the same disclosure as Settings' install steps). */
+.focus-details summary svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  transform: rotate(-90deg);
+  transition: transform var(--t-micro) var(--ease);
+}
+
+.focus-details[open] > summary svg {
+  transform: none;
+}
+
+.focus-details summary:hover {
+  background: var(--tint-hover);
+}
+
+.focus-details summary:active {
+  transition: background-color var(--t-press) var(--ease), box-shadow var(--t-press) var(--ease);
+  background: color-mix(in srgb, var(--pond-soft) 14%, transparent);
+  box-shadow: var(--press-inset);
+}
+
+.details-body {
+  display: grid;
+  gap: var(--space-3);
+  padding-top: var(--space-2);
+}
+
+/* Segment map: one bar divided by 2px gaps; each part filled to its own level.
+   Only the bar's two ends are rounded, so it reads as one bar, not a row of dashes. */
+.segment-map {
+  display: flex;
+  gap: 2px;
+  height: 6px;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.segment-map > span {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 2px;
+  background: var(--canvas);
+  overflow: hidden;
+}
+
+.segment-map > span > i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: calc(var(--level) * 100%);
+  background: color-mix(in oklch, var(--lilac), var(--ochre) calc(var(--p) * 1%));
+}
+
+/* The speed line and its caption read as one block. */
+.speed-block {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.speed-chart {
+  display: block;
+  width: 100%;
+  height: 24px;
+  overflow: visible;
+}
+
+.speed-chart path {
+  fill: none;
+  stroke: var(--pond);
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+
+
+/* Status-line tones beyond the Downloads page's three (harbour, progress, failed). */
+.status-line[data-tone="warning"] .line-dot { background: var(--ochre); }
+.status-line[data-tone="complete"] .line-dot { background: var(--celadon); }
+
+/* A row whose core verb stays visible at rest (detected media: Download). */
+.row[data-actions="visible"] .row-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* ---------- list header: title + count on the text column, actions on the right edge ---------- */
+.list-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: var(--space-4);
+  padding-top: var(--group-above);
+  padding-bottom: var(--group-below);
+  padding-inline-start: calc(var(--lead) + var(--lead-gap));
+}
+
+.list-title {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+/* The title keeps its words; a long meta (the page host) truncates first. */
+.list-title > span:first-child {
+  flex: none;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* listHeader({ meta }): a meta line after the title, e.g. the page host. */
+.list-title .list-meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.list-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+/* ---------- fields built by controls.js (data-field): sizes, widths, units, select, text area ---------- */
+.field[data-size="compact"] {
+  min-height: var(--control-height-compact);
+}
+
+.field[data-size="compact"] > input,
+.field[data-size="compact"] > select {
+  height: var(--control-height-compact);
+}
+
+.field[data-width="short"] { width: var(--field-short); }
+.field[data-width="medium"] { width: var(--field-medium); }
+.field[data-width="fill"] { width: 100%; }
+
+.field select:focus-visible,
+.field textarea:focus-visible {
+  outline: none;
+}
+
+/* Only the field's own control: a disabled <option> inside a menu must not dim it. */
+.field[data-field]:has(> :is(input, select, textarea):disabled) {
+  opacity: 0.5;
+}
+
+/* Invalid: a soft vermilion halo, shaped like the focus halo (no hard ring at
+   rest: §6.2, audit g). The setting's error line carries the words. */
+.field[data-field]:has([aria-invalid="true"]):not(:focus-within) {
+  box-shadow: 0 0 0 3px var(--halo-invalid);
+}
+
+.field-unit {
+  flex: none;
+  padding-inline-end: var(--space-3);
+  white-space: nowrap;
+}
+
+.field:has(> .field-unit) > input {
+  padding-inline-end: var(--space-2);
+}
+
+.field select {
+  flex: 1;
+  min-width: 0;
+  height: var(--control-height);
+  padding: 0 calc(var(--space-3) + 20px) 0 var(--space-3);
+  border: 0;
+  border-radius: var(--r-control);
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-text);
+  font-size: var(--body-size);
+  line-height: var(--body-line);
+  font-weight: var(--body-weight);
+  -webkit-appearance: none;
+  appearance: none;
+  cursor: pointer;
+}
+
+.field select:disabled {
+  cursor: default;
+}
+
+.field-chevron {
+  right: var(--space-3);
+  width: 16px;
+  height: 16px;
+  color: var(--text-secondary);
+}
+
+.field-chevron svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.field[data-multiline] {
+  align-items: stretch;
+}
+
+.field textarea {
+  flex: 1;
+  min-width: 0;
+  min-height: calc(3 * var(--body-line) + 2 * var(--space-2));
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  border-radius: var(--r-control);
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-text);
+  font-size: var(--body-size);
+  line-height: var(--body-line);
+  font-weight: var(--body-weight);
+  resize: vertical;
+}
+
+.field textarea::placeholder {
+  color: var(--text-muted);
+  opacity: 1;
+}
+
+/* A visible label above a control (dialogs, forms). */
+.field-stack {
+  display: grid;
+  gap: var(--space-2);
+}
+
+/* ---------- switch: the one boolean control ---------- */
+.switch {
+  position: relative;
+  display: inline-block;
+  flex: none;
+  width: 36px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: var(--sunken);
+  cursor: pointer;
+  transition: background-color var(--t-micro) var(--ease);
+}
+
+/* A 44 × 32 hit area around the 36 × 20 track. */
+.switch::before {
+  content: "";
+  position: absolute;
+  inset: -6px -4px;
+}
+
+.switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  transition: transform var(--t-micro) var(--ease), background-color var(--t-micro) var(--ease);
+}
+
+/* Off is an empty sunken track with a muted knob; on is the filled track
+   with a light knob. The two differ in value, not only in hue and knob side;
+   the off knob carries the boundary (text-muted, at least 4.5:1 on every surface). */
+.switch:not([aria-checked="true"]):hover:not(:disabled) .switch-thumb { background: var(--text-secondary); }
+.switch[aria-checked="true"] { background: var(--primary-fill); }
+.switch[aria-checked="true"]:hover:not(:disabled) { background: var(--primary-fill-hover); }
+.switch[aria-checked="true"] .switch-thumb {
+  transform: translateX(16px);
+  background: var(--text-on-accent);
+}
+
+.switch:active:not(:disabled) {
+  transition-duration: var(--t-press);
+  box-shadow: var(--press-inset);
+}
+
+.switch:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+/* ---------- Settings rows (§6.13): name · one-line description · control on the trailing edge ---------- */
+.setting-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: var(--space-6);
+  align-items: center;
+  padding-block: var(--row-pad);
+}
+
+.setting-row[data-layout="stack"] {
+  grid-template-columns: minmax(0, 1fr);
+  row-gap: var(--space-2);
+}
+
+.setting-text {
+  display: grid;
+  min-width: 0;
+}
+
+label.setting-name {
+  cursor: pointer;
+}
+
+.setting-error {
+  color: var(--vermilion-text);
+}
+
+/* One helper line (§7): while the error line shows, it stands in for the
+   description (which still describes the control through aria-describedby). */
+.setting-text:has(> .setting-error:not([hidden])) > .setting-description {
+  display: none;
+}
+
+.setting-trail {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+/* Trailing controls sit on the name's line, as trailing items do in download
+   rows: centred on the first line box, ending on the column's right edge. */
+.setting-row:not([data-layout="stack"]) {
+  align-items: start;
+}
+
+.setting-row:not([data-layout="stack"]) > .setting-trail {
+  min-height: var(--control-height);
+  margin-block: calc((var(--row-line) - var(--control-height)) / 2);
+}
+
+/* settingRow({ control: [...] }): a status word and its actions share the trailing edge. */
+.trail-group {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.setting-row[data-layout="stack"] .setting-trail {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  justify-items: stretch;
+}
+
+.setting-row[data-layout="stack"] .saved-note {
+  order: 1;
+  justify-self: end;
+}
+
+/* Inline "Saved": dot + word in the celadon text variant; fades (opacity only). */
+.saved-note {
+  opacity: 0;
+  transition: opacity var(--t-micro) var(--ease);
+}
+
+.saved-note:empty {
+  display: none;
+}
+
+.saved-note[data-visible="true"] {
+  opacity: 1;
+}
+
+/* ---------- Settings nav (§6.13): tonal pill + text-primary on the current item ---------- */
+.nav-layout {
+  display: grid;
+  grid-template-columns: var(--nav-width) minmax(0, var(--content-max));
+  column-gap: var(--nav-gap);
+  align-items: start;
+}
+
+.nav-list {
+  display: grid;
+  gap: 2px;
+}
+
+/* The tonal pill is drawn on a pseudo-element, so the link box itself carries
+   no fill: the item text, not the pill, sits on the nav's left edge (the same
+   edge as the page title; the audit anchors a control's text to its outermost
+   filled box). The pill bleeds 12px past the text on both sides. */
+.nav-item {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  align-items: center;
+  min-height: var(--control-height-compact);
+  color: var(--text-secondary);
+  text-decoration: none;
+  transition: color var(--t-micro) var(--ease);
+}
+
+.nav-item::before {
+  content: "";
+  position: absolute;
+  inset: 0 calc(-1 * var(--space-3));
+  z-index: -1;
+  border-radius: 999px;
+  transition: background-color var(--t-micro) var(--ease);
+}
+
+.nav-item:hover {
+  color: var(--text-primary);
+}
+
+.nav-item:hover::before {
+  background: var(--tint-hover);
+}
+
+.nav-item[aria-current="true"] {
+  color: var(--text-primary);
+}
+
+.nav-item[aria-current="true"]::before {
+  background: var(--tint-pond);
+}
+
+/* ---------- dialog (§6.12): fits 372 × 600; body scrolls; actions always in view ---------- */
+.dialog-shell {
+  width: min(var(--dialog-width), calc(100vw - 2 * var(--space-4)));
+  max-width: none;
+  max-height: calc(100vh - 2 * var(--space-4));
+  margin: auto;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-float);
+  background: var(--raised);
+  color: var(--text-secondary);
+  box-shadow: var(--shadow-float);
+  overflow: hidden;
+}
+
+.dialog-shell[open] {
+  display: flex;
+  flex-direction: column;
+}
+
+.dialog-shell::backdrop {
+  background: var(--scrim);
+}
+
+/* A Chrome popup is only as tall as its document (at most 600). While a
+   dialog is open the popup takes the full 600, so the dialog fits 372 × 600
+   (§6.12) instead of being squeezed by a short view behind it. */
+[data-surface="popup"]:has(.dialog-shell[open]) {
+  min-height: 600px;
+}
+
+/* While a dialog is open, an empty state behind the scrim steps out: its
+   Display sentence and its primary would otherwise count with the dialog's
+   title, labels and primary (six text styles, one primary per view). */
+:root:has(.dialog-shell[open]) .empty-state {
+  visibility: hidden;
+}
+
+.dialog-form {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.dialog-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: var(--space-3);
+  padding: var(--space-3) var(--space-4) var(--space-2);
+}
+
+.dialog-close {
+  margin-inline-end: calc(-1 * var(--space-2));
+}
+
+.dialog-body {
+  display: grid;
+  align-content: start;
+  gap: var(--space-4);
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: var(--space-2) var(--space-4);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.dialog-actions {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  flex: none;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-4);
+}
+
+/* On the raised dialog a field sits one value step below the dialog (§6.2).
+   The fill sits on the native control and the wrapper turns transparent, so
+   the value text starts where the control's fill does, on the label's edge,
+   instead of adding a second edge 12px in. Same in every dialog. */
+.dialog-shell .field {
+  background: transparent;
+}
+
+.dialog-shell .field > input,
+.dialog-shell .field > select {
+  border-radius: var(--r-control);
+  background: var(--surface);
+}
+
+/* The dialog's one status line (.dialog-line on a statusLine) hangs its dot
+   in the body padding, so its text starts on the same edge as the field
+   labels: one left edge in the dialog. */
+.dialog-shell .dialog-line {
+  position: relative;
+  display: block;
+  min-height: 0;
+  padding-top: 0;
+}
+
+.dialog-shell .dialog-line:empty {
+  display: none;
+}
+
+/* Centred on the line box (a line with a Set up button is 32px tall), 4px
+   clear of the text and 4px clear of the dialog's edge. */
+.dialog-shell .dialog-line .line-dot {
+  position: absolute;
+  top: 50%;
+  left: calc(-8px - var(--space-1));
+  margin: 0;
+  transform: translateY(-50%);
+}
+
+/* ---------- motion preferences ---------- */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 200ms !important;
+  }
+
+  .progress[data-state="active"] .progress-fill::before {
+    animation: none;
+    display: none;
+  }
+
+  /* The switch thumb jumps instead of sliding. */
+  .switch-thumb {
+    transition-duration: 0s !important;
+  }
+}
+
+/* The same rules on request: a page (the component preview's Reduce motion
+   switch, ?motion=reduced) sets data-motion="reduced" on the root. */
+:root[data-motion="reduced"] *,
+:root[data-motion="reduced"] *::before,
+:root[data-motion="reduced"] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 200ms !important;
+}
+
+:root[data-motion="reduced"] .progress[data-state="active"] .progress-fill::before {
+  animation: none;
+  display: none;
+}
+
+:root[data-motion="reduced"] .switch-thumb {
+  transition-duration: 0s !important;
+}

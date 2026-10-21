@@ -15,13 +15,16 @@ Request headers are first associated by `requestId`. Only requests classified as
 ## Interface layer
 
 FluxCatch keeps the extension interface buildless and packaged with the
-extension. `extension/ui/tokens.css` defines the shared color, type, spacing,
-radius, control, focus, shadow, and motion values. `extension/ui/components.css`
-implements reusable controls and status primitives, while each page stylesheet
-owns only its layout and surface-specific composition. Shared asynchronous
-interaction helpers live in `extension/ui/interactions.js`; they serialize the
-same named action, keep control width stable while pending, expose `aria-busy`,
-and restore focus without changing any background/native protocol.
+extension. Every surface is built on the v2 design system in `extension/ui/v2/`
+(its `README.md` is the API reference): `tokens.css` holds the colour, type,
+grid, shape and motion tokens, `system.css` the shared components, and the
+builders in `components.js`, `controls.js` and `rows.js` emit only those
+classes, while each page stylesheet owns only its layout. Copy comes from the
+message modules in `messages/` through `messages.js`, in the one UI language
+`locale.js` resolves. `runAction()` serializes the same named action and exposes
+`aria-busy` without changing labels; `runtime.js` keeps each page's port to the
+worker alive across MV3 idle shutdowns, without changing any background/native
+protocol.
 
 Settings is a normalized form rather than a direct view of storage. On load it
 creates an allowlisted baseline, compares normalized values after input, and

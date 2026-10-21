@@ -530,7 +530,7 @@ async function runCase(name, spec, result, { browser, call, chrome, extension })
   }
 
   await capturePage(browser, chrome.httpOrigin, `chrome-extension://${extension.id}/popup/popup.html`, path.join(SHOTS_DIR, `${name}-popup-jobs.png`), {
-    width: 372, height: 560, wait: 1800, activateTab: tabId, call, before: `document.querySelector("#jobsTab")?.click()`
+    width: 372, height: 560, wait: 1800, activateTab: tabId, call, before: `document.querySelector('[data-view="downloads"]')?.click()`
   });
   try { await call(`async () => chrome.tabs.remove(${tabId})`); } catch { /* closed */ }
 }

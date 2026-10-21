@@ -1,346 +1,409 @@
-// FluxCatch downloads page: live jobs on top, the durable history grouped by
-// day below, with the file actions Chrome's own list cannot offer for files
-// the local engine saved.
-import { humanBytes } from "../lib/media.js";
-import { friendlyDashMessage } from "../lib/job-presentation.js";
-import { createToastController, restoreFocus, withPendingAction } from "../ui/interactions.js";
-import { bindUiI18n } from "../ui/i18n.js";
-import {
-  compareJobs,
-  createJobActions,
-  createJobTile,
-  createTransferControls,
-  dayGroupOf,
-  estimateRemaining,
-  finishedMetaParts,
-  formatRelativeTime,
-  isTerminalStatus,
-  runFileAction,
-  statusLabel
-} from "../ui/job-rows.js";
-import { pushSpeedSample, renderSegmentMap, renderSpeedGraph, segmentsFromMessage } from "../ui/speed-graph.js";
-
-// Recent speed samples per live job, for the graph in the active card.
-const speedSamples = new Map();
-
-function recordSpeed(job) {
-  if (!job?.jobId) return;
-  if (isTerminalStatus(job.status)) {
-    speedSamples.delete(job.jobId);
-    return;
-  }
-  speedSamples.set(job.jobId, pushSpeedSample(speedSamples.get(job.jobId), job.speed));
-}
-
-let initStarted = false;
-await bindUiI18n();
+// FluxCatch Downloads page (design review §6.15) on the v2 system: the live
+// download as the one focus panel, then the durable history grouped by day,
+// with the file actions Chrome's own list cannot offer for engine-saved files.
+// All copy comes from ui/v2/messages.js; all formatting follows the one UI
+// language (ui/v2/locale.js); engine text is never shown raw (ui/v2/errors.js).
+// Rows, the focus panel and status lines are the shared v2 builders (ui/v2/rows.js,
+// ui/v2/components.js); this file keeps the page's state and behaviour.
+import { bootLocale, dayGroupOf, formatBytes, onLocaleChange } from "../ui/v2/locale.js";
+import { msg } from "../ui/v2/messages.js";
+import { brandMark, createMenus, createToaster, groupLabel, icon, runAction, setStatusLine } from "../ui/v2/components.js";
+import { historyRow, liveRow, recordBytes, updateLiveRow } from "../ui/v2/rows.js";
+import { errorText, userError } from "../ui/v2/errors.js";
+import { callWorker as call, connectWorkerPort } from "../ui/v2/runtime.js";
+import { mountPond } from "../ui/v2/pond.js";
+import { compareJobs, isTerminalStatus, recordSpeedSample, runFileAction } from "../ui/v2/jobs.js";
 
 const $ = (selector) => document.querySelector(selector);
+const FINISH_HOLD_MS = 1800;
+
 const state = {
   records: [],
   jobs: new Map(),
   filter: "all",
   query: "",
-  downloadDir: "",
-  settings: {},
+  settings: null,
   hostStatus: {},
+  nativePermission: null,
   notificationPermission: null,
   notifyDismissed: false,
-  menuJobId: null
+  load: "loading",
+  disconnected: false,
+  speeds: new Map(),
+  finishing: new Map()
 };
-const toastController = createToastController($("#toast"));
-const port = chrome.runtime.connect({ name: "fluxcatch-downloads" });
-const DAY_ORDER = ["今天", "昨天", "本周", "更早"];
 
-port.onMessage.addListener((message) => {
+let pond = null;
+let initStarted = false;
+
+// Connect before anything awaits, so no broadcast is missed. An idle worker
+// drops the port; the page reconnects and resyncs the history, and says
+// "stopped responding" only when the worker does not come back.
+connectWorkerPort({
+  name: "fluxcatch-downloads",
+  onMessage: (message) => onPortMessage(message),
+  onReconnect: () => (initStarted ? refreshHistory({ quiet: true, keepOnError: true }) : true),
+  onLost: () => {
+    state.disconnected = true;
+    renderStatusLine();
+  }
+});
+
+await bootLocale();
+const toast = createToaster($("#toastRegion"));
+const menus = createMenus($("#menuLayer"));
+
+document.addEventListener("DOMContentLoaded", init);
+if (document.readyState !== "loading") void init();
+
+async function init() {
+  if (initStarted) return;
+  initStarted = true;
+  mountChrome();
+  applyStaticCopy();
+  bindEvents();
+  onLocaleChange(() => { applyStaticCopy(); renderAll(); });
+  pond = await mountPond({ element: $("[data-pond]"), getZones: pondZones }).catch(() => null);
+  await Promise.all([readPermissions(), readSettings()]);
+  renderStatusLine();
+  await refreshHistory();
+  // Files can be moved or deleted outside FluxCatch: ask the engine which
+  // records still point at a real file, then redraw with the answer.
+  void call({ type: "VERIFY_HISTORY" }).then((result) => (result?.checked ? refreshHistory({ quiet: true }) : undefined)).catch(() => {});
+}
+
+// ---------- static chrome ----------
+function mountChrome() {
+  $("#topbarInner").prepend(brandMark({ size: "m" }));
+  $("#settingsButton").append(icon("settings"));
+  $("#urlGlyph").append(icon("link"));
+  $("#searchGlyph").append(icon("search"));
+  $("#pageMoreButton").append(icon("more"));
+  const topbar = $("#topbar");
+  const onScroll = () => { topbar.dataset.scrolled = String(window.scrollY > 0); };
+  window.addEventListener("scroll", onScroll, { passive: true });
+  onScroll();
+}
+
+function applyStaticCopy() {
+  document.title = `${msg("downloads.title")} · ${msg("brand.name")}`;
+  for (const element of document.querySelectorAll("[data-msg]")) element.textContent = msg(element.dataset.msg);
+  for (const element of document.querySelectorAll("[data-msg-placeholder]")) element.placeholder = msg(element.dataset.msgPlaceholder);
+  for (const element of document.querySelectorAll("[data-msg-label]")) {
+    const label = msg(element.dataset.msgLabel);
+    element.setAttribute("aria-label", label);
+    if (element.tagName === "BUTTON") element.title = label;
+  }
+}
+
+function bindEvents() {
+  $("#settingsButton").addEventListener("click", () => {
+    chrome.runtime.openOptionsPage().catch(() => toast(msg("toast.settingsFailed"), "error"));
+  });
+  $("#urlForm").addEventListener("submit", (event) => {
+    event.preventDefault();
+    void submitLink();
+  });
+  $("#searchInput").addEventListener("input", (event) => {
+    state.query = String(event.target.value || "").trim().toLowerCase();
+    renderHistory();
+  });
+  const tabs = [...document.querySelectorAll("#filters [data-filter]")];
+  for (const tab of tabs) {
+    tab.addEventListener("click", () => selectFilter(tab.dataset.filter, { focus: false }));
+    tab.addEventListener("keydown", (event) => {
+      const index = tabs.indexOf(tab);
+      const next = { ArrowRight: index + 1, ArrowLeft: index - 1, Home: 0, End: tabs.length - 1 }[event.key];
+      if (next === undefined) return;
+      event.preventDefault();
+      selectFilter(tabs[(next + tabs.length) % tabs.length].dataset.filter, { focus: true });
+    });
+  }
+  $("#pageMoreButton").addEventListener("click", (event) => {
+    const anchor = event.currentTarget;
+    const items = [
+      { label: msg("downloads.showFolder"), iconName: "folder", run: () => void runAction(anchor, "downloads:folder", () => call({ type: "OPEN_DOWNLOAD_FOLDER" }), { onError: showError }) }
+    ];
+    if (state.records.length) items.push({ label: msg("downloads.clearHistory"), iconName: "clear", tone: "destructive", keepOpen: true, run: () => void clearHistory(anchor) });
+    menus.openItems(anchor, items);
+  });
+  $("#emptyAction").addEventListener("click", () => {
+    state.query = "";
+    $("#searchInput").value = "";
+    selectFilter("all", { focus: false });
+    $("#searchInput").focus();
+  });
+  chrome.permissions.onAdded?.addListener(() => void readPermissions().then(renderStatusLine));
+  chrome.permissions.onRemoved?.addListener(() => void readPermissions().then(renderStatusLine));
+}
+
+function selectFilter(filter, { focus }) {
+  state.filter = filter;
+  for (const tab of document.querySelectorAll("#filters [data-filter]")) {
+    const selected = tab.dataset.filter === filter;
+    tab.setAttribute("aria-selected", String(selected));
+    tab.tabIndex = selected ? 0 : -1;
+    if (selected && focus) tab.focus();
+  }
+  renderHistory();
+}
+
+// ---------- data ----------
+async function readPermissions() {
+  try { state.nativePermission = await chrome.permissions.contains({ permissions: ["nativeMessaging"] }); } catch { state.nativePermission = false; }
+  try { state.notificationPermission = await chrome.permissions.contains({ permissions: ["notifications"] }); } catch { state.notificationPermission = false; }
+}
+
+async function readSettings() {
+  try {
+    const result = await call({ type: "GET_SETTINGS" });
+    state.settings = result.settings || null;
+  } catch {
+    state.settings = null;
+  }
+}
+
+/** Read the history and live jobs; true when the worker answered.
+ *  keepOnError: a failed resync (after a reconnect) leaves the page as it was. */
+async function refreshHistory({ quiet = false, keepOnError = false } = {}) {
+  if (!quiet) { state.load = "loading"; renderLoadState(); }
+  try {
+    const result = await call({ type: "GET_HISTORY" });
+    state.records = Array.isArray(result.items) ? result.items : [];
+    state.jobs = new Map((result.jobs || []).map((job) => [job.jobId, job]));
+    state.hostStatus = result.hostStatus || state.hostStatus;
+    state.load = "ready";
+  } catch {
+    if (keepOnError) return false;
+    state.load = "error";
+    renderAll();
+    return false;
+  }
+  renderAll();
+  return true;
+}
+
+function onPortMessage(message) {
   if (!message?.type) return;
   if (message.type === "JOB_UPDATED" && message.job?.jobId) {
-    state.jobs.set(message.job.jobId, message.job);
-    recordSpeed(message.job);
+    const job = message.job;
+    const previous = state.jobs.get(job.jobId);
+    state.jobs.set(job.jobId, job);
+    recordSpeed(job);
+    if (isTerminalStatus(job.status)) {
+      if (job.status === "completed" && previous && !isTerminalStatus(previous.status)) beginFinish(job);
+      else void refreshHistory({ quiet: true });
+    }
     renderActive();
-    // A row that just ended shows up in the history list within the same tick.
-    if (isTerminalStatus(message.job.status)) void refreshHistory({ quiet: true });
   } else if (message.type === "JOBS_UPDATED") {
     state.jobs = new Map((message.jobs || []).map((job) => [job.jobId, job]));
     for (const job of state.jobs.values()) recordSpeed(job);
     renderActive();
   } else if (message.type === "HISTORY_UPDATED" && message.record?.jobId) {
     state.records = [message.record, ...state.records.filter((item) => item.jobId !== message.record.jobId)];
-    renderHistory();
+    if (!state.finishing.has(message.record.jobId)) renderHistory();
+    renderSummary();
   } else if (message.type === "HISTORY_REMOVED") {
     state.records = state.records.filter((item) => item.jobId !== message.jobId);
     renderHistory();
+    renderSummary();
   } else if (message.type === "HISTORY_CLEARED" || message.type === "HISTORY_VERIFIED") {
     void refreshHistory({ quiet: true });
   } else if (message.type === "HOST_EVENT") {
     state.hostStatus = message.hostStatus || state.hostStatus;
   }
-});
-
-document.addEventListener("DOMContentLoaded", init);
-
-async function init() {
-  if (initStarted) return;
-  initStarted = true;
-  bindEvents();
-  try {
-    state.notificationPermission = await chrome.permissions.contains({ permissions: ["notifications"] });
-  } catch {
-    state.notificationPermission = false;
-  }
-  try {
-    const settings = await call({ type: "GET_SETTINGS" });
-    state.settings = settings.settings || {};
-  } catch { /* defaults */ }
-  await refreshHistory();
-  // Files can be moved or deleted outside FluxCatch; ask the engine which
-  // records still point at a real file, then redraw with the answer.
-  void call({ type: "VERIFY_HISTORY" }).then((result) => {
-    if (result?.checked) return refreshHistory({ quiet: true });
-    return undefined;
-  }).catch(() => {});
 }
 
-function bindEvents() {
-  $("#settingsButton").addEventListener("click", () => void chrome.runtime.openOptionsPage().catch((error) => showToast(error?.message || "无法打开设置页", "error")));
-  $("#folderButton").addEventListener("click", (event) => void runUiAction(event.currentTarget, "downloads:open-folder", () => call({ type: "OPEN_DOWNLOAD_FOLDER" }), {
-    pendingText: "", successText: "已打开 ✓", successDurationMs: 800
-  }));
-  $("#retryButton").addEventListener("click", () => void refreshHistory());
-  $("#newDownloadButton").addEventListener("click", (event) => {
-    const form = $("#urlForm");
-    form.hidden = !form.hidden;
-    event.currentTarget.setAttribute("aria-expanded", String(!form.hidden));
-    if (!form.hidden) $("#urlInput").focus({ preventScroll: true });
-  });
-  $("#urlForm").addEventListener("submit", (event) => {
-    event.preventDefault();
-    const submit = event.currentTarget.querySelector("button[type=submit]");
-    const url = String($("#urlInput").value || "").trim();
-    void runUiAction(submit, `downloads:url-download:${url}`, async () => {
-      if (!/^https?:\/\/\S+$/i.test(url)) throw new Error("请输入 http 或 https 的媒体地址");
-      const granted = await chrome.permissions.request({ permissions: ["nativeMessaging"] });
-      if (!granted) throw new Error("请先允许使用本地下载引擎，再继续下载");
-      await call({ type: "DOWNLOAD_URL", url, options: {} });
-      $("#urlInput").value = "";
-      showToast("本地下载任务已开始", "success");
-    }, { pendingText: "", successText: "已开始 ✓", successDurationMs: 800 });
-  });
-  $("#searchInput").addEventListener("input", (event) => {
-    state.query = String(event.target.value || "").trim().toLowerCase();
-    renderHistory();
-  });
-  for (const button of document.querySelectorAll(".segmented [data-filter]")) {
-    button.addEventListener("click", () => {
-      state.filter = button.dataset.filter;
-      for (const other of document.querySelectorAll(".segmented [data-filter]")) {
-        const selected = other === button;
-        other.classList.toggle("active", selected);
-        other.setAttribute("aria-selected", String(selected));
-      }
-      renderHistory();
+function recordSpeed(job) {
+  if (isTerminalStatus(job.status)) { state.speeds.delete(job.jobId); return; }
+  state.speeds.set(job.jobId, recordSpeedSample(state.speeds.get(job.jobId) || [], job));
+}
+
+// A finished download stays a moment: the fill turns celadon, then fades,
+// then the row takes its history form.
+function beginFinish(job) {
+  state.finishing.set(job.jobId, { job, phase: "complete" });
+  setTimeout(() => {
+    const entry = state.finishing.get(job.jobId);
+    if (entry) { entry.phase = "settled"; renderActive(); }
+  }, 1200);
+  setTimeout(() => {
+    state.finishing.delete(job.jobId);
+    void refreshHistory({ quiet: true });
+  }, FINISH_HOLD_MS);
+}
+
+// ---------- rendering ----------
+function renderAll() {
+  renderLoadState();
+  renderSummary();
+  renderStatusLine();
+  renderActive();
+  renderHistory();
+}
+
+function renderSummary() {
+  const completed = state.records.filter((record) => record.status === "completed");
+  const bytes = completed.reduce((sum, record) => sum + recordBytes(record), 0);
+  const summary = $("#pageSummary");
+  summary.hidden = completed.length === 0;
+  summary.textContent = completed.length ? msg("downloads.summary", { count: completed.length, size: formatBytes(bytes) }) : "";
+}
+
+function renderStatusLine() {
+  const container = $("#statusLine");
+  if (state.disconnected) {
+    container.hidden = false;
+    setStatusLine(container, { tone: "failed", text: msg("downloads.disconnected"), actions: [{ label: msg("action.reload"), run: () => location.reload() }] });
+    return;
+  }
+  if (state.nativePermission === false) {
+    container.hidden = false;
+    setStatusLine(container, { text: msg("status.engineNotSetUp"), actions: [{ label: msg("action.setUp"), run: openEngineSetup }] });
+    return;
+  }
+  const wantsNotifications = state.settings ? state.settings.showNotifications !== false : true;
+  if (wantsNotifications && state.notificationPermission === false && !state.notifyDismissed) {
+    container.hidden = false;
+    setStatusLine(container, {
+      text: msg("downloads.notificationsOff"),
+      actions: [
+        { label: msg("action.turnOn"), run: (anchor) => void enableNotifications(anchor) },
+        { label: msg("action.dontNotify"), run: (anchor) => void dismissNotifications(anchor) }
+      ]
     });
+    return;
   }
-  $("#clearHistoryButton").addEventListener("click", (event) => {
-    if (!window.confirm("清空全部下载记录？文件本身不会被删除。")) return;
-    void runUiAction(event.currentTarget, "downloads:clear-history", async () => {
-      const result = await call({ type: "CLEAR_HISTORY" });
-      state.records = [];
-      state.jobs = new Map((result.jobs || []).map((job) => [job.jobId, job]));
-      renderActive();
-      renderHistory();
-      showToast(result.removed ? `已清空 ${result.removed} 条记录` : "没有可清空的记录", result.removed ? "success" : "warning");
-    }, { pendingText: "清空中…", successText: "已清空 ✓" });
-  });
-  $("#notifyEnableButton").addEventListener("click", (event) => void runUiAction(event.currentTarget, "downloads:enable-notifications", async () => {
-    const granted = await chrome.permissions.request({ permissions: ["notifications"] });
-    state.notificationPermission = granted;
-    if (!granted) throw new Error("未授予通知权限，可稍后在设置里开启");
-    showToast("下载完成后会收到通知", "success");
-    renderNotifyBanner();
-  }, { pendingText: "", successText: "已开启 ✓", successDurationMs: 0 }));
-  $("#notifyDismissButton").addEventListener("click", (event) => void runUiAction(event.currentTarget, "downloads:dismiss-notifications", async () => {
-    state.notifyDismissed = true;
-    renderNotifyBanner();
-    const settings = { ...(state.settings || {}), showNotifications: false };
-    const saved = await call({ type: "SAVE_SETTINGS", settings });
-    state.settings = saved.settings || settings;
-  }, { pendingText: "", successDurationMs: 0 }));
-  $("#menuLayer").addEventListener("click", (event) => {
-    if (event.target === event.currentTarget) closeMenu();
-  });
-  document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && !$("#menuLayer").hidden) {
-      event.preventDefault();
-      closeMenu();
-    }
-  });
-  window.addEventListener("resize", closeMenu);
+  container.hidden = true;
+  container.replaceChildren();
 }
 
-async function refreshHistory({ quiet = false } = {}) {
-  if (!quiet) setLoadState("loading");
-  try {
-    const result = await call({ type: "GET_HISTORY" });
-    state.records = Array.isArray(result.items) ? result.items : [];
-    state.jobs = new Map((result.jobs || []).map((job) => [job.jobId, job]));
-    state.hostStatus = result.hostStatus || state.hostStatus;
-    state.downloadDir = result.downloadDir || state.downloadDir;
-    setLoadState("ready");
-    renderActive();
-    renderHistory();
-  } catch (error) {
-    setLoadState("error", friendlyErrorMessage(error?.message || "读取下载记录失败"));
+function renderLoadState() {
+  const container = $("#loadState");
+  if (state.load === "loading") {
+    container.hidden = false;
+    setStatusLine(container, { tone: "progress", text: msg("downloads.loading") });
+  } else if (state.load === "error") {
+    container.hidden = false;
+    setStatusLine(container, { tone: "failed", text: msg("downloads.loadFailed"), actions: [{ label: msg("action.retry"), run: () => void refreshHistory() }] });
+  } else {
+    container.hidden = true;
+    container.replaceChildren();
   }
 }
 
-function setLoadState(type, message = "") {
-  $("#loadingState").hidden = type !== "loading";
-  $("#errorState").hidden = type !== "error";
-  if (message) $("#errorText").textContent = message;
-  if (type !== "ready") {
-    $("#historySection").hidden = true;
-    $("#emptyState").hidden = true;
-  }
+// ----- active downloads: one focus panel, the rest as rows, updated in place -----
+const live = { focusId: null, focus: null, rows: new Map() };
+
+function activeJobs() {
+  const list = [...state.jobs.values()].filter((job) => !isTerminalStatus(job.status) || state.finishing.has(job.jobId));
+  return list.sort(compareJobs);
 }
 
 function renderActive() {
-  const active = [...state.jobs.values()].filter((job) => !isTerminalStatus(job.status)).sort(compareJobs);
-  const section = $("#activeSection");
-  const list = $("#activeList");
-  section.hidden = active.length === 0;
-  $("#activeCount").textContent = String(active.length);
-  $("#activeCount").setAttribute("aria-label", `${active.length} 个进行中`);
-  list.replaceChildren(...active.map(createActiveRow));
+  // A new download takes the focus panel: the demoted job gets a new view, so
+  // put keyboard focus back on the same job's control afterwards.
+  const focused = document.activeElement;
+  const focusJob = focused?.closest?.("#activeSection [data-job-id]")?.dataset?.jobId || "";
+  const focusAction = focused?.dataset?.action || "";
+  const jobs = activeJobs();
+  $("#activeSection").hidden = jobs.length === 0;
+  const [first, ...rest] = jobs;
+  const slot = $("#focusSlot");
+  if (!first) {
+    slot.replaceChildren();
+    live.focusId = null;
+    live.focus = null;
+  } else if (live.focusId !== first.jobId || !live.focus) {
+    live.focusId = first.jobId;
+    live.focus = liveRow(first, { focus: true });
+    slot.replaceChildren(live.focus.root);
+  }
+  if (first) updateLive(live.focus, first);
+  const list = $("#activeRows");
+  const keep = new Set(rest.map((job) => job.jobId));
+  for (const [id, view] of live.rows) if (!keep.has(id)) { view.root.remove(); live.rows.delete(id); }
+  rest.forEach((job, index) => {
+    let view = live.rows.get(job.jobId);
+    if (!view) { view = liveRow(job, { focus: false }); live.rows.set(job.jobId, view); }
+    if (list.children[index] !== view.root) list.insertBefore(view.root, list.children[index] || null);
+    updateLive(view, job);
+  });
+  if (focusJob && !focused.isConnected && !document.activeElement?.closest?.("#activeSection")) {
+    const candidates = [...document.querySelectorAll(`#activeSection [data-job-id="${CSS.escape(focusJob)}"] button`)];
+    (candidates.find((element) => element.dataset.action === focusAction) || candidates[0])?.focus({ preventScroll: true });
+  }
 }
 
-function createActiveRow(job) {
-  const row = document.createElement("li");
-  row.className = `job-row ${job.status || "queued"}`;
-  const head = document.createElement("div");
-  head.className = "job-head";
-  const title = document.createElement("h3");
-  title.className = "job-title";
-  title.textContent = job.filename || "media";
-  title.title = title.textContent;
-  const percentValue = Math.round(Math.max(0, Math.min(1, Number(job.progress) || 0)) * 100);
-  const stateText = document.createElement("span");
-  stateText.className = "job-state";
-  stateText.textContent = percentValue > 0 ? `${percentValue}%` : statusLabel(job.status);
-  head.append(title, stateText);
-  const progress = document.createElement("div");
-  progress.className = "progress";
-  progress.setAttribute("role", "progressbar");
-  progress.setAttribute("aria-label", `${title.textContent} 下载进度`);
-  progress.setAttribute("aria-valuemin", "0");
-  progress.setAttribute("aria-valuemax", "100");
-  progress.setAttribute("aria-valuenow", String(percentValue));
-  progress.setAttribute("aria-valuetext", `${percentValue}%`);
-  const bar = document.createElement("span");
-  bar.style.width = `${percentValue}%`;
-  progress.append(bar);
-  // The active card carries the speed graph with its reflection and, for
-  // streams the engine reports as "分片 n/m", the segment map.
-  const extras = [];
-  const samples = speedSamples.get(job.jobId) || [];
-  if (job.status === "downloading" && samples.length > 1) {
-    const graph = document.createElement("div");
-    graph.className = "job-graph";
-    renderSpeedGraph(graph, samples, { width: 640, height: 64, label: `${title.textContent} 下载速度` });
-    extras.push(graph);
-  }
-  const segments = segmentsFromMessage(job.message);
-  if (segments) {
-    const map = document.createElement("div");
-    map.className = "job-segments";
-    renderSegmentMap(map, {
-      done: segments.done,
-      total: segments.total,
-      active: job.status === "downloading" ? Math.min(8, Math.max(0, segments.total - segments.done)) : 0
-    }, { maximum: 64, label: `${title.textContent} 分片进度` });
-    extras.push(map);
-  }
-  const foot = document.createElement("div");
-  foot.className = "job-foot";
-  const message = document.createElement("span");
-  message.className = "job-message";
-  message.textContent = friendlyJobMessage(job);
-  message.title = message.textContent;
-  const speed = document.createElement("span");
-  speed.className = "job-speed";
-  speed.textContent = Number(job.speed) > 0 ? `${humanBytes(job.speed)}/s` : byteSummary(job);
-  const remaining = estimateRemaining(job);
-  if (remaining) {
-    const eta = document.createElement("span");
-    eta.className = "job-eta";
-    eta.textContent = remaining;
-    speed.append(eta);
-  }
-  if (job.status === "paused" || job.status === "pausing") row.classList.add("paused");
-  foot.append(message, speed, createTransferControls(job, handleTransferControl));
-  row.append(head, progress, ...extras, foot);
-  return row;
+function updateLive(view, job) {
+  updateLiveRow(view, job, { finishing: state.finishing.get(job.jobId) || null, samples: state.speeds.get(job.jobId) || [], onControl: transferControl });
 }
 
-async function handleTransferControl(action, job, button) {
-  const key = `downloads:transfer:${action}:${job.jobId}`;
-  if (action === "pause") {
-    await runUiAction(button, key, async () => {
-      await call({ type: "PAUSE_JOB", jobId: job.jobId });
-      showToast("已发送暂停请求", "success");
-    }, { pendingText: "", successText: "✓" });
-    return;
-  }
+function transferControl(action, job, control) {
   if (action === "resume") {
-    await runUiAction(button, key, async () => {
+    void runAction(control, `resume:${job.jobId}`, async () => {
       await call({ type: "RESUME_JOB", jobId: job.jobId });
-      showToast("已继续下载", "success");
-    }, { pendingText: "", successText: "✓" });
-    return;
+      toast(msg("toast.resumed"));
+    }, { onError: showError });
+  } else if (action === "pause") {
+    void runAction(control, `pause:${job.jobId}`, async () => {
+      await call({ type: "PAUSE_JOB", jobId: job.jobId });
+      toast(msg("toast.pausing"));
+    }, { onError: showError });
+  } else if (action === "cancel") {
+    void cancelJob(job, control);
   }
-  await runUiAction(button, key, async () => {
-    await call({ type: "CANCEL_JOB", jobId: job.jobId });
-    showToast("已发送取消请求", "success");
-  }, { pendingText: "", successText: "✓" });
 }
 
+async function cancelJob(job, control) {
+  const yes = await menus.confirm(control, { question: msg("job.cancelConfirm"), confirmLabel: msg("job.cancelAction") });
+  if (!yes) return;
+  await runAction(control, `cancel:${job.jobId}`, async () => {
+    await call({ type: "CANCEL_JOB", jobId: job.jobId });
+    toast(msg("toast.stopped"));
+  }, { onError: showError });
+}
+
+// ----- history -----
 function visibleRecords() {
   return state.records.filter((record) => {
+    if (state.finishing.has(record.jobId)) return false;
     if (state.filter === "completed" && record.status !== "completed") return false;
     if (state.filter === "failed" && record.status === "completed") return false;
     if (!state.query) return true;
-    const haystack = `${record.filename || ""} ${record.sourceHost || ""} ${record.sourceTitle || ""}`.toLowerCase();
-    return haystack.includes(state.query);
+    return `${record.filename || ""} ${record.sourceHost || ""} ${record.sourceTitle || ""}`.toLowerCase().includes(state.query);
   });
 }
 
+function renderFilters() {
+  const all = state.records.length;
+  const completed = state.records.filter((record) => record.status === "completed").length;
+  const counts = { countAll: all, countCompleted: completed, countFailed: all - completed };
+  for (const [id, value] of Object.entries(counts)) {
+    const element = document.getElementById(id);
+    element.textContent = value ? String(value) : "";
+    element.hidden = value === 0;
+  }
+  // With no history there is nothing to filter, search or clear: the empty
+  // state stands alone (§6.11). The download folder stays reachable in Settings.
+  $("#filterRow").hidden = all === 0;
+}
+
 function renderHistory() {
-  closeMenu();
+  renderFilters();
   const focused = document.activeElement;
-  const focusedJobId = focused?.dataset?.jobId || "";
-  const focusedAction = focused?.dataset?.action || "";
-  const all = state.records;
-  $("#countAll").textContent = String(all.length);
-  $("#countCompleted").textContent = String(all.filter((item) => item.status === "completed").length);
-  $("#countFailed").textContent = String(all.filter((item) => item.status !== "completed").length);
-  $("#clearHistoryButton").disabled = all.length === 0;
-  renderSummary();
-  renderNotifyBanner();
-  const records = visibleRecords().slice().sort((a, b) => (b.finishedAt || 0) - (a.finishedAt || 0));
-  const section = $("#historySection");
-  const empty = $("#emptyState");
+  const focusJob = focused?.closest?.("#history [data-job-id]")?.dataset?.jobId || "";
+  const focusAction = focused?.dataset?.action || "";
+  const section = $("#history");
+  const records = visibleRecords().slice().sort((a, b) => (b.finishedAt || b.createdAt || 0) - (a.finishedAt || a.createdAt || 0));
   section.replaceChildren();
+  if (state.load !== "ready") { section.hidden = true; renderEmpty(null); return; }
   if (!records.length) {
     section.hidden = true;
-    empty.hidden = false;
-    const filtered = all.length > 0;
-    $("#emptyTitle").textContent = filtered ? "没有匹配的记录" : "还没有下载记录";
-    $("#emptyCopy").textContent = filtered
-      ? "换一个关键词，或切换上方的状态筛选。"
-      : "在视频页面点击工具栏图标开始下载；本地引擎保存的文件都会记在这里，并可直接在 Finder 中显示。";
+    renderEmpty(state.records.length ? "noMatch" : "none");
     return;
   }
-  empty.hidden = true;
+  renderEmpty(null);
   section.hidden = false;
   const now = Date.now();
   const groups = new Map();
@@ -349,241 +412,176 @@ function renderHistory() {
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(record);
   }
-  for (const key of DAY_ORDER) {
+  for (const key of ["today", "yesterday", "week", "earlier"]) {
     const items = groups.get(key);
     if (!items?.length) continue;
     const group = document.createElement("section");
-    group.className = "day-group";
-    group.setAttribute("aria-label", key);
-    const head = document.createElement("h2");
-    head.className = "day-head";
-    head.textContent = key;
+    const labelId = `group-${key}`;
+    group.setAttribute("aria-labelledby", labelId);
     const list = document.createElement("ul");
-    list.className = "jobs-list";
-    list.replaceChildren(...items.map(createRecordRow));
-    group.append(head, list);
+    list.className = "rows";
+    list.append(...items.map((record) => historyRow(record, { now, onAction: onRecordAction })));
+    group.append(groupLabel(msg(`group.${key}`), labelId), list);
     section.append(group);
   }
-  if (focusedJobId) {
-    const buttons = [...section.querySelectorAll("button[data-job-id]")].filter((button) => button.dataset.jobId === focusedJobId);
-    restoreFocus(buttons.find((button) => button.dataset.action === focusedAction) || buttons[0]);
+  if (focusJob) {
+    const candidates = [...section.querySelectorAll(`[data-job-id="${CSS.escape(focusJob)}"] button`)];
+    (candidates.find((element) => element.dataset.action === focusAction) || candidates[0])?.focus({ preventScroll: true });
   }
 }
 
-function renderSummary() {
-  const completed = state.records.filter((item) => item.status === "completed");
-  const bytes = completed.reduce((sum, item) => sum + (Number(item.size) || 0), 0);
-  const summary = $("#pageSummary");
-  summary.textContent = completed.length
-    ? `已保存 ${completed.length} 个文件 · 共 ${humanBytes(bytes)}`
-    : "本地引擎保存的每个文件都会记在这里";
-  const note = $("#folderNote");
-  const dir = state.downloadDir || state.hostStatus?.downloadDir || "";
-  note.hidden = !dir;
-  note.textContent = dir ? abbreviateHome(dir) : "";
-}
-
-function renderNotifyBanner() {
-  const banner = $("#notifyBanner");
-  const wanted = state.settings?.showNotifications !== false;
-  banner.hidden = state.notifyDismissed || !wanted || state.notificationPermission !== false;
-}
-
-function createRecordRow(record) {
-  const row = document.createElement("li");
-  row.className = `record ${record.status}${record.fileMissing ? " missing" : ""}`;
-  row.dataset.jobId = record.jobId;
-  const main = document.createElement("div");
-  main.className = "record-main";
-  const titleLine = document.createElement("div");
-  titleLine.className = "record-title";
-  const title = document.createElement("h3");
-  title.className = "job-title";
-  title.textContent = record.filename || "media";
-  title.title = title.textContent;
-  const chip = document.createElement("span");
-  chip.className = `job-chip ${record.status === "completed" ? "done" : record.status === "failed" ? "bad" : "wait"}`;
-  chip.textContent = record.fileMissing ? "文件已移走" : statusLabel(record.status);
-  titleLine.append(title, chip);
-  const meta = document.createElement("p");
-  meta.className = "job-meta-line";
-  meta.textContent = finishedMetaParts(withoutHostAndTime(record), { message: record.status === "failed" ? friendlyJobMessage(record) : "" }).join(" · ");
-  meta.title = meta.textContent;
-  const source = document.createElement("p");
-  source.className = "record-source";
-  const when = formatRelativeTime(record.finishedAt || record.createdAt);
-  if (record.hasSource && record.sourceUrl) {
-    const link = document.createElement("a");
-    link.href = record.sourceUrl;
-    link.target = "_blank";
-    link.rel = "noopener";
-    link.textContent = record.sourceTitle || record.sourceHost || record.sourceUrl;
-    link.title = record.sourceUrl;
-    link.dataset.noI18n = "";
-    source.append(link);
-    if (when) source.append(` · ${when}`);
-  } else {
-    source.textContent = when;
+function renderEmpty(kind) {
+  const empty = $("#emptyState");
+  const pondElement = $("[data-pond]");
+  if (!kind) {
+    empty.hidden = true;
+    if (pondElement.dataset.open) { delete pondElement.dataset.open; pond?.refresh(); }
+    return;
   }
-  main.append(titleLine, meta, source);
-  const actions = createJobActions(record, handleRecordAction, { allowTrash: false, allowRemove: false });
-  const more = document.createElement("button");
-  more.type = "button";
-  more.className = "job-action icon-only";
-  more.dataset.action = "more";
-  more.dataset.jobId = record.jobId;
-  more.setAttribute("aria-haspopup", "menu");
-  more.setAttribute("aria-label", `更多操作 ${record.filename || "media"}`);
-  more.title = "更多操作";
-  more.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.6" fill="currentColor" stroke="none"/></svg>';
-  more.addEventListener("click", (event) => {
-    event.stopPropagation();
-    openMenu(record, more);
+  empty.hidden = false;
+  $("#emptySentence").textContent = msg(kind === "none" ? "downloads.empty.none" : "downloads.empty.noMatch");
+  $("#emptyBody").textContent = msg(kind === "none" ? "downloads.empty.noneBody" : "downloads.empty.noMatchBody");
+  const action = $("#emptyAction");
+  action.hidden = kind !== "noMatch";
+  action.replaceChildren(document.createTextNode(msg("action.clearSearch")));
+  requestAnimationFrame(() => {
+    const rect = $("#emptySentence").getBoundingClientRect();
+    pondElement.style.setProperty("--open-x", `${Math.round(rect.left + 140)}px`);
+    pondElement.style.setProperty("--open-y", `${Math.round(rect.top + rect.height)}px`);
+    if (pondElement.dataset.open !== "true") { pondElement.dataset.open = "true"; pond?.refresh(); }
   });
-  actions.append(more);
-  row.append(createJobTile(record, { size: 56 }), main, actions);
-  return row;
 }
 
-function withoutHostAndTime(record) {
-  // The source host and time have their own line on this page; keep the meta
-  // line to size, duration and resolution.
-  return { ...record, sourceHost: "", finishedAt: 0, updatedAt: 0 };
+function onRecordAction(action, record, control) {
+  if (action === "more") openRecordMenu(record, control);
+  else void recordAction(action, record, control);
 }
 
-function openMenu(record, anchor) {
-  const layer = $("#menuLayer");
-  const menu = $("#rowMenu");
-  menu.replaceChildren();
-  state.menuJobId = record.jobId;
+function openRecordMenu(record, anchor) {
   const items = [];
-  if (record.hasSource) items.push({ action: "source", label: "打开来源页面", icon: "M14 4h6v6M20 4 10 14M19 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h6" });
-  items.push({ action: "copy", label: "复制文件名", icon: "M9 9h10v10H9zM5 15V5h10" });
-  if (record.status === "completed" && record.hasFile && !record.fileMissing) {
-    items.push({ action: "trash", label: "移到废纸篓", icon: "M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13", danger: true });
-  }
-  if (record.retryable) items.push({ action: "retry", label: "重试下载", icon: "M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5" });
-  items.push({ action: "remove", label: "从记录中移除", icon: "M6 6l12 12M18 6 6 18", danger: true });
-  for (const item of items) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.setAttribute("role", "menuitem");
-    button.className = item.danger ? "danger" : "";
-    button.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${item.icon}"/></svg>`;
-    const text = document.createElement("span");
-    text.textContent = item.label;
-    button.append(text);
-    button.addEventListener("click", () => {
-      closeMenu();
-      void handleRecordAction(item.action, record, anchor);
-    });
-    menu.append(button);
-  }
-  layer.hidden = false;
-  const rect = anchor.getBoundingClientRect();
-  const width = Math.max(200, menu.offsetWidth);
-  menu.style.left = `${Math.max(8, Math.min(window.innerWidth - width - 8, rect.right - width))}px`;
-  const below = rect.bottom + 6;
-  const height = menu.offsetHeight;
-  menu.style.top = `${below + height > window.innerHeight - 8 ? Math.max(8, rect.top - height - 6) : below}px`;
-  menu.querySelector("button")?.focus();
+  const hasFile = record.status === "completed" && record.hasFile && !record.fileMissing;
+  if (hasFile) items.push({ label: msg("action.showInFinder"), iconName: "folder", run: () => void recordAction("reveal", record, anchor) });
+  if (record.hasSource) items.push({ label: msg("action.openSource"), iconName: "source", run: () => void recordAction("source", record, anchor) });
+  if (record.hasSource && record.sourceUrl) items.push({ label: msg("action.copyLink"), iconName: "copy", run: () => void recordAction("copy", record, anchor) });
+  if (hasFile) items.push({ label: msg("action.trash"), iconName: "trash", tone: "destructive", keepOpen: true, run: () => void recordAction("trash", record, anchor) });
+  items.push({ label: msg("action.remove"), iconName: "remove", tone: "destructive", keepOpen: true, run: () => void recordAction("remove", record, anchor) });
+  menus.openItems(anchor, items);
 }
 
-function closeMenu() {
-  const layer = $("#menuLayer");
-  if (layer.hidden) return;
-  layer.hidden = true;
-  const anchor = state.menuJobId
-    ? document.querySelector(`button[data-action="more"][data-job-id="${CSS.escape(state.menuJobId)}"]`)
-    : null;
-  state.menuJobId = null;
-  restoreFocus(anchor);
-}
-
-async function handleRecordAction(action, record, button) {
-  const key = `downloads:${action}:${record.jobId}`;
+async function recordAction(action, record, anchor) {
+  const key = `record:${action}:${record.jobId}`;
   if (action === "copy") {
-    await runUiAction(button, key, async () => {
-      await navigator.clipboard.writeText(record.filename || "");
-      showToast("已复制文件名", "success");
-    }, { pendingText: "", successDurationMs: 0 });
+    await runAction(null, key, async () => {
+      await navigator.clipboard.writeText(record.sourceUrl);
+      toast(msg("toast.linkCopied"));
+    }, { onError: showError });
     return;
   }
   if (action === "remove") {
-    await runUiAction(button, key, async () => {
+    if (!(await menus.confirm(anchor, { question: msg("job.removeConfirm"), confirmLabel: msg("action.remove") }))) return;
+    await runAction(anchor, key, async () => {
       await call({ type: "REMOVE_HISTORY", jobId: record.jobId });
       state.records = state.records.filter((item) => item.jobId !== record.jobId);
       renderHistory();
-    }, { pendingText: "", successDurationMs: 0 });
+      renderSummary();
+      toast(msg("toast.removed"));
+    }, { onError: showError });
     return;
   }
   if (action === "trash") {
-    if (!window.confirm(`把“${record.filename}”移到废纸篓？`)) return;
-    await runUiAction(button, key, async () => {
-      await runFileAction(record, "trash", call);
-      showToast("已移到废纸篓", "success");
-    }, { pendingText: "", successDurationMs: 0 });
+    if (!(await menus.confirm(anchor, { question: msg("job.trashConfirm", { name: record.filename || "" }), confirmLabel: msg("action.trash") }))) return;
+    await runAction(anchor, key, async () => {
+      const result = await runFileAction(record, "trash", call);
+      toast(msg(result?.permanent ? "toast.fileDeleted" : "toast.movedToTrash"));
+    }, { onError: showError });
     return;
   }
   if (action === "retry") {
-    await runUiAction(button, key, async () => {
-      const result = await call({ type: "RETRY_JOB", jobId: record.jobId });
-      showToast(result.method === "native" ? "本地下载任务已开始" : "浏览器下载已开始", "success");
-    }, { pendingText: "", successText: "✓", successDurationMs: 0 });
+    await runAction(anchor, key, async () => {
+      await call({ type: "RETRY_JOB", jobId: record.jobId });
+      toast(msg("toast.downloadStarted"));
+    }, { onError: showError });
     return;
   }
   if (action === "source") {
-    await runUiAction(button, key, () => call({ type: "OPEN_JOB_SOURCE", jobId: record.jobId }), { pendingText: "", successDurationMs: 0 });
+    await runAction(anchor, key, () => call({ type: "OPEN_JOB_SOURCE", jobId: record.jobId }), { onError: showError });
     return;
   }
-  await runUiAction(button, key, () => runFileAction(record, action, call), { pendingText: "", successText: "✓", successDurationMs: 600 });
+  await runAction(anchor, key, () => runFileAction(record, action, call), { onError: showError });
 }
 
-function byteSummary(job) {
-  if (Number(job.total) > 0) return `${humanBytes(job.bytes || 0)} / ${humanBytes(job.total)}`;
-  if (Number(job.bytes) > 0) return humanBytes(job.bytes);
-  return "";
+// ---------- page actions ----------
+async function submitLink() {
+  const input = $("#urlInput");
+  const submit = $("#urlSubmit");
+  const url = String(input.value || "").trim();
+  await runAction(submit, `link:${url}`, async () => {
+    if (!/^https?:\/\/\S+$/i.test(url)) throw userError(msg("toast.invalidUrl"));
+    const granted = await chrome.permissions.request({ permissions: ["nativeMessaging"] });
+    if (!granted) throw userError(msg("toast.engineNeeded"));
+    state.nativePermission = true;
+    renderStatusLine();
+    await call({ type: "DOWNLOAD_URL", url, options: {} });
+    input.value = "";
+    toast(msg("toast.downloadStarted"));
+  }, { onError: showError });
 }
 
-function abbreviateHome(path) {
-  return String(path || "").replace(/^\/Users\/[^/]+(?=\/|$)/, "~");
+async function clearHistory(anchor) {
+  if (!(await menus.confirm(anchor, { question: msg("downloads.clearConfirm"), confirmLabel: msg("downloads.clearAction") }))) return;
+  await runAction(anchor, "downloads:clear", async () => {
+    const result = await call({ type: "CLEAR_HISTORY" });
+    state.records = [];
+    state.jobs = new Map((result.jobs || []).map((job) => [job.jobId, job]));
+    renderAll();
+    toast(result.removed ? msg("toast.cleared", { count: result.removed }) : msg("toast.nothingToClear"), result.removed ? "success" : "warning");
+  }, { onError: showError });
 }
 
-function friendlyJobMessage(job) {
-  const raw = String(job.message || job.error || "").trim();
-  if (!raw) return statusLabel(job.status);
-  if (/FFmpeg/i.test(raw)) return job.status === "failed" ? "视频处理失败，请确认本地下载引擎已就绪后重试" : "正在合并视频片段或转换格式";
-  const dashMessage = friendlyDashMessage(raw, { failed: job.status === "failed" });
-  if (dashMessage) return dashMessage;
-  return raw.replace(/高速下载功能|本地(?:高速|下载)?引擎/g, "本地下载引擎");
+function openEngineSetup() {
+  chrome.tabs.create({ url: chrome.runtime.getURL("options/options.html#local-engine") }).catch(() => {
+    chrome.runtime.openOptionsPage().catch(() => toast(msg("toast.settingsFailed"), "error"));
+  });
 }
 
-function friendlyErrorMessage(message) {
-  const raw = String(message || "操作失败").trim();
-  const dashMessage = friendlyDashMessage(raw, { failed: true });
-  if (dashMessage) return dashMessage;
-  return raw.replace(/高速下载功能|本地(?:高速|下载)?引擎/g, "本地下载引擎");
+async function enableNotifications(anchor) {
+  await runAction(anchor, "downloads:notifications", async () => {
+    const granted = await chrome.permissions.request({ permissions: ["notifications"] });
+    state.notificationPermission = granted;
+    renderStatusLine();
+    toast(msg(granted ? "toast.notificationsOn" : "toast.notificationsDenied"), granted ? "success" : "warning");
+  }, { onError: showError });
 }
 
-async function runUiAction(element, key, action, options = {}) {
-  try {
-    return await withPendingAction(element, key, action, { successDurationMs: 500, failureDurationMs: 0, ...options });
-  } catch (error) {
-    showToast(friendlyErrorMessage(error?.message || "操作失败"), "error");
-    restoreFocus(element);
-    return undefined;
+async function dismissNotifications(anchor) {
+  state.notifyDismissed = true;
+  renderStatusLine();
+  // Persist only on top of settings we actually read; never write a partial object.
+  if (!state.settings) return;
+  await runAction(anchor, "downloads:notifications-off", async () => {
+    const result = await call({ type: "SAVE_SETTINGS", settings: { ...state.settings, showNotifications: false } });
+    state.settings = result.settings || { ...state.settings, showNotifications: false };
+  }, { onError: showError });
+}
+
+// ---------- pond zones: page margins, and the empty state when shown ----------
+function pondZones() {
+  const page = $("#page").getBoundingClientRect();
+  const width = window.innerWidth;
+  const height = window.innerHeight;
+  const zones = [
+    { x: 0, y: 0, width: Math.max(0, page.left - 12), height },
+    { x: page.right + 12, y: 0, width: Math.max(0, width - page.right - 12), height }
+  ];
+  const empty = $("#emptyState");
+  if (!empty.hidden) {
+    const rect = $("#emptySentence").getBoundingClientRect();
+    zones.push({ x: rect.left - 40, y: Math.max(0, rect.top - 70), width: 560, height: rect.height + 160 });
   }
+  return zones;
 }
 
-function showToast(message, type = "success") {
-  const method = ["success", "warning", "error"].includes(type) ? type : "error";
-  return toastController[method](String(message || "操作完成"));
+// ---------- plumbing ----------
+function showError(error) {
+  toast(errorText(error), "error");
 }
-
-async function call(message) {
-  const response = await chrome.runtime.sendMessage(message);
-  if (!response?.ok) throw new Error(response?.error || "扩展请求失败");
-  return response;
-}
-
-if (document.readyState !== "loading") void init();

@@ -1,262 +1,96 @@
-/* FluxCatch toolbar popup — Monet: cream ground with light fields, frosted
-   chrome, lists as continuous surfaces with a tonal zebra, one serif title. */
-*{padding:0}
-html{width:372px;height:560px;overflow:hidden}
-body{
-  width:372px;height:min(560px,100dvh);max-height:100dvh;display:flex;flex-direction:column;overflow:hidden;position:relative;
-  font-size:13px;line-height:1.45;
+/* FluxCatch toolbar popup (design review §6.14) on the v2 system.
+   372 wide and as tall as its content, from 440 up to Chrome's 600 cap;
+   gutter 16, lead 32, gap 12: text starts at x = 60. The top bar
+   (BrandMark S, "Download a link", Settings) and the Media | Downloads row
+   stay put; only the body scrolls, and a mist appears under the bar once it
+   has scrolled (P6). The footer holds two tertiary links on the text column.
+   Rows, the dialog and status lines are shared (system.css, media.css). */
+
+/* A Chrome popup is as tall as its document: the popup follows its content,
+   with a 440 floor so switching views does not make it jump, and scrolls its
+   body at the 600 cap. A dialog still takes the full 600 (system.css). */
+html {
+  width: 372px;
+  max-height: 600px;
+  overflow: hidden;
 }
 
-/* ===== Top bar: frosted chrome, translucent cool line beneath ===== */
-.topbar{display:flex;align-items:center;justify-content:space-between;gap:10px;flex:none;padding:12px 10px 8px 16px;background:var(--material);backdrop-filter:var(--blur);-webkit-backdrop-filter:var(--blur);position:relative;z-index:3}
-.brand{display:flex;align-items:center;gap:10px;min-width:0;flex:1}
-.brand>div{min-width:0}
-.brand .mark{width:30px;height:30px;flex:none}
-.brand h1{font-size:18px;font-weight:400;line-height:1.1}
-.brand p{font-size:12px;color:var(--text-muted);line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}
-.toolbar{display:flex;gap:2px;flex:none}
-.icon-btn{width:38px;height:38px;border:0;background:transparent;border-radius:var(--r-control);color:var(--pond-ink);display:grid;place-items:center;transition:background-color var(--motion-base) var(--ease-standard),color var(--motion-base) var(--ease-standard),transform var(--motion-fast) var(--ease-standard)}
-.icon-btn svg{width:18px;height:18px;display:block;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
-
-/* ===== Segmented control + type filter ===== */
-.control-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:4px 16px 10px;flex:none;background:var(--material);backdrop-filter:var(--blur);-webkit-backdrop-filter:var(--blur);box-shadow:0 1px 0 var(--line-soft);position:relative;z-index:2}
-.segmented{display:flex;flex:none}
-.segmented button{flex:none;min-height:34px;padding:6px 12px;font-size:12.5px;cursor:pointer;font-family:var(--font);display:flex;align-items:center;justify-content:center;gap:6px}
-.segmented .count{min-width:20px;height:20px;padding:0 6px;font-size:11.5px;font-weight:500;display:inline-flex;align-items:center;justify-content:center;background:var(--harbour-tint);color:var(--harbour-ink)}
-.segmented button.active .count{background:var(--pond-tint);color:var(--pond-ink)}
-.control-actions{display:flex;align-items:center;gap:4px;min-width:0}
-.control-actions .quiet-button{min-height:34px;padding:6px 10px;border-radius:var(--r-control);color:var(--pond-ink);font-size:12.5px;font-weight:500;white-space:nowrap}
-#filterSelect{min-height:34px;padding:6px 28px 6px 11px;font-size:12.5px;font-weight:500;font-family:var(--font);border-color:transparent;background-color:var(--fill);border-radius:var(--r-control);box-shadow:none;color:var(--text-primary)}
-
-/* ===== Single scrolling body ===== */
-.body{flex:1;min-height:0;overflow-y:auto;padding:12px 16px 16px;display:flex;flex-direction:column;scrollbar-width:thin;scrollbar-color:var(--fill-strong) transparent;overscroll-behavior:contain}
-.body::-webkit-scrollbar{width:8px}
-.body::-webkit-scrollbar-track{background:transparent}
-.body::-webkit-scrollbar-thumb{background:var(--fill-strong);border-radius:8px;border:2px solid transparent;background-clip:padding-box}
-.view{display:none;flex-direction:column;gap:var(--stack-gap);min-height:100%}
-.view.active{display:flex}
-.media-list,.jobs-list{display:grid;grid-template-columns:minmax(0,1fr);gap:var(--list-gap);min-width:0;width:100%;margin:0;padding:0;list-style:none;border-radius:var(--r-panel);background:var(--surface);box-shadow:var(--shadow-card);overflow:hidden}
-
-/* ===== Section label (kept for the component library) ===== */
-.sec-label{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:500;color:var(--text-muted);margin:4px 4px 0;flex:none}
-.sec-label .count{background:var(--fill);color:var(--text-muted);border-radius:var(--r-pill);padding:0 6px;font-size:12px;line-height:20px}
-
-/* ===== Media row: continuous surface, tonal zebra, hover lift ===== */
-.media-card{display:grid;grid-template-columns:48px minmax(0,1fr) auto;gap:12px;align-items:center;
-  background:transparent;border:0;border-radius:0;padding:var(--row-pad-block) var(--row-pad-inline);transition:background-color var(--motion-base) var(--ease-standard)}
-.media-card:nth-child(even){background:var(--surface-cool)}
-.kind-icon{width:48px;height:48px;border-radius:var(--r-row);display:grid;place-items:center;font-size:12px;font-weight:500;letter-spacing:.02em;flex:none}
-.kind-icon.video{background:var(--pond-tint);color:var(--pond-ink)}
-.kind-icon.audio{background:var(--ochre-tint);color:var(--ochre-ink)}
-.kind-icon.stream{background:var(--lilac-tint);color:var(--lilac-ink);font-size:11px}
-.media-thumbnail{width:48px;height:48px;display:block;flex:none;border:0;border-radius:var(--r-row);background:var(--surface-sunken);object-fit:cover;object-position:center}
-.media-info{min-width:0}
-.media-title{font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:var(--tracking-tight);line-height:1.3}
-.media-url{font-size:12px;color:var(--text-muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.chips{display:flex;gap:4px;margin-top:6px;flex-wrap:wrap}
-.chip{padding:2px 8px;border-radius:var(--r-pill);background:var(--harbour-tint);color:var(--harbour-ink);font-size:11.5px;font-weight:500;line-height:1.4;font-variant-numeric:tabular-nums}
-.chip.hls{background:var(--lilac-tint);color:var(--lilac-ink)}
-.chip.hd{background:var(--pond-tint);color:var(--pond-ink)}
-.chip.fmt{background:var(--fill);color:var(--text-secondary)}
-.chip.live{background:var(--ochre-tint);color:var(--ochre-ink)}
-.card-actions{display:flex;flex-direction:column;gap:6px;align-items:stretch}
-.download-button{min-width:72px;min-height:34px;padding:6px 14px;font-size:12.5px;font-weight:500;white-space:nowrap;border-radius:var(--r-pill);background:var(--pond-tint);color:var(--pond-ink);letter-spacing:var(--tracking-tight);box-shadow:none}
-.download-button:disabled{cursor:wait;opacity:.6}
-.more-button{min-height:30px;border:0;background:transparent;color:var(--pond-ink);border-radius:var(--r-pill);padding:4px 10px;font-size:12px;font-weight:500;cursor:pointer;font-family:var(--font);transition:background-color var(--motion-base) var(--ease-standard),color var(--motion-base) var(--ease-standard);white-space:nowrap}
-.manifest-status{display:flex;align-items:center;gap:7px;margin-top:7px;color:var(--pond-ink);font-size:12px;line-height:1.35}
-.manifest-status .spinner{width:14px;height:14px;flex:none}
-.media-card.manifest-loading{background:var(--selection)}
-
-/* ===== Empty state: typography on the light fields, nothing drawn ===== */
-.empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:24px 16px 28px;color:var(--text-muted)}
-.empty[hidden]{display:none}
-.empty.compact{padding:26px 16px}
-.empty h2{font-size:20px;color:var(--text-primary);margin:0 0 8px;font-weight:400}
-.empty p{font-size:13px}
-/* The still pond: an empty Jobs tab shows one line and nothing else. The
-   engine card and the notification hint return as soon as a job exists. */
-#jobsView:has(#jobsEmpty:not([hidden])) #hostCard,
-#jobsView:has(#jobsEmpty:not([hidden])) #notifyHint{display:none}
-.empty p{font-size:12.5px;line-height:1.55;max-width:300px;white-space:normal;overflow-wrap:anywhere}
-.empty .dl-btn{margin-top:18px}
-.empty .text-button{margin-top:10px;padding:6px 10px;border-radius:var(--r-control);color:var(--pond-ink);font-size:13px}
-.loading-state{min-height:112px;display:flex;align-items:center;justify-content:center;gap:9px;color:var(--text-muted);font-size:12.5px}
-.state-notice{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 12px;border:0;border-radius:var(--r-row);background:var(--vermilion-tint)}
-.state-notice>div{min-width:0}
-.state-notice strong{font-size:12.5px}
-.state-notice p{margin-top:2px;color:var(--vermilion-ink);font-size:12px;line-height:1.4;overflow-wrap:anywhere}
-.state-notice .secondary-btn{flex:none;min-height:36px;padding:6px 12px;font-size:12px;background:var(--surface)}
-
-/* The old radar illustration is retired: the light fields are the picture. */
-.radar{display:none}
-
-/* ===== Host card ===== */
-.host-card{display:flex;align-items:center;gap:11px;background:var(--surface);border:0;box-shadow:var(--shadow-card);
-  border-radius:var(--r-row);padding:11px 8px 11px 14px;flex:none}
-.host-card>div{min-width:0;flex:1}
-.host-card strong{font-size:13px;display:block;font-weight:500}
-.host-card small{font-size:12px;color:var(--text-muted);display:block;line-height:1.4;overflow-wrap:anywhere}
-.host-card .link{min-width:40px;min-height:34px;margin-left:auto;color:var(--pond-ink);font-size:12.5px;font-weight:500;padding:4px 8px;border-radius:var(--r-control);flex:none}
-
-/* ===== Job rows: active rows lift into a card, ended rows stay flat ===== */
-.job-card{width:100%;max-width:100%;min-width:0;overflow:hidden;background:transparent;border:0;box-shadow:none;border-radius:0;padding:var(--row-pad-block) var(--row-pad-inline);display:flex;flex-direction:column;gap:8px;transition:background-color var(--motion-base) var(--ease-standard)}
-.job-card:nth-child(even){background:var(--surface-cool)}
-.job-card:not(.terminal){background:var(--surface-raised);box-shadow:inset 0 0 0 1px var(--line-soft)}
-.job-line{display:grid;grid-template-columns:minmax(0,1fr) max-content;align-items:center;gap:10px;min-width:0;width:100%;max-width:100%}
-.job-line strong{display:block;width:100%;max-width:100%;min-width:0;font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:var(--tracking-tight)}
-.job-line .job-state{font-size:12px;font-weight:500;min-width:max-content;white-space:nowrap;font-variant-numeric:tabular-nums}
-.job-state.running{color:var(--pond-ink)}.job-state.done{color:var(--celadon-ink)}.job-state.bad{color:var(--vermilion-ink)}.job-state.wait{color:var(--harbour-ink)}
-.progress{height:5px}
-.job-meta{display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0;font-family:var(--font);font-variant-numeric:tabular-nums;font-size:12px;color:var(--text-muted)}
-.job-meta>span:first-child{min-width:0;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.job-meta .speed{color:var(--text-primary);font-weight:500;flex:none;white-space:nowrap}
-.job-card.terminal .job-meta{font-family:var(--font);line-height:1.35}
-.job-card.terminal .job-meta>span:first-child{white-space:normal;overflow-wrap:anywhere;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2}
-.cancel-job{color:var(--vermilion-ink);font-size:12px;min-width:40px;min-height:34px;padding:4px 8px;border-radius:var(--r-control)}
-.job-controls{display:flex;align-items:center;gap:2px;flex:none;margin-right:-6px}
-.job-control{display:inline-flex;align-items:center;gap:4px;min-width:36px;min-height:32px;padding:4px 8px;border:0;border-radius:var(--r-control);background:transparent;color:var(--pond-ink);font-family:var(--font);font-size:12px;font-weight:500;cursor:pointer;white-space:nowrap;letter-spacing:var(--tracking-tight)}
-.job-control svg{width:13px;height:13px;flex:none;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
-.job-control[data-action="resume"] svg{fill:currentColor;stroke:none}
-.job-control.danger-control{color:var(--vermilion-ink)}
-.job-card.paused .job-state.running{color:var(--lilac-ink)}
-.job-card.paused .job-meta .speed{display:none}
-
-/* ===== Finished rows: poster, name, one line of facts, actions ===== */
-.job-card.terminal{padding:10px 12px;gap:0}
-.job-finished{display:grid;grid-template-columns:auto minmax(0,1fr);gap:12px;align-items:start}
-.job-thumb,.job-tile{--tile-size:48px;width:var(--tile-size);height:var(--tile-size);border-radius:var(--r-row);flex:none}
-.job-thumb{display:block;object-fit:cover;object-position:center;border:0;background:var(--surface-sunken)}
-.job-tile{display:grid;place-items:center;font-size:10.5px;font-weight:500;letter-spacing:.04em}
-.job-tile.video{background:var(--pond-tint);color:var(--pond-ink)}
-.job-tile.audio{background:var(--ochre-tint);color:var(--ochre-ink)}
-.job-tile.stream{background:var(--lilac-tint);color:var(--lilac-ink)}
-.job-main{min-width:0;display:flex;flex-direction:column;gap:3px}
-.job-head-line{display:grid;grid-template-columns:minmax(0,1fr) max-content;align-items:center;gap:8px}
-.job-head-line .job-title{min-width:0;font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:var(--tracking-tight)}
-.job-chip{padding:2px 8px;border-radius:var(--r-pill);font-size:11px;font-weight:500;white-space:nowrap}
-.job-chip.done{background:var(--celadon-tint);color:var(--celadon-ink)}
-.job-chip.bad{background:var(--vermilion-tint);color:var(--vermilion-ink)}
-.job-chip.wait{background:var(--harbour-tint);color:var(--harbour-ink)}
-.job-meta-line{font-size:12px;color:var(--text-muted);line-height:1.4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
-.job-card.failed .job-meta-line{white-space:normal;overflow-wrap:anywhere;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;color:var(--vermilion-ink)}
-.job-actions{display:flex;align-items:center;gap:2px;margin:4px 0 0 -8px;flex-wrap:wrap}
-.job-action{display:inline-flex;align-items:center;gap:5px;min-width:36px;min-height:32px;padding:5px 8px;border:0;border-radius:var(--r-control);background:transparent;color:var(--pond-ink);font-family:var(--font);font-size:12.5px;font-weight:500;cursor:pointer;white-space:nowrap;letter-spacing:var(--tracking-tight)}
-.job-action svg{width:15px;height:15px;flex:none;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
-.job-action[data-action="open"] svg{fill:currentColor;stroke:none}
-.job-action.icon-only{padding:5px;min-width:32px;color:var(--text-muted)}
-.job-action.icon-only[data-action="remove"]{margin-left:auto}
-.job-action[data-action="trash"]:hover{color:var(--vermilion-ink)}
-.job-missing{display:inline-flex;align-items:center;min-height:32px;padding:0 6px;color:var(--text-muted);font-size:12px}
-.job-eta{color:var(--text-muted);flex:none;white-space:nowrap;margin-left:6px}
-
-/* ===== Notification permission hint ===== */
-.notify-hint{display:flex;flex-direction:column;gap:10px;padding:12px 14px;border:0;border-radius:var(--r-row);background:var(--surface);box-shadow:var(--shadow-card);flex:none}
-.notify-hint-copy strong{display:block;font-size:13px;font-weight:500}
-.notify-hint-copy small{display:block;margin-top:2px;color:var(--text-muted);font-size:12px;line-height:1.45}
-.notify-hint-actions{display:flex;align-items:center;gap:6px}
-.notify-hint-actions .secondary-btn{min-height:34px;padding:6px 14px;font-size:12.5px;border-radius:var(--r-pill);background:var(--pond-tint);color:var(--pond-ink)}
-.notify-hint-actions .text-button{min-height:34px;padding:6px 10px;color:var(--text-muted);font-size:12.5px;font-weight:500;border-radius:var(--r-pill)}
-
-/* ===== Footer: quiet text actions on frosted chrome ===== */
-.foot-actions{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));align-items:stretch;gap:2px;padding:6px 8px 8px;box-shadow:0 -1px 0 var(--line-soft);background:var(--material);backdrop-filter:var(--blur);-webkit-backdrop-filter:var(--blur);flex:none;position:relative;z-index:2}
-/* Four identical actions on one baseline: single-line labels, equal columns. */
-.foot-btn{display:inline-flex;align-items:center;justify-content:center;min-width:0;height:38px;min-height:38px;padding:0 4px;color:var(--pond-ink);font-size:12px;font-weight:500;line-height:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-radius:var(--r-control);transition:background-color var(--motion-base) var(--ease-standard),color var(--motion-base) var(--ease-standard)}
-
-/* ===== Download sheet ===== */
-dialog{position:fixed;inset:0;width:min(340px,calc(100vw - 28px));max-width:calc(100vw - 28px);height:fit-content;max-height:calc(100vh - 28px);max-height:calc(100dvh - 28px);margin:auto;overflow:auto;border:0;padding:0;border-radius:var(--r-panel);color:var(--text-primary);background:var(--surface);box-shadow:var(--shadow-float)}
-dialog::backdrop{background:var(--scrim);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}
-#downloadForm{padding:18px 18px 16px}
-.dialog-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
-.dialog-head h2{margin:0;font-size:18px;font-weight:400}
-.close-button{width:32px;height:32px;min-width:32px;min-height:32px;border:0;background:var(--fill);border-radius:50%;color:var(--text-muted);font-size:18px;line-height:1;cursor:pointer;display:grid;place-items:center;transition:background-color var(--motion-base) var(--ease-standard),color var(--motion-base) var(--ease-standard)}
-#downloadForm label{display:grid;gap:6px;margin:10px 0;color:var(--text-secondary);font-size:12.5px;font-weight:500}
-#urlInput{font-family:var(--mono);font-size:12.5px}
-#downloadForm input,#downloadForm select{width:100%;min-height:40px;padding:8px 11px;font-family:var(--font);font-size:13px;color:var(--text-primary);font-weight:400}
-#downloadForm label.check{display:flex;align-items:center;gap:9px;min-height:40px;color:var(--text-primary);font-weight:500;line-height:1.35;font-size:13px}
-#downloadForm label.check[hidden]{display:none}
-#downloadForm label.check input{width:15px;height:15px;min-width:15px;min-height:15px;margin:0;padding:0;flex:none;accent-color:var(--pond);border-radius:4px}
-#downloadForm label.check span{min-width:0}
-.dialog-note{min-height:17px;color:var(--text-muted);font-size:12px;line-height:1.45;margin:8px 0 0}
-.permission-explainer{margin-top:10px;padding:10px 12px;border:0;border-radius:var(--r-control);background:var(--fill-soft);font-size:12px;line-height:1.45}
-.permission-explainer strong{display:block;color:var(--text-primary);font-weight:500}
-.permission-explainer p{margin-top:3px;color:var(--text-muted)}
-.permission-explainer .text-button{min-height:36px;margin-top:4px;padding:5px 0;color:var(--pond-ink);font-weight:500}
-.dialog-error{margin:8px 0 0;padding:8px 10px;border:0;border-radius:var(--r-control);color:var(--vermilion-ink);background:var(--vermilion-tint);font-size:12px;line-height:1.45}
-.dialog-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
-.primary,.secondary{min-width:40px;min-height:40px;padding:8px 14px;font-size:13px;transition:background-color var(--motion-base) var(--ease-standard),border-color var(--motion-base) var(--ease-standard),color var(--motion-base) var(--ease-standard),box-shadow var(--motion-base) var(--ease-standard),transform var(--motion-fast) var(--ease-standard)}
-.primary{min-width:112px;color:var(--text-on-accent);border:0;background:var(--pond-deep)}
-.primary:disabled{cursor:not-allowed;opacity:.45}
-.secondary{color:var(--text-primary)}
-.dl-btn{min-width:40px;min-height:40px;padding:8px 18px;font-size:13px;white-space:nowrap}
-
-/* ===== Tagline ===== */
-.brand .tagline{letter-spacing:0;font-family:var(--font-display);font-size:12px}
-
-/* ===== Typed toast ===== */
-#toast{position:relative;display:flex;align-items:center;gap:8px;flex:none;transform:translateY(-3px);width:auto;max-width:none;min-height:40px;margin:10px 16px -2px;padding:7px 8px 7px 12px;border:1px solid transparent;border-radius:var(--r-pill);background:var(--material-surface);color:var(--text-primary);font-size:12.5px;font-weight:500;line-height:1.45;box-shadow:var(--shadow-float);opacity:0;pointer-events:none;transition:opacity var(--motion-base) var(--ease-standard),transform var(--motion-base) var(--ease-standard);z-index:2}
-#toast.show{opacity:1;pointer-events:auto;transform:translateY(0)}
-.toast-message{min-width:0;overflow-wrap:anywhere}
-.toast-close{width:36px;height:36px;min-width:36px;min-height:36px;display:grid;place-items:center;flex:none;margin:-5px -4px -5px 0;border:0;border-radius:50%;background:transparent;color:var(--text-muted);font-size:18px;line-height:1}
-
-button:not(:disabled){transition-property:background-color,border-color,color,box-shadow,opacity,transform;transition-duration:var(--motion-base);transition-timing-function:var(--ease-standard)}
-button:active:not(:disabled){transform:scale(.99)}
-button[data-ui-state="pending"]{cursor:wait;opacity:.72}
-button[data-ui-state="success"]{box-shadow:0 0 0 3px var(--celadon-tint)}
-button[data-ui-state="failure"]{box-shadow:0 0 0 3px var(--vermilion-tint)}
-.icon-btn[data-ui-state="pending"] svg{visibility:hidden;position:absolute}
-.icon-btn[data-ui-state="pending"]::before,
-.download-button[data-ui-state="pending"]::before,
-.more-button[data-ui-state="pending"]::before,
-.cancel-job[data-ui-state="pending"]::before{margin-right:0}
-
-@media (prefers-reduced-motion: reduce){
-  button,button:hover,button:active,.media-card,.media-card:hover,#toast,#toast.show{transform:none!important}
+body {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: auto;
+  min-height: 440px;
+  max-height: 600px;
+  overflow: hidden;
 }
 
-@media (hover:hover){
-  .icon-btn:hover{background:var(--hover-halo)}
-  .segmented button:hover:not(.active){color:var(--text-primary)}
-  .media-card:hover{background:var(--surface-raised)}
-  .media-card:nth-child(even):hover{background:color-mix(in srgb,var(--surface-cool) 70%,var(--surface-raised))}
-  .download-button:hover:not(:disabled){background:var(--pond-deep);color:var(--text-on-accent)}
-  .more-button:hover{background:var(--hover-halo)}
-  .host-card .link:hover{background:var(--hover-halo)}
-  .cancel-job:hover{background:var(--vermilion-tint)}
-  .foot-btn:hover{background:var(--hover-halo)}
-  .job-card.terminal:hover{background:var(--surface-raised)}
-  .job-action:hover{background:var(--hover-halo)}
-  .job-control:hover{background:var(--hover-halo)}
-  .job-control.danger-control:hover{background:var(--vermilion-tint)}
-  .job-action[data-action="trash"]:hover,.job-action[data-action="remove"]:hover{background:var(--vermilion-tint);color:var(--vermilion-ink)}
-  .close-button:hover{background:var(--fill-strong);color:var(--text-primary)}
-  .toast-close:hover{background:var(--fill)}
+/* The fixed chrome sits outside the scroller, so nothing ever slides under it. */
+.popup-head {
+  position: relative;
+  flex: none;
 }
 
-@media (max-width:320px){
-  .topbar{padding-inline:12px}
-  .control-row{align-items:stretch;flex-wrap:wrap;padding-inline:12px}
-  .segmented{flex:1}
-  .segmented button{flex:1;padding-inline:8px}
-  #filterSelect{width:100%}
-  .body{padding-inline:12px}
-  .media-card{grid-template-columns:40px minmax(0,1fr)}
-  .kind-icon,.media-thumbnail{width:40px;height:40px}
-  .card-actions{grid-column:1/-1;display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
-  .download-button,.more-button{width:100%}
-  .foot-actions{grid-template-columns:repeat(2,minmax(0,1fr));gap:2px;padding-inline:8px}
-  .state-notice{align-items:flex-start;flex-direction:column}
-  .state-notice .secondary-btn{width:100%}
+.popup-head .topbar-inner {
+  min-height: 52px;
 }
 
-@media (max-width:240px){
-  .brand .tagline{display:none}
-  .brand .mark{width:24px;height:24px}
-  .toolbar{gap:2px}
-  .topbar{padding-inline:8px}
-  .control-row,.body{padding-inline:8px}
-  .media-card{grid-template-columns:minmax(0,1fr)}
-  .media-card>.kind-icon,.media-card>.media-thumbnail{display:none}
-  .card-actions{grid-column:1}
-  .dialog-actions{flex-direction:column-reverse}
-  .dialog-actions button{width:100%}
+.view-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding-bottom: var(--space-2);
+}
+
+.view-bar .segmented {
+  flex: none;
+}
+
+.popup-main {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.popup-main > .column {
+  padding-bottom: var(--space-4);
+}
+
+.popup-main .status-line {
+  padding-bottom: var(--space-1);
+}
+
+/* The first list header sits a step closer to the view row than between groups. */
+#mediaHeaderSlot .list-header {
+  padding-top: var(--space-3);
+}
+
+.popup-foot {
+  flex: none;
+  min-height: 48px;
+  padding-bottom: var(--space-1);
+}
+
+.foot-links {
+  grid-column: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-6);
+}
+
+/* Toasts stay above the footer links. */
+.toast-region {
+  left: var(--gutter);
+  bottom: 56px;
+}
+
+.toast {
+  max-width: calc(100vw - 2 * var(--gutter));
+}
+
+/* An empty state sits in the upper third of the body. */
+.popup-main .empty-state {
+  padding-top: var(--space-8);
 }

@@ -1,156 +1,34 @@
+// The language preference (Settings → Language) after the v1 DOM translator
+// was retired: one locale source, ui/v2/locale.js. The key, the Auto rule and
+// the storage round trip are unchanged from v1, so stored choices survive.
+// Every page follows a switch live through bootLocale's storage listener, and
+// no surface carries copy outside the v2 message modules.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import {
   UI_LANGUAGE_STORAGE_KEY,
+  bootLocale,
   getUiLanguage,
   loadUiLanguage,
+  onLocaleChange,
   resolveUiLanguage,
   saveUiLanguage,
   setUiLanguage,
-  translateMessage
-} from "../extension/ui/i18n.js";
+  uiLanguage,
+  uiLocale
+} from "../extension/ui/v2/locale.js";
 
 const EXTENSION = new URL("../extension/", import.meta.url);
-const CJK = /[\u4e00-\u9fff]/;
+const read = (file) => readFileSync(new URL(file, EXTENSION), "utf8");
+const CJK = /[㐀-鿿　-〿＀-￯]/;
 
-const HTML_FILES = ["popup/popup.html", "sidepanel/sidepanel.html", "options/options.html", "downloads/downloads.html"];
-const JS_FILES = [
-  "popup/popup.js",
-  "sidepanel/sidepanel.js",
-  "options/options.js",
-  "downloads/downloads.js",
-  "ui/job-rows.js",
-  "background.js",
-  "ui/customization.js",
-  "ui/interactions.js",
-  "lib/build-profile.js",
-  "lib/dash.js",
-  "lib/hls.js",
-  "lib/host-public.js",
-  "lib/job-presentation.js",
-  "lib/network-policy.js",
-  "options/form-state.js"
-];
-
-// Strings that are user content or sample data by design, not UI copy.
-const TRANSLATION_EXEMPT = new Set([
-  "示例视频 - 1080.mp4", // rendered file-name preview (user-content sample)
-  "中文" // the language picker names languages in their own language
-]);
-
-function htmlUnits(html) {
-  const stripped = html.replace(/<(script|style)[^>]*>[\s\S]*?<\/\1>/g, "");
-  const units = new Set();
-  for (const match of stripped.matchAll(/(?:title|placeholder|aria-label|aria-description)="([^"]*[\u4e00-\u9fff][^"]*)"/g)) {
-    units.add(match[1].trim());
-  }
-  for (const match of stripped.matchAll(/>([^<>]*[\u4e00-\u9fff][^<>]*)</g)) {
-    const text = match[1].trim();
-    if (text) units.add(text);
-  }
-  return units;
-}
-
-function jsLiterals(source) {
-  const literals = [];
-  const plausible = (value) => !value.includes("`") && !value.includes("${");
-  for (const match of source.matchAll(/"([^"\n\\]*[\u4e00-\u9fff][^"\n\\]*)"/g)) {
-    if (plausible(match[1])) literals.push(match[1]);
-  }
-  for (const match of source.matchAll(/'([^'\n\\]*[\u4e00-\u9fff][^'\n\\]*)'/g)) {
-    if (plausible(match[1])) literals.push(match[1]);
-  }
-  for (const match of source.matchAll(/`([^`\n]*[\u4e00-\u9fff][^`\n]*)`/g)) {
-    const substituted = match[1].replace(/\$\{[^}]*\}/g, "0");
-    // Nested templates truncate at the first backtick and leave a dangling
-    // "${" — those fragments are not real runtime strings.
-    if (!substituted.includes("${")) literals.push(substituted);
-  }
-  return literals;
-}
-
-function assertEnglishable(literal, origin) {
-  if (TRANSLATION_EXEMPT.has(literal)) return;
-  if (!CJK.test(literal)) return; // interpolation probe replaced values with "0"
-  const translated = translateMessage(literal, "en");
-  assert.ok(
-    !CJK.test(translated),
-    `${origin}: untranslated copy "${literal}" (got "${translated}"); add it to EN_CATALOG or RULES in extension/ui/i18n.js`
-  );
-}
-
-test("every static HTML string resolves to English", () => {
-  setUiLanguage("en");
-  try {
-    for (const file of HTML_FILES) {
-      const html = readFileSync(new URL(file, EXTENSION), "utf8");
-      for (const unit of htmlUnits(html)) assertEnglishable(unit, file);
-    }
-  } finally {
-    setUiLanguage("zh");
-  }
+test("the stored key is unchanged from v1, so a saved choice survives the update", () => {
+  assert.equal(UI_LANGUAGE_STORAGE_KEY, "fluxcatch.uiLanguage.v1");
+  assert.equal(existsSync(new URL("ui/i18n.js", EXTENSION)), false, "the v1 translator is retired");
 });
 
-test("every JS string literal resolves to English", () => {
-  setUiLanguage("en");
-  try {
-    for (const file of JS_FILES) {
-      const source = readFileSync(new URL(file, EXTENSION), "utf8")
-        .replace(/\/\*[\s\S]*?\*\//g, " ")
-        .replace(/^\s*\/\/[^\n]*$/gm, " ");
-      for (const literal of jsLiterals(source)) assertEnglishable(literal, file);
-    }
-  } finally {
-    setUiLanguage("zh");
-  }
-});
-
-test("translateMessage keeps unknown and zh-mode strings untouched", () => {
-  setUiLanguage("zh");
-  assert.equal(translateMessage("本地下载引擎"), "本地下载引擎");
-  setUiLanguage("en");
-  try {
-    assert.equal(translateMessage("plain english stays"), "plain english stays");
-    assert.equal(translateMessage(""), "");
-    assert.equal(translateMessage(null), "");
-    assert.equal(translateMessage("尚未收录的文案"), "尚未收录的文案");
-  } finally {
-    setUiLanguage("zh");
-  }
-});
-
-test("translateMessage preserves surrounding whitespace", () => {
-  setUiLanguage("en");
-  try {
-    assert.equal(translateMessage("  设置\n"), "  Settings\n");
-  } finally {
-    setUiLanguage("zh");
-  }
-});
-
-test("interpolation rules translate dynamic strings", () => {
-  setUiLanguage("en");
-  try {
-    assert.equal(translateMessage("已清理 3 个已结束任务"), "Cleared 3 finished job(s)");
-    assert.equal(translateMessage("已清空检测结果；2 个进行中任务保留"), "Results cleared; 2 active job(s) kept");
-    assert.equal(translateMessage("12 分钟前"), "12m ago");
-    assert.equal(translateMessage("3 小时前"), "3h ago");
-    assert.equal(translateMessage("FluxCatch — 检测到 5 个媒体"), "FluxCatch — 5 media found");
-    assert.equal(translateMessage("某视频.mp4 已保存"), "某视频.mp4 saved");
-    assert.equal(translateMessage("清晰度 2"), "Quality 2");
-    assert.equal(translateMessage("下载 春季音乐会"), "Download 春季音乐会");
-    assert.equal(translateMessage("取消 某文件.mp4"), "Cancel 某文件.mp4");
-    assert.equal(translateMessage("某文件.mp4：已完成"), "某文件.mp4: Completed");
-    assert.equal(translateMessage("浏览器下载 · 下载中"), "Browser download · Downloading");
-    assert.equal(translateMessage("HLS 播放列表超过变体数量上限"), "The HLS playlist exceeds the 变体数量 limit");
-    assert.equal(translateMessage("网络策略已阻止 <link>（policy）"), "Blocked by network policy: <link> (policy)");
-  } finally {
-    setUiLanguage("zh");
-  }
-});
-
-test("resolveUiLanguage follows preference then browser locale", () => {
+test("resolveUiLanguage follows the preference, then Chrome's UI language", () => {
   assert.equal(resolveUiLanguage("en", "zh-CN"), "en");
   assert.equal(resolveUiLanguage("zh", "en-US"), "zh");
   assert.equal(resolveUiLanguage("auto", "zh-CN"), "zh");
@@ -172,6 +50,7 @@ test("language preference persists through a storage-like client", async () => {
   assert.equal(backed[UI_LANGUAGE_STORAGE_KEY], "en");
   assert.equal(await loadUiLanguage(storage), "en");
   assert.equal(await saveUiLanguage("weird", storage), "auto");
+  assert.equal(await loadUiLanguage({}), "auto", "no storage: Auto");
 });
 
 test("active language is reported and switchable", () => {
@@ -179,11 +58,62 @@ test("active language is reported and switchable", () => {
   try {
     setUiLanguage("en");
     assert.equal(getUiLanguage(), "en");
+    assert.equal(uiLanguage(), "en");
     setUiLanguage("zh");
     assert.equal(getUiLanguage(), "zh");
+    assert.equal(uiLocale(), "zh-CN");
     setUiLanguage("nonsense");
     assert.equal(getUiLanguage(), "zh");
   } finally {
     setUiLanguage(original);
+  }
+});
+
+test("bootLocale: Auto follows Chrome, <html lang> is set, and a switch in Settings reaches every page live", async () => {
+  const listeners = [];
+  const backed = { [UI_LANGUAGE_STORAGE_KEY]: "auto" };
+  const storage = { async get(key) { return { [key]: backed[key] }; } };
+  const savedChrome = globalThis.chrome;
+  const savedDocument = globalThis.document;
+  globalThis.chrome = { i18n: { getUILanguage: () => "en-GB" } };
+  globalThis.document = { documentElement: { lang: "" } };
+  try {
+    assert.equal(await bootLocale({ storage, onChanged: { addListener: (fn) => listeners.push(fn) } }), "en");
+    assert.equal(document.documentElement.lang, "en");
+    assert.equal(uiLocale(), "en-GB", "Intl follows Chrome's own English");
+    const heard = [];
+    const stop = onLocaleChange((language) => heard.push(language));
+    listeners[0]({ [UI_LANGUAGE_STORAGE_KEY]: { newValue: "zh" } }, "local");
+    assert.equal(uiLanguage(), "zh");
+    assert.equal(document.documentElement.lang, "zh-CN");
+    listeners[0]({ [UI_LANGUAGE_STORAGE_KEY]: { newValue: "en" } }, "sync");
+    assert.equal(uiLanguage(), "zh", "only chrome.storage.local carries the preference");
+    listeners[0]({ unrelated: { newValue: 1 } }, "local");
+    stop();
+    listeners[0]({ [UI_LANGUAGE_STORAGE_KEY]: { newValue: "auto" } }, "local");
+    assert.equal(uiLanguage(), "en", "Auto again follows Chrome");
+    assert.deepEqual(heard, ["zh"], "listeners hear real switches until they unsubscribe");
+  } finally {
+    globalThis.chrome = savedChrome;
+    globalThis.document = savedDocument;
+    setUiLanguage("zh");
+  }
+});
+
+test("Settings saves the preference through locale.js; no page or module loads the v1 translator", () => {
+  const options = read("options/options.js");
+  assert.match(options, /import \{[^}]*loadUiLanguage[^}]*saveUiLanguage[^}]*\} from "\.\.\/ui\/v2\/locale\.js"/);
+  for (const file of ["popup/popup.js", "sidepanel/sidepanel.js", "options/options.js", "downloads/downloads.js", "preview/preview.js", "designer/designer.js", "ui/customization.js", "background.js", "ui/v2/errors.js", "ui/v2/locale.js", "ui/v2/media.js"]) {
+    assert.doesNotMatch(read(file), /ui\/i18n\.js|\.\.\/i18n\.js|applyDomI18n|bindUiI18n|translateMessage/, `${file} loads no v1 translator`);
+  }
+});
+
+test("no surface HTML or JS carries copy outside the v2 message modules", () => {
+  for (const file of ["popup/popup.html", "sidepanel/sidepanel.html", "options/options.html", "downloads/downloads.html", "preview/preview.html", "designer/designer.html"]) {
+    assert.ok(!CJK.test(read(file).replace(/<!--[\s\S]*?-->/g, "")), `${file}: copy comes from data-msg keys`);
+  }
+  for (const file of ["popup/popup.js", "sidepanel/sidepanel.js", "sidepanel/refresh-guard.js", "options/options.js", "options/form-state.js", "options/native-recovery.js", "downloads/downloads.js", "preview/preview.js", "designer/designer.js", "ui/customization.js"]) {
+    const source = read(file).replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/[^\n]*/g, "$1");
+    assert.ok(!CJK.test(source), `${file}: no CJK outside messages/*.js`);
   }
 });

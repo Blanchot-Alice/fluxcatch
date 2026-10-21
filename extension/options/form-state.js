@@ -1,15 +1,24 @@
+// Pure Settings state: the editable values, their validation and the payload
+// the worker stores. No DOM, no copy: issues carry a code and params, and the
+// page turns them into words through ui/v2/messages (settings.error.<code>).
+
 export const FORM_LIMITS = Object.freeze({
   concurrencyMin: 1,
   concurrencyMax: 24,
   jobsMin: 1,
   jobsMax: 6,
-  minimumKiBMin: 0,
-  minimumKiBMax: 102400,
+  // Decimal kilobytes, like Finder: 1 KB = 1000 bytes. The ceiling is a round
+  // 100,000 KB (100 MB), below the worker's own cap of 100 MiB
+  // (104,857,600 bytes), so every value typed here is stored as is.
+  minimumKBMin: 0,
+  minimumKBMax: 100000,
   filenameTemplateMaxLength: 160,
   domainMaxCount: 500,
   domainMaxLength: 253,
   domainLineMaxLength: 2048
 });
+
+export const BYTES_PER_KB = 1000;
 
 export const FILENAME_TOKENS = Object.freeze([
   "{title}",
@@ -19,16 +28,35 @@ export const FILENAME_TOKENS = Object.freeze([
   "{date}"
 ]);
 
+/** The chip label for each token: settings.token.<name> (Title · Site · Type · Resolution · Date). */
+export const TOKEN_LABELS = Object.freeze({
+  "{title}": "title",
+  "{host}": "site",
+  "{kind}": "type",
+  "{height}": "resolution",
+  "{date}": "date"
+});
+
+// Balanced is the worker's own default (background.js DEFAULT_SETTINGS: 8
+// fragments, 12 ranges), so a fresh install shows it selected.
+export const PRESETS = Object.freeze([
+  Object.freeze({ name: "stable", fragments: 4, ranges: 4 }),
+  Object.freeze({ name: "balanced", fragments: 8, ranges: 12 }),
+  Object.freeze({ name: "fast", fragments: 12, ranges: 12 })
+]);
+
+export const OUTPUT_CONTAINERS = Object.freeze(["mp4", "mkv", "webm"]);
+
 const FILENAME_TOKEN_SET = new Set(FILENAME_TOKENS);
 const GUARANTEED_FILENAME_TOKENS = new Set(["{title}", "{host}", "{kind}", "{date}"]);
-const OUTPUT_CONTAINERS = new Set(["mp4", "mkv", "webm"]);
+const OUTPUT_CONTAINER_SET = new Set(OUTPUT_CONTAINERS);
 
-const DEFAULT_FORM_STATE = Object.freeze({
+export const DEFAULT_FORM_STATE = Object.freeze({
   concurrentFragments: 8,
-  concurrentRanges: 8,
+  concurrentRanges: 12,
   concurrentJobs: 3,
   outputContainer: "mp4",
-  minimumKiB: 500,
+  minimumKB: 512,
   filenameTemplate: "{title}",
   blockedDomains: Object.freeze([]),
   saveAs: false,
@@ -38,11 +66,18 @@ const DEFAULT_FORM_STATE = Object.freeze({
   showNotifications: false
 });
 
+export const BOOLEAN_FIELDS = Object.freeze([
+  "saveAs",
+  "useNativeForDirect",
+  "allowPrivateNetworkMedia",
+  "autoEnrichSiteQuality",
+  "showNotifications"
+]);
+
 /**
- * Convert the editable Options values into a canonical, allowlisted UI state.
- * Validation remains a separate step: invalid numbers are intentionally not
- * clamped, so the caller can show the user the original error instead of
- * silently changing their input.
+ * Convert editable values into a canonical, allowlisted UI state.
+ * Validation is a separate step: invalid numbers are not clamped, so the page
+ * can show the user their own input with an error instead of changing it.
  */
 export function normalizeFormState(value = {}) {
   const source = value && typeof value === "object" ? value : {};
@@ -51,7 +86,7 @@ export function normalizeFormState(value = {}) {
     concurrentRanges: canonicalNumber(source.concurrentRanges, DEFAULT_FORM_STATE.concurrentRanges),
     concurrentJobs: canonicalNumber(source.concurrentJobs, DEFAULT_FORM_STATE.concurrentJobs),
     outputContainer: canonicalText(source.outputContainer, DEFAULT_FORM_STATE.outputContainer).toLowerCase(),
-    minimumKiB: canonicalNumber(source.minimumKiB, DEFAULT_FORM_STATE.minimumKiB),
+    minimumKB: canonicalNumber(source.minimumKB, DEFAULT_FORM_STATE.minimumKB),
     filenameTemplate: canonicalTemplate(source.filenameTemplate, DEFAULT_FORM_STATE.filenameTemplate),
     blockedDomains: normalizeDomainLines(source.blockedDomains).domains,
     saveAs: canonicalBoolean(source.saveAs),
@@ -64,16 +99,101 @@ export function normalizeFormState(value = {}) {
   };
 }
 
-export function notificationStatusText({ checked = false, baselineChecked = false, dirty = false, permissionGranted = false } = {}) {
-  if (checked) {
-    return baselineChecked && !dirty
-      ? "通知已开启"
-      : permissionGranted
-        ? "通知权限已开启；保存后生效"
-        : "需要先允许 Chrome 通知权限";
+/** The editable state for stored worker settings (bytes become decimal KB). */
+export function stateFromSettings(settings = {}) {
+  const source = settings && typeof settings === "object" ? settings : {};
+  const bytes = Number(source.minimumBytes);
+  return normalizeFormState({
+    concurrentFragments: source.concurrentFragments,
+    concurrentRanges: source.concurrentRanges,
+    concurrentJobs: source.concurrentJobs,
+    outputContainer: source.outputContainer,
+    minimumKB: Number.isFinite(bytes) && bytes >= 0 ? Math.min(Math.round(bytes / BYTES_PER_KB), FORM_LIMITS.minimumKBMax) : undefined,
+    filenameTemplate: source.filenameTemplate,
+    blockedDomains: Array.isArray(source.blockedDomains) ? source.blockedDomains : [],
+    saveAs: source.saveAs === true,
+    useNativeForDirect: source.useNativeForDirect === true,
+    allowPrivateNetworkMedia: source.allowPrivateNetworkMedia === true,
+    autoEnrichSiteQuality: typeof source.autoEnrichSiteQuality === "boolean" ? source.autoEnrichSiteQuality : true,
+    showNotifications: source.showNotifications === true
+  });
+}
+
+/**
+ * The full settings object for SAVE_SETTINGS: the last stored settings with
+ * the (valid, normalized) form state on top. The worker replaces the record,
+ * so every field is always sent; the stable build gates stay closed.
+ * With `changed` (the form fields this save touches), a stored byte size is
+ * sent back exactly unless minimumKB is among them, so saving another setting
+ * never rounds it to whole KB.
+ */
+export function settingsPayload(base = {}, state = {}, { changed } = {}) {
+  const normalized = normalizeFormState(state);
+  const source = base && typeof base === "object" ? base : {};
+  const storedBytes = Number(source.minimumBytes);
+  const keepBytes = Array.isArray(changed) && !changed.includes("minimumKB") && Number.isFinite(storedBytes) && storedBytes >= 0;
+  return {
+    ...source,
+    concurrentFragments: normalized.concurrentFragments,
+    concurrentRanges: normalized.concurrentRanges,
+    concurrentJobs: normalized.concurrentJobs,
+    outputContainer: normalized.outputContainer,
+    liveDuration: 0,
+    minimumBytes: keepBytes ? storedBytes : Number(normalized.minimumKB) * BYTES_PER_KB,
+    filenameTemplate: normalized.filenameTemplate,
+    blockedDomains: normalized.blockedDomains,
+    saveAs: normalized.saveAs,
+    useNativeForDirect: normalized.useNativeForDirect,
+    allowPrivateNetworkMedia: normalized.allowPrivateNetworkMedia,
+    autoEnrichSiteQuality: normalized.autoEnrichSiteQuality,
+    youtubeEnabled: false,
+    showNotifications: normalized.showNotifications
+  };
+}
+
+/** The preset whose values match both connection counts, or null (custom). */
+export function matchPreset(fragments, ranges) {
+  const a = Number(fragments);
+  const b = Number(ranges);
+  return PRESETS.find((preset) => preset.fragments === a && preset.ranges === b)?.name || null;
+}
+
+const HOST_FAILURES = new Set(["api_unavailable", "host_missing", "connection_failed"]);
+
+/**
+ * What the Settings rows say about the local engine, as message keys:
+ * { tone, label, description, params, action: "setUp" | "retry" | "", install, merging, checking }.
+ * A Ready engine has no action (""): Retry follows a failure only. "Not set up"
+ * uses the queued (harbour) tone, the colour every other surface gives it.
+ * `install` is true when the install steps should open, false when they should
+ * close. `merging` is true when the engine can join and convert (FFmpeg).
+ */
+export function engineState({ checking = false, permission = false, host = {}, failed = false, retrySeconds = 0, removed = false } = {}) {
+  const source = host && typeof host === "object" ? host : {};
+  const ffmpeg = source.capabilities?.ffmpeg;
+  const connected = source.connected === true;
+  const compatible = connected && source.compatible === true;
+  const merging = compatible && Boolean(ffmpeg ? ffmpeg.available : source.ffmpeg);
+  const view = (tone, label, description, action, extra = {}) => ({ tone, label, description, params: {}, action, install: false, merging, checking: false, ...extra });
+
+  if (checking) return view("queued", "settings.engine.checking", "", permission ? "retry" : "setUp", { checking: true, install: undefined });
+  if (!permission || source.needsPermission) {
+    return view("queued", "settings.engine.notSetUp", removed ? "settings.engine.removed" : "settings.engine.descNotSetUp", "setUp", { merging: false });
   }
-  if (baselineChecked && dirty) return "保存后将停止提醒；已有浏览器授权会保留";
-  return permissionGranted ? "通知保持关闭；已有浏览器授权会保留" : "通知保持关闭";
+  const reason = HOST_FAILURES.has(source.failureReason) ? source.failureReason : failed ? "connection_failed" : null;
+  if (reason === "api_unavailable") {
+    if (source.restartRequired === true && source.selfHealing !== true) {
+      return view("warning", "settings.engine.restart", "settings.engine.descRestart", "retry", { merging: false });
+    }
+    if (retrySeconds > 0) {
+      return { ...view("progress", "settings.engine.finishing", "settings.engine.descRetryIn", "retry", { merging: false }), params: { seconds: retrySeconds } };
+    }
+    return view("progress", "settings.engine.finishing", source.selfHealing === true ? "settings.engine.descSelfHealing" : "settings.engine.descFinishing", "retry", { merging: false });
+  }
+  if (reason === "host_missing") return view("failed", "settings.engine.notInstalled", "settings.engine.descNotInstalled", "retry", { install: true, merging: false });
+  if (!connected) return view("failed", "settings.engine.noConnection", "settings.engine.descNoConnection", "retry", { merging: false });
+  if (!compatible) return view("warning", "settings.engine.updateNeeded", "settings.engine.descUpdate", "retry");
+  return view("complete", "settings.engine.ready", "", "");
 }
 
 export function resolveNotificationLoadState({ persisted = false, permissionGranted = false } = {}) {
@@ -86,9 +206,9 @@ export function resolveNotificationLoadState({ persisted = false, permissionGran
 }
 
 /**
- * Normalize an ignored-domain textarea without ever returning URLs, ports,
+ * Normalize an ignored-domain list without ever returning URLs, ports,
  * credentials or IP literals. Blank lines and duplicates are harmless; every
- * other rejected input is reported using its one-based source line number.
+ * other rejected input is reported with its one-based source line number.
  */
 export function normalizeDomainLines(value) {
   const lines = domainSourceLines(value);
@@ -130,21 +250,18 @@ export function normalizeDomainLines(value) {
   };
 }
 
+/** Validate a filename template. Issues are { code, params }. */
 export function validateFilenameTemplate(value) {
   const template = canonicalTemplate(value, "");
   const errors = [];
   const unknownTokens = [];
   const seenUnknown = new Set();
 
-  if (!template) {
-    errors.push(filenameIssue("empty", "文件名模板不能为空。"));
-  }
+  if (!template) errors.push(issue("empty"));
   if (String(value ?? "").length > FORM_LIMITS.filenameTemplateMaxLength) {
-    errors.push(filenameIssue("too_long", `文件名模板不能超过 ${FORM_LIMITS.filenameTemplateMaxLength} 个字符。`));
+    errors.push(issue("too_long", { max: FORM_LIMITS.filenameTemplateMaxLength }));
   }
-  if (/\p{Cc}/u.test(String(value ?? ""))) {
-    errors.push(filenameIssue("control_character", "文件名模板不能包含控制字符。"));
-  }
+  if (/\p{Cc}/u.test(String(value ?? ""))) errors.push(issue("control_character"));
 
   for (const match of template.matchAll(/\{([^{}]*)\}/g)) {
     const token = match[0];
@@ -153,14 +270,10 @@ export function validateFilenameTemplate(value) {
       unknownTokens.push(token);
     }
   }
-  if (unknownTokens.length) {
-    errors.push(filenameIssue("unknown_token", `不支持的文件名字段：${unknownTokens.join("、")}。`));
-  }
+  if (unknownTokens.length) errors.push(issue("unknown_token", { tokens: [...unknownTokens] }));
 
   const withoutWellFormedTokens = template.replace(/\{[^{}]*\}/g, "");
-  if (/[{}]/.test(withoutWellFormedTokens)) {
-    errors.push(filenameIssue("malformed_token", "文件名字段的大括号不完整。"));
-  }
+  if (/[{}]/.test(withoutWellFormedTokens)) errors.push(issue("malformed_token"));
 
   const hasGuaranteedToken = FILENAME_TOKENS.some((token) =>
     GUARANTEED_FILENAME_TOKENS.has(token) && template.includes(token)
@@ -168,9 +281,7 @@ export function validateFilenameTemplate(value) {
   const literal = template.replace(/\{[^{}]*\}/g, "");
   const hasMeaningfulLiteral = /[\p{L}\p{N}]/u.test(literal);
   const mayRenderEmpty = !template || (!hasGuaranteedToken && !hasMeaningfulLiteral);
-  if (template && mayRenderEmpty) {
-    errors.push(filenameIssue("may_render_empty", "这个模板在部分媒体上可能生成空文件名，请加入标题、站点、类型、日期或固定文字。"));
-  }
+  if (template && mayRenderEmpty) errors.push(issue("may_render_empty"));
 
   return {
     valid: errors.length === 0,
@@ -181,43 +292,33 @@ export function validateFilenameTemplate(value) {
   };
 }
 
+/** Validate the whole editable state. Errors are { field, code, params }. */
 export function validateSettings(value = {}) {
   const source = value && typeof value === "object" ? value : {};
   const errors = [];
 
   validateIntegerField(errors, "concurrentFragments", source.concurrentFragments,
-    FORM_LIMITS.concurrencyMin, FORM_LIMITS.concurrencyMax, "视频片段并发数");
+    FORM_LIMITS.concurrencyMin, FORM_LIMITS.concurrencyMax);
   validateIntegerField(errors, "concurrentRanges", source.concurrentRanges,
-    FORM_LIMITS.concurrencyMin, FORM_LIMITS.concurrencyMax, "大文件并发数");
+    FORM_LIMITS.concurrencyMin, FORM_LIMITS.concurrencyMax);
   validateIntegerField(errors, "concurrentJobs", source.concurrentJobs,
-    FORM_LIMITS.jobsMin, FORM_LIMITS.jobsMax, "同时进行的下载数");
-  validateIntegerField(errors, "minimumKiB", source.minimumKiB,
-    FORM_LIMITS.minimumKiBMin, FORM_LIMITS.minimumKiBMax, "最小媒体大小");
+    FORM_LIMITS.jobsMin, FORM_LIMITS.jobsMax);
+  validateIntegerField(errors, "minimumKB", source.minimumKB,
+    FORM_LIMITS.minimumKBMin, FORM_LIMITS.minimumKBMax);
 
   const outputContainer = canonicalText(source.outputContainer, "").toLowerCase();
-  if (!OUTPUT_CONTAINERS.has(outputContainer)) {
-    errors.push(settingIssue("outputContainer", "invalid_choice", "请选择支持的保存格式。"));
-  }
+  if (!OUTPUT_CONTAINER_SET.has(outputContainer)) errors.push(fieldIssue("outputContainer", "invalid_choice"));
 
   const filename = validateFilenameTemplate(source.filenameTemplate);
-  for (const error of filename.errors) {
-    errors.push(settingIssue("filenameTemplate", error.code, error.message));
-  }
+  for (const error of filename.errors) errors.push({ field: "filenameTemplate", ...error });
 
   const domainResult = normalizeDomainLines(source.blockedDomains);
   if (domainResult.invalidLineNumbers.length) {
-    errors.push(settingIssue(
-      "blockedDomains",
-      "invalid_lines",
-      `忽略域名第 ${domainResult.invalidLineNumbers.join("、")} 行无效。`,
-      { lineNumbers: domainResult.invalidLineNumbers }
-    ));
+    errors.push(fieldIssue("blockedDomains", "invalid_lines", { lines: domainResult.invalidLineNumbers }));
   }
 
   const fieldErrors = {};
-  for (const error of errors) {
-    (fieldErrors[error.field] ||= []).push(error.message);
-  }
+  for (const error of errors) (fieldErrors[error.field] ||= []).push(error);
 
   return {
     valid: errors.length === 0,
@@ -254,48 +355,20 @@ export function insertTemplateToken(value, token, selectionStart, selectionEnd =
   };
 }
 
+/** The file name a template produces for sample values ("" when it renders empty). */
+export function renderTemplatePreview(template, values = {}, extension = "mp4") {
+  const rendered = String(template || "")
+    .replace(/\{(title|host|kind|height|date)\}/g, (_, key) => String(values[key] ?? ""))
+    .trim();
+  return rendered ? `${rendered}.${extension}` : "";
+}
+
 /** Compare only valid, normalized, allowlisted settings. */
 export function statesEqual(first, second) {
   const firstValidation = validateSettings(first);
   const secondValidation = validateSettings(second);
   if (!firstValidation.valid || !secondValidation.valid) return false;
   return JSON.stringify(firstValidation.normalized) === JSON.stringify(secondValidation.normalized);
-}
-
-/**
- * Reconcile an asynchronous save without replacing edits made after submit.
- * The persisted response always becomes the new baseline. The caller may only
- * write `formState` back into the DOM when `changedDuringSave` is false.
- */
-export function reconcileSaveCompletion({ submitted, current, saved } = {}) {
-  const submittedSnapshot = editableStateSnapshot(submitted);
-  const currentSnapshot = editableStateSnapshot(current);
-  const changedDuringSave = JSON.stringify(currentSnapshot) !== JSON.stringify(submittedSnapshot);
-  const baseline = normalizeFormState(saved);
-  return {
-    baseline,
-    formState: changedDuringSave ? currentSnapshot : baseline,
-    changedDuringSave
-  };
-}
-
-function editableStateSnapshot(value = {}) {
-  const source = value && typeof value === "object" ? value : {};
-  return {
-    concurrentFragments: String(source.concurrentFragments ?? ""),
-    concurrentRanges: String(source.concurrentRanges ?? ""),
-    outputContainer: String(source.outputContainer ?? ""),
-    minimumKiB: String(source.minimumKiB ?? ""),
-    filenameTemplate: String(source.filenameTemplate ?? ""),
-    blockedDomains: Array.isArray(source.blockedDomains)
-      ? source.blockedDomains.map((item) => String(item ?? "")).join("\n")
-      : String(source.blockedDomains ?? ""),
-    saveAs: source.saveAs === true,
-    useNativeForDirect: source.useNativeForDirect === true,
-    allowPrivateNetworkMedia: source.allowPrivateNetworkMedia === true,
-    autoEnrichSiteQuality: source.autoEnrichSiteQuality === true,
-    showNotifications: source.showNotifications === true
-  };
 }
 
 function domainSourceLines(value) {
@@ -349,16 +422,16 @@ function isIpLiteral(hostname) {
   return parts.length === 4 && parts.every((part) => /^\d{1,3}$/.test(part) && Number(part) <= 255);
 }
 
-function validateIntegerField(errors, field, value, min, max, label) {
+function validateIntegerField(errors, field, value, min, max) {
   if (value === "" || value === null || value === undefined || typeof value === "boolean") {
-    errors.push(settingIssue(field, "required", `${label}不能为空。`));
+    errors.push(fieldIssue(field, "required", { min, max }));
     return;
   }
   const number = Number(value);
   if (!Number.isFinite(number) || !Number.isInteger(number)) {
-    errors.push(settingIssue(field, "not_integer", `${label}必须是整数。`));
+    errors.push(fieldIssue(field, "not_integer", { min, max }));
   } else if (number < min || number > max) {
-    errors.push(settingIssue(field, "out_of_range", `${label}必须在 ${min} 到 ${max} 之间。`));
+    errors.push(fieldIssue(field, "out_of_range", { min, max }));
   }
 }
 
@@ -396,14 +469,14 @@ function clampSelection(value, length) {
   return Math.min(length, Math.max(0, Math.trunc(number)));
 }
 
-function filenameIssue(code, message) {
-  return { code, message };
+function issue(code, params = {}) {
+  return { code, params };
 }
 
 function domainIssue(line, code) {
   return { line, code };
 }
 
-function settingIssue(field, code, message, details = {}) {
-  return { field, code, message, ...details };
+function fieldIssue(field, code, params = {}) {
+  return { field, code, params };
 }

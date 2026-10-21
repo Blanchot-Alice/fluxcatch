@@ -1,3 +1,5 @@
+import { classifyJobFailure, describeJobActivity, describeJobFailure } from "./job-failure.js";
+
 function normalizedMessage(value) {
   return typeof value === "string"
     ? value.replace(/[\u0000-\u001f]/g, " ").replace(/\s+/g, " ").trim()
@@ -15,10 +17,22 @@ function progressMessage(raw) {
  * unsupported-format claim. Native job text is already redacted before it
  * reaches extension pages; this mapper intentionally publishes only fixed,
  * action-oriented wording rather than echoing host-defined details.
+ *
+ * With `lang` ("en" | "zh") the sentence comes from lib/job-failure.js in
+ * that language (describeJobFailure for a failure, describeJobActivity for
+ * progress), the way v2 surfaces word every other job. Without it the
+ * legacy Chinese wording below is returned for the v1 popup and side panel,
+ * whose DOM translator still maps it to English; new code passes `lang` or
+ * calls job-failure.js directly.
  */
-export function friendlyDashMessage(value, { failed = false } = {}) {
+export function friendlyDashMessage(value, { failed = false, lang } = {}) {
   const raw = normalizedMessage(value);
   if (!raw || !/\bDASH\b/i.test(raw)) return null;
+  if (lang) {
+    return failed
+      ? describeJobFailure(classifyJobFailure({ text: raw }), lang)
+      : describeJobActivity(raw, lang);
+  }
   if (!failed) return progressMessage(raw);
 
   if (/签名链接已过期/i.test(raw)) {

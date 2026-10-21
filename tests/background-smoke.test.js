@@ -1900,9 +1900,13 @@ test("MV3 worker registers network and message listeners during module load", as
   const genericProbe = await sendRuntimeMessage({ type: "PROBE_MANIFEST", tabId: 45, candidate: genericCandidate });
   assert.equal(genericProbe.ok, true);
   assert.equal(genericProbe.probe.kind, "dash_pair");
+  // No chrome.i18n in this stub, so Auto resolves to Chinese, as locale.js does.
   assert.deepEqual(genericProbe.probe.variants.map((variant) => variant.name),
-    ["画质 1 · 40.1 MiB", "画质 2 · 22.9 MiB"],
-    "generic renditions are ranked by object size with readable labels");
+    ["清晰度 1 · 42 MB", "清晰度 2 · 24 MB"],
+    "generic renditions are ranked by object size with readable labels in decimal units");
+  assert.deepEqual(genericProbe.probe.variants.map((variant) => variant.rank), [1, 2],
+    "rank and bytes travel with the label so pages can word it themselves");
+  assert.ok(genericProbe.probe.variants[0].bytes > genericProbe.probe.variants[1].bytes && genericProbe.probe.variants[1].bytes > 0);
   assert.doesNotMatch(JSON.stringify(genericProbe), /GENERIC_VIDEO_SIG|GENERIC_AUDIO_SIG|GENERIC_1440_SIG/,
     "probe selectors never disclose signed track URLs");
   const genericPickedDownload = await sendRuntimeMessage({
@@ -3238,9 +3242,9 @@ test("MV3 worker registers network and message listeners during module load", as
   assert.equal(popupOpens, 1, "the popup that asked is reopened when Chrome allows it");
   const resumeNotice = notificationRequests.at(-1);
   assert.ok(resumeNotice && notificationRequests.length === notificationsBeforeResume + 1, "one notification explains what happened");
-  assert.match(resumeNotice.options.title, /已连接/);
-  assert.match(resumeNotice.options.message, /已自动继续/);
-  assert.match(resumeNotice.options.message, /healed\.mp4/);
+  // Copy from ui/v2/messages/worker.js (Auto is Chinese without chrome.i18n).
+  assert.equal(resumeNotice.options.title, "本地引擎已就绪");
+  assert.equal(resumeNotice.options.message, "healed.mp4\n刚才的下载已自动继续。");
   assert.equal(settingsState.nativeApiSelfHeal?.pendingDownload, undefined, "the pending download is replayed once");
 
   // ---- Pause / resume: the worker keeps a recipe (never a URL) and the

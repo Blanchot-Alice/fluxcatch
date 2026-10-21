@@ -1,117 +1,50 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-surface="sidepanel">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>FluxCatch 工作台</title>
-  <link rel="stylesheet" href="../ui/tokens.css">
-  <link rel="stylesheet" href="../ui/components.css">
-  <link rel="stylesheet" href="../ui/atmosphere.css">
+  <title>FluxCatch</title>
+  <link rel="stylesheet" href="../ui/v2/tokens.css">
+  <link rel="stylesheet" href="../ui/v2/system.css">
+  <link rel="stylesheet" href="../ui/v2/media.css">
   <link rel="stylesheet" href="sidepanel.css">
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand">
-      <span class="mark" aria-hidden="true">
-        <svg viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
-          <circle cx="64" cy="64" r="60" class="c-cream"/>
-          <circle cx="64" cy="64" r="58.5" fill="none" class="s-pond" stroke-opacity=".35" stroke-width="3"/>
-          <path d="M22 100q42-13 84 0" fill="none" class="s-pond" stroke-width="5" stroke-linecap="round"/>
-          <path d="M34 112q30-9 60 0" fill="none" class="s-pond" stroke-opacity=".5" stroke-width="4" stroke-linecap="round"/>
-          <path d="M52.4 26A34 34 0 1 1 32 46.4L64 58Z" class="c-celadon"/>
-          <circle cx="92" cy="36" r="9" class="c-rose"/>
-        </svg>
+  <div class="pond" data-pond aria-hidden="true"></div>
+
+  <header class="topbar" id="topbar" data-scrolled="false">
+    <div class="topbar-inner column lead-grid" id="topbarInner">
+      <!-- BrandMark S is inserted first; the two icon buttons share the one trailing cell. -->
+      <span class="bar-actions">
+        <button id="urlButton" class="icon-button" type="button" data-msg-label="media.downloadLink"></button>
+        <button id="settingsButton" class="icon-button" type="button" data-msg-label="action.settings"></button>
       </span>
-      <span class="brand-copy"><strong>FluxCatch</strong><small>媒体工作台</small></span>
     </div>
-    <button id="settingsButton" class="icon-button" type="button" aria-label="打开设置" title="打开设置">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.25A3.25 3.25 0 1 0 12 8.75a3.25 3.25 0 0 0 0 6.5Z"/><path d="M19.1 13.1a7.8 7.8 0 0 0 .05-1.1 7.8 7.8 0 0 0-.05-1.1l2-1.55-2-3.46-2.45.98a8.2 8.2 0 0 0-1.9-1.1L14.4 3.15h-4.8l-.35 2.62a8.2 8.2 0 0 0-1.9 1.1L4.9 5.89l-2 3.46 2 1.55A7.8 7.8 0 0 0 4.85 12c0 .37.02.74.05 1.1l-2 1.55 2 3.46 2.45-.98a8.2 8.2 0 0 0 1.9 1.1l.35 2.62h4.8l.35-2.62a8.2 8.2 0 0 0 1.9-1.1l2.45.98 2-3.46-2-1.55Z"/></svg>
-      <span class="sr-only" data-action-label>打开设置</span>
-    </button>
   </header>
 
-  <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true" hidden></div>
+  <main class="column page" id="page">
+    <!-- The engine's one status line is app-wide: above the lists, as in the popup. -->
+    <p class="status-line lead-grid" id="engineLine" role="status" hidden></p>
 
-  <main>
-    <section class="page-context" aria-labelledby="pageTitle">
-      <div class="page-mark" aria-hidden="true"><span></span></div>
-      <div class="page-copy">
-        <h1 id="pageTitle">正在读取当前页面…</h1>
-        <p id="pageUrl">请稍候</p>
-      </div>
-      <div class="context-actions">
-        <button id="scanButton" class="quiet-button" type="button" aria-label="重新扫描当前页面">重新扫描</button>
-        <button id="downloadSettingsButton" class="quiet-button" type="button">下载设置</button>
-      </div>
+    <section id="mediaSection" aria-labelledby="mediaHeading">
+      <div id="mediaHeaderSlot"></div>
+      <p class="status-line lead-grid" id="mediaState" role="status" hidden></p>
+      <ul class="rows media-rows" id="mediaRows" hidden></ul>
+      <div id="mediaEmptySlot"></div>
     </section>
 
-    <section id="hostCard" class="host-card" aria-labelledby="hostTitle">
-      <span id="hostDot" class="status-dot" aria-hidden="true"></span>
-      <div class="host-copy" role="status" aria-live="polite" aria-atomic="true">
-        <h2 id="hostTitle">本地下载引擎</h2>
-        <p id="hostDetail">正在检查是否可用…</p>
-      </div>
-      <button id="pingButton" class="text-button" type="button" aria-label="重新检查本地下载引擎">重试</button>
-    </section>
-    <p id="localEngineBoundary" class="action-boundary">标为“检查并下载”的媒体需要本地下载引擎；Chrome 权限只会在你点击该按钮后请求。</p>
-
-    <div id="globalError" class="notice error-notice" role="alert" hidden>
-      <div><strong>工作台暂时没有读到数据</strong><p id="errorText">请重试。</p></div>
-      <button id="retryButton" class="text-button" type="button" aria-label="重新读取工作台数据">重试</button>
-    </div>
-
-    <section class="workspace-section" aria-labelledby="mediaHeading">
-      <header class="section-head">
-        <div>
-          <h2 id="mediaHeading">当前页面媒体</h2>
-          <p>检测到的可下载视频、音频与流媒体</p>
-        </div>
-        <div class="section-actions">
-          <button id="downloadAllButton" class="quiet-button" type="button" title="按默认设置下载当前页面的全部媒体" hidden>全部下载</button>
-          <button id="urlDownloadButton" class="quiet-button" type="button" aria-expanded="false" aria-controls="urlForm">链接下载</button>
-          <span id="mediaCount" class="count" aria-label="0 个媒体">0</span>
-        </div>
-      </header>
-      <form id="urlForm" class="url-form" hidden>
-        <label class="sr-only" for="urlInput">媒体地址</label>
-        <input id="urlInput" type="url" autocomplete="off" spellcheck="false" placeholder="粘贴视频、音频或播放列表地址" maxlength="4096" required>
-        <button type="submit" class="secondary-btn url-submit">下载</button>
-      </form>
-
-      <div id="mediaLoading" class="loading-state" aria-live="polite">
-        <span class="spinner" aria-hidden="true"></span><span>正在整理媒体…</span>
-      </div>
-      <ul id="mediaList" class="media-list" aria-live="polite" hidden></ul>
-      <div id="mediaEmpty" class="empty-state" role="status" aria-live="polite" hidden>
-        <div class="radar" aria-hidden="true"><i class="core"></i><span class="ring r1"></span><span class="ring r2"></span><span class="ring r3"></span></div>
-        <h3>尚未检测到媒体</h3>
-        <p>播放视频后点击“重新扫描”；扫描不会刷新当前页面。</p>
-      </div>
-    </section>
-
-    <section class="workspace-section jobs-section" aria-labelledby="jobsHeading">
-      <header class="section-head">
-        <div>
-          <h2 id="jobsHeading">下载任务</h2>
-          <p><span id="activeJobCount">0</span> 个任务正在进行</p>
-        </div>
-        <div class="section-actions">
-          <button id="historyButton" class="quiet-button" type="button" title="打开完整的下载记录页面">全部记录</button>
-          <button id="clearCompletedButton" class="quiet-button" type="button" aria-label="清理已结束的下载任务" disabled>清理已结束任务</button>
-        </div>
-      </header>
-
-      <div id="jobsLoading" class="loading-state" aria-live="polite">
-        <span class="spinner" aria-hidden="true"></span><span>正在恢复任务…</span>
-      </div>
-      <ul id="jobsList" class="jobs-list" hidden></ul>
-      <div id="jobAnnouncer" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
-      <div id="jobsEmpty" class="empty-state compact" role="status" aria-live="polite" hidden>
-        <h3>暂无下载任务</h3>
-        <p>从弹窗或本工作台开始下载后，进度会持续保留在这里。</p>
-      </div>
+    <section id="downloadsSection" aria-labelledby="downloadsHeading">
+      <div id="downloadsHeaderSlot"></div>
+      <p class="status-line lead-grid" id="jobsState" role="status" hidden></p>
+      <div id="focusSlot"></div>
+      <ul class="rows job-rows" id="jobRows"></ul>
+      <div id="jobsEmptySlot"></div>
     </section>
   </main>
+
+  <div class="sr-only" id="announcer" role="status" aria-live="polite" aria-atomic="true"></div>
+  <div class="toast-region" id="toastRegion" aria-live="polite"></div>
+  <div class="menu-layer" id="menuLayer" hidden><div class="menu"></div></div>
 
   <script type="module" src="sidepanel.js"></script>
 </body>

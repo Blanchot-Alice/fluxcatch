@@ -1,60 +1,79 @@
+// UI editor overrides (a developer tool, Lab -> Developer in Settings).
+// Saved per Chrome profile under fluxcatch.uiCustomization.v1 and applied to
+// the Settings page only while Developer tools is on. Overrides never carry a
+// colour literal of their own: an empty accent means "the theme's --pond".
+// Only layout values apply: copy saved by older editors (its fields are still
+// read and kept, per UI language) never replaces v2 copy, as the rename table
+// asks once the editor moved behind Lab -> Developer.
+
 export const UI_CUSTOMIZATION_STORAGE_KEY = "fluxcatch.uiCustomization.v1";
+export const DEVELOPER_TOOLS_STORAGE_KEY = "fluxcatch.developerTools.v1";
 
+// Layout defaults equal the v2 tokens, so a default record changes nothing.
 export const DEFAULT_UI_CUSTOMIZATION = Object.freeze({
-  firstSecondGap: 12,
-  sectionGap: 16,
-  contentWidth: 720,
+  firstSecondGap: 0,
+  sectionGap: 48,
+  contentWidth: 680,
   fontScale: 1,
-  radius: 14,
-  accentColor: "#3E6E92",
-  pageTitle: "FluxCatch 设置",
-  pageDescription: "调整下载体验，并确认当前构建真正可用的能力。",
-  runtimeTitle: "运行身份与能力概览",
-  runtimeDescription: "先确认浏览器扩展、本地处理程序与当前能力配置是否一致。",
-  basicTitle: "基础下载",
-  basicDescription: "普通用户最常用的保存方式。",
-  performanceTitle: "性能",
-  performanceDescription: "先选择稳妥预设，需要时再调整具体并发。",
-  detectionTitle: "检测与命名",
-  detectionDescription: "控制媒体筛选以及下载文件的可读名称。",
-  privacyTitle: "隐私与网络",
-  privacyDescription: "固定站点接口，自动行为可随时关闭。",
-  localTitle: "本地能力",
-  localDescription: "安装状态与当前构建是否开放是两件不同的事。",
-  notificationsTitle: "通知",
-  notificationsDescription: "开启时立即申请权限；通知偏好仍由保存栏确认。",
-  labTitle: "实验室与当前限制",
-  labDescription: "以下项目仅说明路线状态，在当前构建中没有可操作开关。"
+  radius: 10,
+  accentColor: "",
+  language: "",
+  pageTitle: "",
+  pageDescription: "",
+  runtimeTitle: "",
+  localTitle: "",
+  basicTitle: "",
+  performanceTitle: "",
+  detectionTitle: "",
+  privacyTitle: "",
+  notificationsTitle: "",
+  generalTitle: "",
+  labTitle: ""
 });
 
-const COPY_FIELDS = Object.freeze({
-  pageTitle: [60, "options-title"],
-  pageDescription: [180, "options-description"],
-  runtimeTitle: [60, "runtime-title"],
-  runtimeDescription: [180, "runtime-description"],
-  basicTitle: [60, "basic-title"],
-  basicDescription: [180, "basic-description"],
-  performanceTitle: [60, "performance-title"],
-  performanceDescription: [180, "performance-description"],
-  detectionTitle: [60, "detection-title"],
-  detectionDescription: [180, "detection-description"],
+/** Copy fields kept in the record: [maximum length, the v1 data-ui-copy target]. Never applied. */
+export const COPY_FIELDS = Object.freeze({
+  pageTitle: [60, "settings-title"],
+  pageDescription: [180, "settings-description"],
+  runtimeTitle: [60, "status-title"],
+  localTitle: [60, "local-engine-title"],
+  basicTitle: [60, "saving-title"],
+  performanceTitle: [60, "speed-title"],
+  detectionTitle: [60, "finding-title"],
   privacyTitle: [60, "privacy-title"],
-  privacyDescription: [180, "privacy-description"],
-  localTitle: [60, "local-title"],
-  localDescription: [180, "local-description"],
   notificationsTitle: [60, "notifications-title"],
-  notificationsDescription: [180, "notifications-description"],
-  labTitle: [60, "lab-title"],
-  labDescription: [180, "lab-description"]
+  generalTitle: [60, "general-title"],
+  labTitle: [60, "lab-title"]
 });
 
-const LIMITS = Object.freeze({
+export const LAYOUT_LIMITS = Object.freeze({
   firstSecondGap: [0, 64],
-  sectionGap: [0, 48],
+  sectionGap: [0, 96],
   contentWidth: [560, 920],
   fontScale: [0.85, 1.3],
   radius: [6, 28]
 });
+
+// The type-role size and line tokens a font scale multiplies (tokens.css).
+const TYPE_TOKENS = Object.freeze([
+  "--wordmark-size", "--wordmark-line", "--display-size", "--display-line", "--empty-size", "--empty-line",
+  "--title-size", "--title-line", "--row-size", "--row-line", "--body-size", "--body-line",
+  "--meta-size", "--meta-line", "--label-size", "--label-line"
+]);
+// tokens.css redeclares these under :lang(zh) on every Chinese element, so an
+// inline value on the root alone would not reach them.
+const ZH_LINE_TOKENS = Object.freeze(["--row-line", "--body-line", "--meta-line"]);
+
+const LAYOUT_PROPERTIES = Object.freeze([
+  "--settings-first-gap", "--settings-section-gap", "--content-max",
+  "--r-control", "--r-panel", "--r-float",
+  "--pond", "--primary-fill", "--primary-fill-hover", "--primary-fill-pressed", "--tint-pond", "--text-on-accent"
+]);
+
+const TYPE_SCALE_ATTRIBUTE = "data-ui-type-scale";
+const typeScales = new WeakMap();
+let typeScaleCount = 0;
+
 
 function clampNumber(value, fallback, [minimum, maximum]) {
   const number = Number(value);
@@ -62,30 +81,46 @@ function clampNumber(value, fallback, [minimum, maximum]) {
   return Math.min(maximum, Math.max(minimum, number));
 }
 
-function normalizeCopy(value, fallback, maximumLength) {
-  const text = String(value ?? "").trim().replace(/\s+/g, " ");
-  return (text || fallback).slice(0, maximumLength);
+function normalizeCopy(value, maximumLength) {
+  return String(value ?? "").trim().replace(/\s+/g, " ").slice(0, maximumLength);
 }
 
-function normalizeHex(value) {
+/** "#RRGGBB" in upper case, or "" (the theme's accent). */
+export function normalizeHex(value) {
   const match = String(value || "").trim().match(/^#([0-9a-f]{6})$/i);
-  return match ? `#${match[1].toUpperCase()}` : DEFAULT_UI_CUSTOMIZATION.accentColor;
+  return match ? `#${match[1].toUpperCase()}` : "";
+}
+
+function normalizeLanguage(value) {
+  if (value === "en" || value === "zh") return value;
+  return "";
 }
 
 export function normalizeUiCustomization(value = {}) {
   const source = value && typeof value === "object" ? value : {};
   const customization = {
-    firstSecondGap: Math.round(clampNumber(source.firstSecondGap, DEFAULT_UI_CUSTOMIZATION.firstSecondGap, LIMITS.firstSecondGap)),
-    sectionGap: Math.round(clampNumber(source.sectionGap, DEFAULT_UI_CUSTOMIZATION.sectionGap, LIMITS.sectionGap)),
-    contentWidth: Math.round(clampNumber(source.contentWidth, DEFAULT_UI_CUSTOMIZATION.contentWidth, LIMITS.contentWidth)),
-    fontScale: Math.round(clampNumber(source.fontScale, DEFAULT_UI_CUSTOMIZATION.fontScale, LIMITS.fontScale) * 100) / 100,
-    radius: Math.round(clampNumber(source.radius, DEFAULT_UI_CUSTOMIZATION.radius, LIMITS.radius)),
-    accentColor: normalizeHex(source.accentColor)
+    firstSecondGap: Math.round(clampNumber(source.firstSecondGap, DEFAULT_UI_CUSTOMIZATION.firstSecondGap, LAYOUT_LIMITS.firstSecondGap)),
+    sectionGap: Math.round(clampNumber(source.sectionGap, DEFAULT_UI_CUSTOMIZATION.sectionGap, LAYOUT_LIMITS.sectionGap)),
+    contentWidth: Math.round(clampNumber(source.contentWidth, DEFAULT_UI_CUSTOMIZATION.contentWidth, LAYOUT_LIMITS.contentWidth)),
+    fontScale: Math.round(clampNumber(source.fontScale, DEFAULT_UI_CUSTOMIZATION.fontScale, LAYOUT_LIMITS.fontScale) * 100) / 100,
+    radius: Math.round(clampNumber(source.radius, DEFAULT_UI_CUSTOMIZATION.radius, LAYOUT_LIMITS.radius)),
+    accentColor: normalizeHex(source.accentColor),
+    language: ""
   };
   for (const [key, [maximumLength]] of Object.entries(COPY_FIELDS)) {
-    customization[key] = normalizeCopy(source[key], DEFAULT_UI_CUSTOMIZATION[key], maximumLength);
+    customization[key] = normalizeCopy(source[key], maximumLength);
   }
+  // A record without a language predates v2: its copy targeted v1 sections
+  // that no longer exist, so it is dropped rather than guessed at.
+  customization.language = normalizeLanguage(source.language);
+  if (!customization.language) for (const key of Object.keys(COPY_FIELDS)) customization[key] = "";
   return customization;
+}
+
+/** True when any copy override is set (the record then needs a language). */
+export function hasCopyOverrides(value) {
+  const customization = value && typeof value === "object" ? value : {};
+  return Object.keys(COPY_FIELDS).some((key) => Boolean(customization[key]));
 }
 
 function storageApi(explicitStorage) {
@@ -99,113 +134,235 @@ export async function loadUiCustomization(explicitStorage) {
   return normalizeUiCustomization(stored?.[UI_CUSTOMIZATION_STORAGE_KEY]);
 }
 
-export async function saveUiCustomization(value, explicitStorage) {
+/** Save a record. Copy overrides are stamped with `language` (the UI language they were written in). */
+export async function saveUiCustomization(value, explicitStorage, { language } = {}) {
   const storage = storageApi(explicitStorage);
-  const customization = normalizeUiCustomization(value);
+  const stamped = { ...(value || {}), language: language || value?.language || "" };
+  const customization = normalizeUiCustomization(stamped);
   if (!storage?.set) return customization;
   await storage.set({ [UI_CUSTOMIZATION_STORAGE_KEY]: customization });
   return customization;
 }
 
-function hexRgb(hex) {
-  const value = normalizeHex(hex).slice(1);
-  return [0, 2, 4].map((offset) => Number.parseInt(value.slice(offset, offset + 2), 16));
+export async function loadDeveloperTools(explicitStorage) {
+  const storage = storageApi(explicitStorage);
+  if (!storage?.get) return false;
+  const stored = await storage.get(DEVELOPER_TOOLS_STORAGE_KEY);
+  return stored?.[DEVELOPER_TOOLS_STORAGE_KEY] === true;
 }
 
-function relativeLuminance(hex) {
-  const channels = hexRgb(hex).map((channel) => {
+export async function saveDeveloperTools(enabled, explicitStorage) {
+  const storage = storageApi(explicitStorage);
+  const value = enabled === true;
+  if (storage?.set) await storage.set({ [DEVELOPER_TOOLS_STORAGE_KEY]: value });
+  return value;
+}
+
+// ---------- colour helpers (runtime values only: tokens or the user's own pick) ----------
+
+function parseColour(value) {
+  const text = String(value || "").trim();
+  const hex = text.match(/^#([0-9a-f]{6})$/i);
+  if (hex) return [0, 2, 4].map((offset) => Number.parseInt(hex[1].slice(offset, offset + 2), 16));
+  const rgb = text.match(/^rgba?\(\s*(\d+)[\s,]+(\d+)[\s,]+(\d+)/i);
+  return rgb ? [Number(rgb[1]), Number(rgb[2]), Number(rgb[3])] : null;
+}
+
+function relativeLuminance(channels) {
+  const linear = channels.map((channel) => {
     const ratio = channel / 255;
     return ratio <= 0.04045 ? ratio / 12.92 : ((ratio + 0.055) / 1.055) ** 2.4;
   });
-  return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+  return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
 }
 
-function contrastRatio(left, right) {
-  const values = [relativeLuminance(left), relativeLuminance(right)].sort((a, b) => b - a);
+export function contrastRatio(left, right) {
+  const a = parseColour(left);
+  const b = parseColour(right);
+  if (!a || !b) return 0;
+  const values = [relativeLuminance(a), relativeLuminance(b)].sort((x, y) => y - x);
   return (values[0] + 0.05) / (values[1] + 0.05);
 }
 
-// Text on a chosen accent is the cream or the indigo of the palette, never
-// pure white or pure black (DESIGN.md §1.2).
-const TEXT_ON_ACCENT_LIGHT = "#FAF7F2";
-const TEXT_ON_ACCENT_DARK = "#2B2E4A";
-
-function textOnAccent(accent) {
-  return contrastRatio(accent, TEXT_ON_ACCENT_LIGHT) >= contrastRatio(accent, TEXT_ON_ACCENT_DARK) ? TEXT_ON_ACCENT_LIGHT : TEXT_ON_ACCENT_DARK;
-}
-
-function mixHex(left, right, rightWeight) {
-  const a = hexRgb(left);
-  const b = hexRgb(right);
-  const channels = a.map((channel, index) => Math.round(channel * (1 - rightWeight) + b[index] * rightWeight));
-  return `#${channels.map((channel) => channel.toString(16).padStart(2, "0")).join("").toUpperCase()}`;
-}
-
-function updateCopy(copyRoot, customization) {
-  if (!copyRoot?.querySelectorAll) return;
-  for (const [key, [, copyId]] of Object.entries(COPY_FIELDS)) {
-    for (const node of copyRoot.querySelectorAll(`[data-ui-copy="${copyId}"]`)) node.textContent = customization[key];
+/** A token's computed value as "#RRGGBB", or "" when it cannot be read here. */
+export function readTokenHex(name, root = globalThis.document?.documentElement) {
+  try {
+    const value = globalThis.getComputedStyle?.(root)?.getPropertyValue(name)?.trim();
+    const channels = parseColour(value);
+    if (!channels) return "";
+    return `#${channels.map((channel) => channel.toString(16).padStart(2, "0")).join("").toUpperCase()}`;
+  } catch {
+    return "";
   }
 }
 
-export function applyUiCustomization(value, { root = globalThis.document?.documentElement, copyRoot = globalThis.document } = {}) {
+// Text on a custom accent: whichever of the theme's own on-accent and primary
+// text colours reads better on it (both are tokens, read at runtime).
+function textOnAccent(accent, root) {
+  const candidates = [readTokenHex("--text-on-accent", root), readTokenHex("--text-primary", root)].filter(Boolean);
+  if (!candidates.length) return "";
+  return candidates.sort((a, b) => contrastRatio(accent, b) - contrastRatio(accent, a))[0];
+}
+
+// ---------- applying ----------
+
+/** Remove every override this module sets, so the tokens rule again. */
+export function clearUiCustomization({ root = globalThis.document?.documentElement } = {}) {
+  const style = root?.style;
+  if (!style) return;
+  for (const name of LAYOUT_PROPERTIES) style.removeProperty?.(name);
+  clearTypeScale(root);
+}
+
+function readSizes(element, names) {
+  const sizes = {};
+  try {
+    const computed = globalThis.getComputedStyle?.(element);
+    for (const name of names) {
+      const px = Number.parseFloat(computed?.getPropertyValue(name));
+      if (Number.isFinite(px)) sizes[name] = px;
+    }
+  } catch {
+    // No computed style here (tests, detached roots): the scale is skipped.
+  }
+  return sizes;
+}
+
+// The :lang(zh) line values, read from a short-lived Chinese probe inside root.
+function zhLineSizes(root) {
+  const doc = root?.ownerDocument;
+  if (!doc?.createElement || !root.append) return {};
+  const probe = doc.createElement("span");
+  probe.setAttribute("lang", "zh");
+  probe.hidden = true;
+  root.append(probe);
+  try {
+    return readSizes(probe, ZH_LINE_TOKENS);
+  } finally {
+    probe.remove();
+  }
+}
+
+function clearTypeScale(root) {
+  const entry = typeScales.get(root);
+  if (!entry) return;
+  entry.style.remove();
+  root.removeAttribute?.(TYPE_SCALE_ATTRIBUTE);
+  typeScales.delete(root);
+}
+
+// One generated rule per root: the scaled tokens on the root, and the scaled
+// Chinese line heights on the root's :lang(zh) elements, which outrank the
+// tokens.css :lang(zh) rule by one attribute selector.
+function applyTypeScale(root, scale) {
+  const base = readSizes(root, TYPE_TOKENS);
+  if (!Object.keys(base).length) return;
+  const zh = zhLineSizes(root);
+  const doc = root.ownerDocument;
+  const head = doc?.head || doc?.documentElement;
+  if (!doc?.createElement || !head?.append || !root.setAttribute) return;
+  const id = String((typeScaleCount += 1));
+  const scoped = `[${TYPE_SCALE_ATTRIBUTE}="${id}"]`;
+  const declarations = (sizes) => Object.entries(sizes).map(([name, px]) => `${name}: ${Math.round(px * scale)}px;`).join(" ");
+  const style = doc.createElement("style");
+  style.textContent = [
+    `${scoped} { ${declarations(base)} }`,
+    Object.keys(zh).length ? `${scoped}:lang(zh), ${scoped} :lang(zh) { ${declarations(zh)} }` : ""
+  ].filter(Boolean).join("\n");
+  head.append(style);
+  root.setAttribute(TYPE_SCALE_ATTRIBUTE, id);
+  typeScales.set(root, { style, id });
+}
+
+/**
+ * Apply a record's layout values to `root` (CSS properties). Values equal to
+ * the defaults leave the tokens alone. Copy is never applied.
+ */
+export function applyUiCustomization(value, { root = globalThis.document?.documentElement } = {}) {
   const customization = normalizeUiCustomization(value);
+  clearUiCustomization({ root });
   const style = root?.style;
   if (style?.setProperty) {
+    const set = (name, next) => style.setProperty(name, next);
+    if (customization.firstSecondGap !== DEFAULT_UI_CUSTOMIZATION.firstSecondGap) set("--settings-first-gap", `${customization.firstSecondGap}px`);
+    if (customization.sectionGap !== DEFAULT_UI_CUSTOMIZATION.sectionGap) set("--settings-section-gap", `${customization.sectionGap}px`);
+    if (customization.contentWidth !== DEFAULT_UI_CUSTOMIZATION.contentWidth) set("--content-max", `${customization.contentWidth}px`);
+    if (customization.radius !== DEFAULT_UI_CUSTOMIZATION.radius) {
+      set("--r-panel", `${customization.radius}px`);
+      set("--r-control", `${Math.max(4, Math.round(customization.radius * 0.6))}px`);
+      set("--r-float", `${Math.round(customization.radius * 1.2)}px`);
+    }
+    if (customization.fontScale !== DEFAULT_UI_CUSTOMIZATION.fontScale) applyTypeScale(root, customization.fontScale);
     const accent = customization.accentColor;
-    const onAccent = textOnAccent(accent);
-    const [red, green, blue] = hexRgb(accent);
-    style.setProperty("--ui-first-second-gap", `${customization.firstSecondGap}px`);
-    style.setProperty("--ui-section-gap", `${customization.sectionGap}px`);
-    style.setProperty("--ui-content-width", `${customization.contentWidth}px`);
-    style.setProperty("--ui-font-scale", String(customization.fontScale));
-    style.setProperty("--ui-radius", `${customization.radius}px`);
-    style.setProperty("--r-control", `${Math.max(6, Math.round(customization.radius * 0.45))}px`);
-    style.setProperty("--r-row", `${Math.max(8, Math.round(customization.radius * 0.72))}px`);
-    style.setProperty("--r-panel", `${customization.radius}px`);
-    style.setProperty("--primary-action", accent);
-    style.setProperty("--primary", accent);
-    style.setProperty("--primaryHover", mixHex(accent, onAccent === TEXT_ON_ACCENT_LIGHT ? TEXT_ON_ACCENT_DARK : TEXT_ON_ACCENT_LIGHT, 0.16));
-    style.setProperty("--primary-tint", `rgba(${red},${green},${blue},.14)`);
-    style.setProperty("--on-primary", onAccent);
-    style.setProperty("--pond", accent);
-    style.setProperty("--pond-deep", accent);
-    style.setProperty("--pond-ink", accent);
-    style.setProperty("--pond-tint", `rgba(${red},${green},${blue},.16)`);
-    style.setProperty("--text-on-accent", onAccent);
+    if (accent) {
+      set("--pond", accent);
+      set("--primary-fill", accent);
+      set("--primary-fill-hover", `color-mix(in srgb, ${accent} 86%, var(--text-primary))`);
+      set("--primary-fill-pressed", `color-mix(in srgb, ${accent} 76%, var(--text-primary))`);
+      set("--tint-pond", `color-mix(in srgb, ${accent} 12%, transparent)`);
+      const onAccent = textOnAccent(accent, root);
+      if (onAccent) set("--text-on-accent", onAccent);
+    }
   }
-  updateCopy(copyRoot, customization);
   return customization;
 }
 
+/**
+ * Keep a page in step with the saved record and the Developer tools switch.
+ * `refresh()` re-applies (after a rebuild); `unbind()` stops listening.
+ * `language` is accepted for older callers and no longer used.
+ */
 export async function bindUiCustomization({
   root = globalThis.document?.documentElement,
-  copyRoot = globalThis.document,
   storage,
-  changeSource = globalThis.chrome?.storage?.onChanged
+  changeSource = globalThis.chrome?.storage?.onChanged,
+  onChange
 } = {}) {
-  const apply = (value) => applyUiCustomization(value, { root, copyRoot });
-  try {
-    apply(await loadUiCustomization(storage));
-  } catch {
-    apply(DEFAULT_UI_CUSTOMIZATION);
-  }
+  let customization = { ...DEFAULT_UI_CUSTOMIZATION };
+  let enabled = false;
+  try { customization = await loadUiCustomization(storage); } catch { /* defaults */ }
+  try { enabled = await loadDeveloperTools(storage); } catch { enabled = false; }
+  const refresh = () => {
+    if (enabled) applyUiCustomization(customization, { root });
+    else clearUiCustomization({ root });
+  };
+  refresh();
   const listener = (changes, areaName) => {
     if (areaName && areaName !== "local") return;
-    const change = changes?.[UI_CUSTOMIZATION_STORAGE_KEY];
-    if (change) apply(change.newValue || DEFAULT_UI_CUSTOMIZATION);
+    let changed = false;
+    if (changes?.[UI_CUSTOMIZATION_STORAGE_KEY]) {
+      customization = normalizeUiCustomization(changes[UI_CUSTOMIZATION_STORAGE_KEY].newValue);
+      changed = true;
+    }
+    if (changes?.[DEVELOPER_TOOLS_STORAGE_KEY]) {
+      enabled = changes[DEVELOPER_TOOLS_STORAGE_KEY].newValue === true;
+      changed = true;
+    }
+    if (changed) onChange ? onChange({ enabled, customization }) : refresh();
   };
   changeSource?.addListener?.(listener);
-  return () => changeSource?.removeListener?.(listener);
+  return {
+    refresh,
+    isEnabled: () => enabled,
+    unbind: () => changeSource?.removeListener?.(listener)
+  };
 }
 
 export function customizationExportPayload(value) {
-  return { schemaVersion: 1, customization: normalizeUiCustomization(value) };
+  return { schemaVersion: 2, customization: normalizeUiCustomization(value) };
 }
 
+/** Parse an exported or bare record. Throws an Error with code "invalid_customization". */
 export function parseCustomizationJson(text) {
-  const parsed = JSON.parse(String(text || ""));
+  let parsed;
+  try {
+    parsed = JSON.parse(String(text || ""));
+  } catch {
+    throw Object.assign(new Error("invalid_customization"), { code: "invalid_customization" });
+  }
   const candidate = parsed?.customization && typeof parsed.customization === "object" ? parsed.customization : parsed;
-  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) throw new Error("JSON 需要包含界面配置对象");
+  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+    throw Object.assign(new Error("invalid_customization"), { code: "invalid_customization" });
+  }
   return normalizeUiCustomization(candidate);
 }

@@ -6,7 +6,6 @@ import {
   classifyMedia,
   filenameFromCandidate,
   getExtension,
-  humanBytes,
   isBilibiliMediaUrl,
   isBilibiliVideoPage,
   isInstagramByteRangeFragment,
@@ -22,20 +21,125 @@ import { candidateForPersistence, candidateForUi, previewForPersistence } from "
 import { CANDIDATE_PROVENANCES, evaluateNetworkRequest, requireNetworkRequest } from "./lib/network-policy.js";
 import { hostEventForUi, hostStatusForUi } from "./lib/host-public.js";
 import { BUILD_PROFILE, HOST_MISMATCH_MESSAGE, buildDiagnostics, hostCompatibility } from "./lib/build-profile.js";
-import { UI_LANGUAGE_STORAGE_KEY, loadUiLanguage, resolveUiLanguage, setUiLanguage, t as tr } from "./ui/i18n.js";
+import { FAILURE_CODES, classifyJobFailure, describeJobFailure, jobFailure } from "./lib/job-failure.js";
+import workerMessages from "./ui/v2/messages/worker.js";
+import { formatBytes } from "./lib/format.js";
+// The toolbar badge in the Morning palette: a DOM-free mirror of tokens.css.
+import { BADGE_COLORS } from "./ui/v2/tokens.js";
 
-// Notifications and action titles render outside any extension page, so the
-// service worker keeps its own copy of the UI language preference in sync.
-void (async () => {
+// ---------------------------------------------------------------------------
+// The worker's UI language (design review §7)
+//
+// Notifications, the toolbar tooltip and the labels the worker builds render
+// outside any extension page, so the worker resolves the language itself,
+// exactly as ui/v2/locale.js does: the stored preference, with "Auto"
+// following chrome.i18n.getUILanguage(). Copy comes from
+// ui/v2/messages/worker.js and failure reasons from lib/job-failure.js; the
+// page-side locale state (ui/v2/locale.js) is not loaded here. The storage key
+// is the one ui/v2/locale.js saves (tests/worker-i18n.test.js keeps the two in step).
+const UI_LANGUAGE_STORAGE_KEY = "fluxcatch.uiLanguage.v1";
+let workerLanguagePreference = "auto";
+let workerLanguageChanged = false;
+
+function chromeUiLanguage() {
+  try { return globalThis.chrome?.i18n?.getUILanguage?.() || "zh-CN"; } catch { return "zh-CN"; }
+}
+
+function normalizeLanguagePreference(value) {
+  return value === "en" || value === "zh" || value === "auto" ? value : "auto";
+}
+
+/** "en" | "zh": the preference, or Chrome's UI language on Auto. */
+function workerLanguage() {
+  if (workerLanguagePreference === "en" || workerLanguagePreference === "zh") return workerLanguagePreference;
+  return /^zh/i.test(chromeUiLanguage()) ? "zh" : "en";
+}
+
+/** BCP 47 tag for Intl: Chrome's own English variant when it is English, else zh-CN. */
+function workerLocale() {
+  if (workerLanguage() === "zh") return "zh-CN";
+  const chromeLanguage = chromeUiLanguage();
+  return /^en\b/i.test(chromeLanguage) ? chromeLanguage : "en";
+}
+
+/** A worker.* string in the UI language (English fallback, then the key). */
+function workerText(key, params = {}) {
+  const table = workerLanguage() === "en" ? workerMessages.en : workerMessages.zh;
+  const entry = Object.hasOwn(table, key) ? table[key] : workerMessages.en[key];
+  if (entry === undefined) return key;
+  return typeof entry === "function" ? entry({ ...params, locale: workerLocale() }) : entry;
+}
+
+// The fallback title for media with no readable name, in both languages. A
+// candidate whose title is one of these was named by the worker, so pages
+// get it in the current UI language (withoutManifestText) and a rename pass
+// never keeps it as a real title (readableTitle).
+const UNTITLED_MEDIA_TITLES = new Set([workerMessages.en["worker.untitledMedia"], workerMessages.zh["worker.untitledMedia"]]);
+
+// "Show in Finder" on macOS, "Show in folder" elsewhere (design review §7).
+let workerPlatformIsMac = null;
+async function isMacPlatform() {
+  if (workerPlatformIsMac !== null) return workerPlatformIsMac;
   try {
-    setUiLanguage(resolveUiLanguage(await loadUiLanguage()));
-  } catch { /* zh fallback until the preference is readable */ }
+    const info = await chrome.runtime.getPlatformInfo?.();
+    if (info?.os) return (workerPlatformIsMac = info.os === "mac");
+  } catch { /* fall back to the user agent below */ }
+  return /\bMac/.test(String(globalThis.navigator?.userAgent || ""));
+}
+
+const workerLanguageReady = (async () => {
+  try {
+    const stored = await chrome.storage?.local?.get?.(UI_LANGUAGE_STORAGE_KEY);
+    // A change that arrived while this read was pending is newer.
+    if (!workerLanguageChanged) workerLanguagePreference = normalizeLanguagePreference(stored?.[UI_LANGUAGE_STORAGE_KEY]);
+  } catch { /* Auto until the preference is readable. */ }
 })();
+
 chrome.storage?.onChanged?.addListener((changes, area) => {
-  if (area === "local" && changes[UI_LANGUAGE_STORAGE_KEY]) {
-    setUiLanguage(resolveUiLanguage(changes[UI_LANGUAGE_STORAGE_KEY].newValue));
-  }
+  if (area !== "local" || !changes?.[UI_LANGUAGE_STORAGE_KEY]) return;
+  workerLanguageChanged = true;
+  workerLanguagePreference = normalizeLanguagePreference(changes[UI_LANGUAGE_STORAGE_KEY].newValue);
+  // Tooltips already set on the toolbar button follow the new language, on
+  // every open tab: a tab with no media still carries a "none" tooltip.
+  void refreshDownloadBadges({ allTabs: true });
 });
+
+// ---------------------------------------------------------------------------
+// Coded errors (design review §7)
+//
+// An error the worker answers a page with travels as a failure code plus
+// params from lib/job-failure.js, next to the legacy `error` text. The code
+// sits in failureCode (not `code`, which network-policy.js uses for its own
+// reasons and startDownload reads as "rethrow").
+const FAILURE_CODE_SET = new Set(FAILURE_CODES);
+
+function codedError(code, message, params) {
+  const error = new Error(message);
+  error.failureCode = code;
+  if (params) error.failureParams = params;
+  return error;
+}
+
+// lib/network-policy.js reasons (error.code) as failure codes.
+function networkPolicyFailure(error) {
+  const reason = typeof error?.code === "string" ? error.code : "";
+  if (!/^[a-z_]+$/.test(reason)) return null;
+  const host = (/https?:\/\/(\[[0-9a-f:.]+\]|[^/\s:?#（]+)/i.exec(String(error?.message || "")) || [])[1];
+  if (reason === "blocked_private" || reason === "blocked_local_name") return jobFailure("private_network_blocked", { host });
+  if (reason.startsWith("blocked_")) return jobFailure("address_blocked", { host });
+  if (["invalid_url", "invalid_scheme", "embedded_credentials"].includes(reason)) return jobFailure("invalid_address");
+  if (reason.startsWith("invalid_")) return jobFailure("internal_error");
+  if (/not_allowlisted$|^automatic_probe_|^page_hint_|^download_requires_/.test(reason)) return jobFailure("download_not_allowed");
+  return null;
+}
+
+/** { code, params } for an error: its own code, a policy reason, else its text classified. */
+function failureForError(error) {
+  if (FAILURE_CODE_SET.has(error?.failureCode)) return jobFailure(error.failureCode, error.failureParams);
+  const policy = networkPolicyFailure(error);
+  if (policy) return policy;
+  return classifyJobFailure({ text: typeof error === "string" ? error : String(error?.message || "") });
+}
 
 const HOST_NAME = "io.github.blanchot_alice.fluxcatch";
 const NATIVE_API_BINDING_WAIT_MS = 500;
@@ -507,14 +611,21 @@ chrome.runtime.onConnect.addListener((port) => {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   handleMessage(message, sender)
     .then((result) => sendResponse({ ok: true, ...result }))
-    .catch((error) => {
-      const response = { ok: false, error: error?.message || String(error) };
-      const jobId = cleanText(error?.jobId, 128);
-      if (jobId) response.jobId = jobId;
-      sendResponse(response);
-    });
+    .catch((error) => sendResponse(errorResponse(error)));
   return true;
 });
+
+// { ok: false, error, code, params, jobId? }. Pages describe a failure only
+// from code and params (lib/job-failure.js FAILURE_CODES) through
+// ui/v2/errors.js; `error` is the worker's raw text, kept for classification
+// and diagnostics, never shown.
+function errorResponse(error) {
+  const failure = failureForError(error);
+  const response = { ok: false, error: error?.message || String(error), code: failure.code, params: failure.params };
+  const jobId = cleanText(error?.jobId, 128);
+  if (jobId) response.jobId = jobId;
+  return response;
+}
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   invalidateBilibiliTabGeneration(tabId);
@@ -614,7 +725,7 @@ async function refreshCachedSiteCandidates(tabId) {
 }
 
 async function handleMessage(message, sender) {
-  if (!message || typeof message.type !== "string") throw new Error("消息格式无效");
+  if (!message || typeof message.type !== "string") throw codedError("invalid_request", "消息格式无效");
   const earlyContentSender = CONTENT_MESSAGE_TYPES.has(message.type) && isContentSender(sender);
   const contentRoute = earlyContentSender ? {
     tabId: sender.tab.id,
@@ -627,10 +738,13 @@ async function handleMessage(message, sender) {
     && tabGenerations.get(contentRoute.tabId) === contentRoute.generation
   );
   await sessionReady;
+  // Labels built while answering (quality names, fallback titles) use the
+  // stored language, never Auto from before the preference was read.
+  await workerLanguageReady;
   const fromContent = isContentSender(sender);
   const fromExtensionPage = isExtensionPage(sender);
   if (CONTENT_MESSAGE_TYPES.has(message.type) ? !fromContent : !fromExtensionPage) {
-    throw new Error("消息来源未通过校验");
+    throw codedError("invalid_request", "消息来源未通过校验");
   }
   switch (message.type) {
     case "CONTENT_PLAYBACK_HINT": {
@@ -802,7 +916,8 @@ async function handleMessage(message, sender) {
           const result = await startDownload(candidate, message.options || {}, tabId, { surface: surfaceFromSender(sender) });
           results.push({ id: cleanText(reference?.id, 64), ok: true, jobId: result.jobId, method: result.method });
         } catch (error) {
-          results.push({ id: cleanText(reference?.id, 64), ok: false, error: error?.message || String(error) });
+          const { ok, ...failed } = errorResponse(error);
+          results.push({ id: cleanText(reference?.id, 64), ok, ...failed });
         }
       }
       const started = results.filter((item) => item.ok).length;
@@ -849,7 +964,7 @@ async function handleMessage(message, sender) {
       return recoverNativeMessagingApi();
     case "CANCEL_JOB": {
       const jobId = cleanText(message.jobId, 128);
-      if (!jobId) throw new Error("任务编号无效");
+      if (!jobId) throw codedError("invalid_request", "任务编号无效");
       const job = jobs.get(jobId);
       if (job?.method === "browser" && Number.isInteger(job.downloadId)) {
         browserCancellationRequested.add(job.downloadId);
@@ -897,7 +1012,7 @@ async function handleMessage(message, sender) {
       return { settings };
     }
     default:
-      throw new Error(`Unknown message type: ${message.type}`);
+      throw codedError("invalid_request", `Unknown message type: ${message.type}`);
   }
 }
 
@@ -905,7 +1020,7 @@ function dashPairProbeForUi(candidate) {
   const now = Date.now();
   const site = candidate?.site === "generic" ? "generic" : "bilibili";
   const enforceWindow = site !== "generic";
-  if (!isFreshBilibiliCandidate(candidate, now)) throw new Error("视频清晰度地址已过期，请重新扫描页面");
+  if (!isFreshBilibiliCandidate(candidate, now)) throw codedError("link_expired", "视频清晰度地址已过期，请重新扫描页面");
   const audios = (candidate.audioTracks || []).filter((track) => isFreshBilibiliTrack(track, now, site));
   const ranked = (candidate.videoTracks || [])
     .filter((track) => isFreshBilibiliTrack(track, now, site))
@@ -925,8 +1040,10 @@ function dashPairProbeForUi(candidate) {
       url: dashPairTrackSelector(candidate, track),
       id: cleanText(track.representationId, 32) || (site === "generic" ? `rendition-${index + 1}` : ""),
       // Generic renditions have no resolution metadata, so the dialog shows a
-      // readable rank plus the observed object size instead of "清晰度 N".
-      name: site === "generic" ? `画质 ${index + 1} · ${humanBytes(track.contentLength)}` : "",
+      // readable rank plus the observed object size, in the UI language;
+      // rank and bytes let pages build their own label.
+      name: site === "generic" ? workerText("worker.qualityRank", { rank: index + 1, size: formatBytes(track.contentLength, workerLocale()) }) : "",
+      ...(site === "generic" ? { rank: index + 1, bytes: positive(track.contentLength) || 0 } : {}),
       bandwidth: positive(track.bandwidth) || 0,
       width: positive(track.width),
       height: positive(track.height),
@@ -2424,6 +2541,7 @@ function readableTitle(value) {
   const compact = title.replace(/[^\p{L}\p{N}]/gu, "");
   const lower = title.toLowerCase();
   if (/^(?:index|master|playlist|manifest|media|video|audio|stream|asset|file|delivery)(?:[- _]?\d+)?$/i.test(title)) return "";
+  if (UNTITLED_MEDIA_TITLES.has(title)) return "";
   if (/^[a-f0-9]{12,}$/i.test(compact) || /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(lower)) return "";
   const digits = (compact.match(/\p{N}/gu) || []).length;
   const asciiToken = /^[a-z0-9-]+$/i.test(title) && !/[\s_-]/.test(title);
@@ -2441,7 +2559,7 @@ function candidateNaming({ kind, ext, url, inputTitle, previousTitle, pageTitle,
     pageTitle,
     previousTitle,
     urlName
-  ].map(readableTitle).find(Boolean) || "媒体";
+  ].map(readableTitle).find(Boolean) || workerText("worker.untitledMedia");
   const outputExt = ["hls", "dash", "dash_pair"].includes(kind) ? "mp4" : ext || (kind === "audio" ? "m4a" : "mp4");
   return {
     title,
@@ -2891,7 +3009,7 @@ function selectHlsGroupTracks(candidate, resolvedVariantUrl) {
   if (typeof resolvedVariantUrl === "string" && resolvedVariantUrl.trim()) {
     video = variants.find((variant) => variant.url === resolvedVariantUrl
       || variant.selector === resolvedVariantUrl) || null;
-    if (!video) throw new Error("所选清晰度已失效，请重新读取清晰度");
+    if (!video) throw codedError("quality_unavailable", "所选清晰度已失效，请重新读取清晰度");
   }
   if (!video) video = variants[0];
   const audios = Array.isArray(candidate?.audioCandidates)
@@ -2958,7 +3076,7 @@ async function inspectManifestCandidate(tabId, key) {
 
 async function inspectHlsThroughNative(tabId, candidate, options = {}) {
   const url = canonicalizeUrl(candidate?.url);
-  if (!url) throw new Error("清单地址无效");
+  if (!url) throw codedError("invalid_address", "清单地址无效");
   // The native engine must never become a private-network side door: the
   // playlist URL passes the same policy gate the extension fetch used.
   requireNetworkRequest({
@@ -2974,7 +3092,7 @@ async function inspectHlsThroughNative(tabId, candidate, options = {}) {
     : {};
   const result = await inspectHlsViaNative(url, headers);
   const manifestText = typeof result.text === "string" && result.text.length <= 1_500_000 ? result.text : null;
-  if (!manifestText) throw new Error("媒体清单超出大小限制");
+  if (!manifestText) throw codedError("stream_too_large", "媒体清单超出大小限制");
   candidate.manifestText = manifestText;
   const settings = await getSettings();
   const inspection = await probeManifest(candidate, {
@@ -3217,7 +3335,7 @@ async function probeCandidateTrackHints(tabId, key) {
 
 async function probeManifest(candidate, options = {}) {
   const url = canonicalizeUrl(candidate?.url);
-  if (!url) throw new Error("清单地址无效");
+  if (!url) throw codedError("invalid_address", "清单地址无效");
   let text = typeof candidate.manifestText === "string" ? candidate.manifestText : "";
   let manifestUrl = url;
   if (!text) {
@@ -3240,7 +3358,7 @@ async function probeManifest(candidate, options = {}) {
       });
       if (!response.ok) throw new Error(`Manifest HTTP ${response.status}`);
       const length = Number(response.headers.get("content-length") || 0);
-      if (length > MAX_MANIFEST_BYTES) throw new Error("媒体清单超出大小限制");
+      if (length > MAX_MANIFEST_BYTES) throw codedError("stream_too_large", "媒体清单超出大小限制");
       if (response.url && response.url !== allowedUrl) {
         manifestUrl = requireNetworkRequest({
           url: response.url,
@@ -3255,14 +3373,15 @@ async function probeManifest(candidate, options = {}) {
       // A hung first connection used to block the dialog forever with no
       // explanation. Surface a diagnosable message instead of an AbortError.
       if (controller?.signal.aborted && (error?.name === "AbortError" || /abort/i.test(error?.message || ""))) {
-        throw new Error(`读取媒体清单超时（${Math.round(Number(options.timeoutMs) / 1000)} 秒无响应）`);
+        const seconds = Math.round(Number(options.timeoutMs) / 1000);
+        throw codedError("playlist_timeout", `读取媒体清单超时（${seconds} 秒无响应）`, { seconds });
       }
       throw error;
     } finally {
       if (timeout !== null) clearTimeout(timeout);
     }
   }
-  if (text.length > MAX_MANIFEST_BYTES) throw new Error("媒体清单超出大小限制");
+  if (text.length > MAX_MANIFEST_BYTES) throw codedError("stream_too_large", "媒体清单超出大小限制");
   const manifestByteLength = new TextEncoder().encode(text).byteLength;
   if (candidate.kind === "dash" || /<MPD\b/i.test(text)) {
     const dash = { kind: "dash", manifestUrl, manifestByteLength, ...parseDash(text, manifestUrl) };
@@ -3302,7 +3421,7 @@ async function readResponseTextLimited(response, maxBytes) {
   const reader = response.body?.getReader?.();
   if (!reader) {
     const text = await response.text();
-    if (new TextEncoder().encode(text).byteLength > maxBytes) throw new Error("媒体清单超出大小限制");
+    if (new TextEncoder().encode(text).byteLength > maxBytes) throw codedError("stream_too_large", "媒体清单超出大小限制");
     return text;
   }
   const decoder = new TextDecoder();
@@ -3315,7 +3434,7 @@ async function readResponseTextLimited(response, maxBytes) {
       bytes += value.byteLength;
       if (bytes > maxBytes) {
         await reader.cancel();
-        throw new Error("媒体清单超出大小限制");
+        throw codedError("stream_too_large", "媒体清单超出大小限制");
       }
       text += decoder.decode(value, { stream: true });
     }
@@ -3352,12 +3471,12 @@ function resolveManifestVariantSelector(candidate, value) {
   if (typeof value !== "string" || !value.trim()) return null;
   const selector = canonicalizeUrl(value);
   if (!selector || !selector.startsWith(`${MANIFEST_SELECTOR_ORIGIN}/manifest/`)) {
-    throw new Error("所选清晰度无效，请重新读取清晰度");
+    throw codedError("quality_unavailable", "所选清晰度无效，请重新读取清晰度");
   }
   const selected = candidate?.manifestVariantSelectors instanceof Map
     ? candidate.manifestVariantSelectors.get(selector)
     : null;
-  if (!selected) throw new Error("所选清晰度已失效，请重新读取清晰度");
+  if (!selected) throw codedError("quality_unavailable", "所选清晰度已失效，请重新读取清晰度");
   return selected;
 }
 
@@ -3388,13 +3507,13 @@ function resolveDashRepresentationSelector(candidate, value) {
   if (typeof value !== "string" || !value.trim()) return null;
   const selector = canonicalizeUrl(value);
   if (!selector || !selector.startsWith(`${MANIFEST_SELECTOR_ORIGIN}/dash/`)) {
-    throw new Error("所选 DASH 清晰度无效，请重新读取清晰度");
+    throw codedError("quality_unavailable", "所选 DASH 清晰度无效，请重新读取清晰度");
   }
   const index = candidate?.dashRepresentationSelectors instanceof Map
     ? candidate.dashRepresentationSelectors.get(selector)
     : null;
   if (!Number.isSafeInteger(index) || index < 0) {
-    throw new Error("所选 DASH 清晰度已失效，请重新读取清晰度");
+    throw codedError("quality_unavailable", "所选 DASH 清晰度已失效，请重新读取清晰度");
   }
   return index;
 }
@@ -3505,6 +3624,13 @@ function probeForUi(probe, candidate) {
   };
 }
 
+function hlsUnsupportedCode(probe) {
+  if (probe?.protection === "drm" || probe?.protected) return "drm_protected";
+  if (probe?.type === "media" && probe?.live) return "stream_live";
+  if (probe?.discontinuity) return "stream_discontinuous";
+  return "stream_unsupported";
+}
+
 function hlsUnsupportedReason(probe) {
   if (probe?.kind !== "hls") return null;
   if (probe.protection === "drm" || probe.protected) return "检测到 DRM/SAMPLE-AES 内容保护，仅显示媒体信息";
@@ -3521,17 +3647,17 @@ function selectDashPairTracks(candidate, requestedVariant) {
   const now = Date.now();
   const site = candidate?.site === "generic" ? "generic" : "bilibili";
   const enforceWindow = site !== "generic";
-  if (!isFreshBilibiliCandidate(candidate, now)) throw new Error("视频清晰度地址已过期，请重新扫描页面");
+  if (!isFreshBilibiliCandidate(candidate, now)) throw codedError("link_expired", "视频清晰度地址已过期，请重新扫描页面");
   const videos = (candidate.videoTracks || []).filter((track) => isFreshBilibiliTrack(track, now, site));
   const audios = (candidate.audioTracks || []).filter((track) => isFreshBilibiliTrack(track, now, site));
-  if (!videos.length || !audios.length) throw new Error("视频清晰度地址已过期，请重新扫描页面");
+  if (!videos.length || !audios.length) throw codedError("link_expired", "视频清晰度地址已过期，请重新扫描页面");
 
   let video = videos.find((track) => track.trackId === candidate.selectedVideoTrackId) || null;
   const requested = typeof requestedVariant === "string" && requestedVariant.trim() ? canonicalizeUrl(requestedVariant) : null;
-  if (typeof requestedVariant === "string" && requestedVariant.trim() && !requested) throw new Error("所选清晰度无效，请重新选择");
+  if (typeof requestedVariant === "string" && requestedVariant.trim() && !requested) throw codedError("quality_unavailable", "所选清晰度无效，请重新选择");
   if (requested) {
     video = videos.find((track) => dashPairTrackSelector(candidate, track) === requested) || null;
-    if (!video) throw new Error("所选清晰度已失效，请重新读取清晰度");
+    if (!video) throw codedError("quality_unavailable", "所选清晰度已失效，请重新读取清晰度");
   }
   if (!video) {
     video = videos.slice().sort((a, b) => Number(b.height || 0) - Number(a.height || 0)
@@ -3546,9 +3672,9 @@ function selectDashPairTracks(candidate, requestedVariant) {
       || Number(b.bandwidth || 0) - Number(a.bandwidth || 0)
       || Number(b.lastSeen || 0) - Number(a.lastSeen || 0))[0];
   }
-  if (!video || !audio || video.url === audio.url) throw new Error("未找到可配对的音轨，请重新扫描页面");
+  if (!video || !audio || video.url === audio.url) throw codedError("audio_track_missing", "未找到可配对的音轨，请重新扫描页面");
   const expiresAt = Math.min(Number(candidate.expiresAt || Number.POSITIVE_INFINITY), bilibiliTrackExpiresAt(video), bilibiliTrackExpiresAt(audio));
-  if (!Number.isFinite(expiresAt) || expiresAt <= now) throw new Error("视频清晰度地址已过期，请重新扫描页面");
+  if (!Number.isFinite(expiresAt) || expiresAt <= now) throw codedError("link_expired", "视频清晰度地址已过期，请重新扫描页面");
   return { video, audio, expiresAt };
 }
 
@@ -3602,12 +3728,12 @@ function dashPairHeaders(tabId, url) {
 
 async function startDownload(candidate, options, tabId, context = {}) {
   let url = canonicalizeUrl(candidate?.url);
-  if (!url) throw new Error("媒体地址无效");
+  if (!url) throw codedError("invalid_address", "媒体地址无效");
   let dashPair = candidate.kind === "dash_pair" ? selectDashPairTracks(candidate, options.variantUrl) : null;
   if (dashPair) url = dashPair.video.url;
   // YouTube downloads only ever reach this branch through the explicit
   // experimental opt-in; the page URL is handed to the local yt-dlp engine.
-  if (isPolicyBlocked(url, candidate?.tabUrl) && candidate?.kind !== "youtube") throw new Error("商店版本不支持从此平台下载");
+  if (isPolicyBlocked(url, candidate?.tabUrl) && candidate?.kind !== "youtube") throw codedError("site_not_supported", "商店版本不支持从此平台下载");
   const settings = await getSettings();
   const networkScope = networkScopeForSettings(settings);
   url = requireNetworkRequest({
@@ -3627,7 +3753,7 @@ async function startDownload(candidate, options, tabId, context = {}) {
     });
   }
   if (matchesBlockedDomain(url, settings.blockedDomains) || matchesBlockedDomain(candidate?.tabUrl, settings.blockedDomains)) {
-    throw new Error("该域名已在 FluxCatch 设置中被忽略");
+    throw codedError("site_ignored", "该域名已在 FluxCatch 设置中被忽略");
   }
   const opts = normalizeDownloadOptions(options, settings);
   if (candidate.kind === "hls" || candidate.kind === "dash") {
@@ -3640,11 +3766,11 @@ async function startDownload(candidate, options, tabId, context = {}) {
       });
       const unsupportedHls = hlsUnsupportedReason(inspection);
       if (unsupportedHls) {
-        const error = new Error(unsupportedHls);
+        const error = codedError(hlsUnsupportedCode(inspection), unsupportedHls);
         error.code = "HLS_UNSUPPORTED";
         throw error;
       }
-      if (inspection.protected) throw new Error("检测到 DRM 内容保护，仅显示媒体信息");
+      if (inspection.protected) throw codedError("drm_protected", "检测到 DRM 内容保护，仅显示媒体信息");
       probeForUi(inspection, candidate);
     } catch (error) {
       if (error?.code || /DRM|内容保护|网络策略/i.test(error?.message || "")) throw error;
@@ -3655,7 +3781,7 @@ async function startDownload(candidate, options, tabId, context = {}) {
   const preDispatchCandidate = requireTabCandidate(tabId, candidate);
   if (preDispatchCandidate.kind !== candidate.kind
     || (candidate.kind !== "dash_pair" && canonicalizeUrl(preDispatchCandidate.url) !== canonicalizeUrl(candidate.url))) {
-    throw new Error("该媒体候选项已更新，请重新选择后下载");
+    throw codedError("media_stale", "该媒体候选项已更新，请重新选择后下载");
   }
   candidate = preDispatchCandidate;
   const pageTitle = candidate.pageTitle || candidate.title || "media";
@@ -3746,17 +3872,17 @@ async function startDownload(candidate, options, tabId, context = {}) {
     return { method: "browser", downloadId: id, jobId };
   }
 
-  if (!await hasNativePermission()) throw new Error("需要授权连接本地引擎，才能使用此下载模式");
+  if (!await hasNativePermission()) throw codedError("engine_not_set_up", "需要授权连接本地引擎，才能使用此下载模式");
   // If this is the first native action after the permission grant, the worker
   // may have to reload itself to obtain the API; remember what to continue.
   noteNativeIntent({ surface: context.surface || null, pendingDownload: pendingDownloadRecord(candidate, options, tabId) });
   const port = await ensureNativePort();
   if (candidate.kind === "youtube" && ytdlpNetworkDisabled()) {
-    throw new Error("0.2.5 暂停外部引擎联网，等待受控网络代理");
+    throw codedError("external_tool_disabled", "0.2.5 暂停外部引擎联网，等待受控网络代理");
   }
   const finalCandidate = requireTabCandidate(tabId, candidate);
   if (!dashPair && (finalCandidate.kind !== candidate.kind || canonicalizeUrl(finalCandidate.url) !== canonicalizeUrl(candidate.url))) {
-    throw new Error("该媒体候选项已更新，请重新选择后下载");
+    throw codedError("media_stale", "该媒体候选项已更新，请重新选择后下载");
   }
   candidate = finalCandidate;
   if (dashPair) {
@@ -3782,7 +3908,7 @@ async function startDownload(candidate, options, tabId, context = {}) {
     if (isPolicyBlocked(url, candidate?.tabUrl)
       || matchesBlockedDomain(url, settings.blockedDomains)
       || matchesBlockedDomain(candidate?.tabUrl, settings.blockedDomains)) {
-      throw new Error("该域名已在 FluxCatch 设置中被忽略");
+      throw codedError("site_ignored", "该域名已在 FluxCatch 设置中被忽略");
     }
   }
   // The native host receives the selected rendition playlist directly; a media
@@ -3794,7 +3920,7 @@ async function startDownload(candidate, options, tabId, context = {}) {
   if (hlsGroupPair && [nativeHlsUrl, nativeAudioUrl].some((trackUrl) =>
     isPolicyBlocked(trackUrl, candidate?.tabUrl)
     || matchesBlockedDomain(trackUrl, settings.blockedDomains))) {
-    throw new Error("该域名已在 FluxCatch 设置中被忽略");
+    throw codedError("site_ignored", "该域名已在 FluxCatch 设置中被忽略");
   }
   const jobId = crypto.randomUUID();
   rememberJobSource(jobId, { candidate, tabId, options, pageTitle });
@@ -3826,19 +3952,19 @@ async function startDownload(candidate, options, tabId, context = {}) {
   try {
     if (hlsGroupPair) {
       const currentCandidate = requireTabCandidate(tabId, candidate);
-      if (currentCandidate !== candidate) throw new Error("所选清晰度已更新，请重新开始下载");
+      if (currentCandidate !== candidate) throw codedError("selection_changed", "所选清晰度已更新，请重新开始下载");
       const finalPair = selectHlsGroupTracks(currentCandidate, requestedVariantUrl);
       if (finalPair.videoUrl !== hlsGroupPair.videoUrl || finalPair.audioUrl !== hlsGroupPair.audioUrl) {
-        throw new Error("所选清晰度已更新，请重新开始下载");
+        throw codedError("selection_changed", "所选清晰度已更新，请重新开始下载");
       }
       hlsGroupPair = finalPair;
     }
     if (dashPair) {
       const currentCandidate = requireTabCandidate(tabId, candidate);
-      if (currentCandidate !== candidate) throw new Error("视频清晰度地址已更新，请重新开始下载");
+      if (currentCandidate !== candidate) throw codedError("selection_changed", "视频清晰度地址已更新，请重新开始下载");
       const finalPair = selectDashPairTracks(currentCandidate, options.variantUrl);
       if (finalPair.video.url !== dashPair.video.url || finalPair.audio.url !== dashPair.audio.url) {
-        throw new Error("视频清晰度地址已更新，请重新开始下载");
+        throw codedError("selection_changed", "视频清晰度地址已更新，请重新开始下载");
       }
       dashPair = finalPair;
     }
@@ -3876,7 +4002,10 @@ async function startDownload(candidate, options, tabId, context = {}) {
     jobHeaderKeys.delete(jobId);
     scheduleHeaderPrune();
     await mergeJob(jobId, { status: "failed", message: error?.message || "本地引擎未接收任务", error: error?.message, speed: 0 });
-    const dispatchError = new Error(error?.message || "本地引擎未接收任务");
+    const dispatchFailure = failureForError(error);
+    const dispatchError = dispatchFailure.code === "unknown"
+      ? codedError("engine_rejected", error?.message || "本地引擎未接收任务")
+      : codedError(dispatchFailure.code, error?.message || "本地引擎未接收任务", dispatchFailure.params);
     dispatchError.jobId = jobId;
     throw dispatchError;
   }
@@ -3907,11 +4036,11 @@ async function ensureNativePort({ requireCompatibility = true } = {}) {
 }
 
 async function openNativePort() {
-  if (!await hasNativePermission()) throw new Error("尚未授权连接本地引擎");
+  if (!await hasNativePermission()) throw codedError("engine_not_set_up", "尚未授权连接本地引擎");
   if (!await waitForNativeMessagingApi()) {
     if (await attemptNativeApiSelfHeal()) {
       hostStatus = disconnectedHostStatus({ failureReason: "api_unavailable", lastError: NATIVE_API_SELF_HEAL_MESSAGE, selfHealing: true });
-      throw new Error(NATIVE_API_SELF_HEAL_MESSAGE);
+      throw codedError("engine_finishing_setup", NATIVE_API_SELF_HEAL_MESSAGE);
     }
     const marker = await readNativeApiRecoveryMarker();
     const message = marker?.phase === "restart_required"
@@ -3922,7 +4051,7 @@ async function openNativePort() {
       lastError: message,
       restartRequired: marker?.phase === "restart_required"
     });
-    throw new Error(message);
+    throw codedError(marker?.phase === "restart_required" ? "engine_restart_needed" : "engine_finishing_setup", message);
   }
   // The binding itself is the recovery signal. Clear stale waiting/terminal
   // guidance before attempting the host so every recheck converges in one
@@ -3932,7 +4061,7 @@ async function openNativePort() {
   // Chrome to expose connectNative. Never connect on a stale permission read.
   if (!await hasNativePermission()) {
     hostStatus = disconnectedHostStatus({ needsPermission: true });
-    throw new Error("尚未授权连接本地引擎");
+    throw codedError("engine_not_set_up", "尚未授权连接本地引擎");
   }
   let port;
   try {
@@ -3940,7 +4069,7 @@ async function openNativePort() {
   } catch (error) {
     const failure = nativeConnectionFailure(error);
     hostStatus = disconnectedHostStatus(failure);
-    throw new Error(failure.lastError);
+    throw nativeConnectionError(failure);
   }
   nativePort = port;
   port.onMessage.addListener((message) => {
@@ -3973,9 +4102,9 @@ async function openNativePort() {
   });
   port.onDisconnect.addListener(() => {
     const failure = nativeConnectionFailure(chrome.runtime.lastError?.message || "");
-    rejectHostPings(port, new Error(failure.lastError));
-    rejectHostInspects(port, new Error(failure.lastError));
-    rejectHostFileActions(port, new Error(failure.lastError));
+    rejectHostPings(port, nativeConnectionError(failure));
+    rejectHostInspects(port, nativeConnectionError(failure));
+    rejectHostFileActions(port, nativeConnectionError(failure));
     if (nativePort !== port) return;
     nativePort = null;
     hostStatus = disconnectedHostStatus(failure);
@@ -4148,7 +4277,7 @@ async function handleNativePermissionRemoved() {
   const port = nativePort;
   nativePort = null;
   hostStatus = disconnectedHostStatus({ needsPermission: true });
-  rejectHostPings(port, new Error("本地下载引擎权限已关闭"));
+  rejectHostPings(port, codedError("engine_permission_off", "本地下载引擎权限已关闭"));
   try { port?.disconnect?.(); } catch { /* The port may already be closed. */ }
   await clearNativeApiRecoveryMarker();
   await clearNativeApiSelfHealMarker();
@@ -4367,22 +4496,37 @@ async function notifySelfHealOutcome({ connected, resumed, pendingDownload }) {
   let granted = false;
   try { granted = await chrome.permissions.contains({ permissions: ["notifications"] }); } catch { granted = false; }
   if (!granted || typeof chrome.notifications?.create !== "function") return;
-  const filename = cleanText(pendingDownload?.filename, 120);
-  const detail = !connected
-    ? "引擎重新加载后仍未连接；请打开设置页重新检查"
+  await workerLanguageReady;
+  // Not connected after the permission was granted is a connection problem;
+  // without the permission the engine is simply not set up.
+  let permitted = false;
+  if (!connected) {
+    try { permitted = await hasNativePermission(); } catch { permitted = false; }
+  }
+  const filename = pendingDownload?.filename ? displayFilename(cleanText(pendingDownload.filename, 120)) : "";
+  const detail = workerText(!connected
+    ? "worker.notify.engineNotReadyBody"
     : resumed?.resumed
-      ? "已自动继续刚才的下载"
+      ? "worker.notify.resumed"
       : pendingDownload
-        ? "连接已就绪；请回到页面重新点击下载"
-        : "连接已就绪，可以继续下载";
+        ? "worker.notify.downloadAgain"
+        : "worker.notify.readyToDownload");
   try {
-    await chrome.notifications.create(`fluxcatch:self-heal:${Date.now()}`, {
+    // The ":setup" suffix routes a click (body or button) to Settings.
+    await chrome.notifications.create(`fluxcatch:self-heal:${Date.now()}${connected ? "" : ":setup"}`, {
       type: "basic",
       iconUrl: chrome.runtime.getURL("icons/icon128.png"),
-      title: connected ? tr("FluxCatch 本地下载引擎已连接") : tr("FluxCatch 本地下载引擎未连接"),
-      message: resumed?.resumed && filename ? `${tr(detail)}\n${filename}` : tr(detail)
+      title: workerText(connected
+        ? "worker.notify.engineReadyTitle"
+        : permitted ? "worker.notify.engineNotConnectedTitle" : "worker.notify.engineNotReadyTitle"),
+      message: resumed?.resumed && filename ? `${filename}\n${detail}` : detail,
+      ...(connected ? {} : { buttons: [{ title: workerText("worker.notify.setUp") }] })
     });
   } catch { /* Notifications can be disabled by browser policy. */ }
+}
+
+function nativeConnectionError(failure) {
+  return codedError(failure.failureReason === "host_missing" ? "engine_missing" : "engine_unreachable", failure.lastError);
 }
 
 function nativeConnectionFailure(error) {
@@ -4403,7 +4547,7 @@ function pingNativePort(port) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       pendingHostPings.delete(requestId);
-      reject(new Error("本地引擎响应超时"));
+      reject(codedError("engine_not_responding", "本地引擎响应超时"));
     }, 5_000);
     pendingHostPings.set(requestId, { port, resolve, reject, timer });
     try {
@@ -4423,12 +4567,12 @@ const pendingHostInspects = new Map();
 
 function inspectHlsViaNative(url, headers, timeoutMs = 12_000) {
   const port = nativePort;
-  if (!port) return Promise.reject(new Error("本地下载引擎未连接"));
+  if (!port) return Promise.reject(codedError("engine_unreachable", "本地下载引擎未连接"));
   const requestId = crypto.randomUUID();
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       pendingHostInspects.delete(requestId);
-      reject(new Error("本地引擎读取播放列表超时"));
+      reject(codedError("playlist_timeout", "本地引擎读取播放列表超时"));
     }, timeoutMs);
     pendingHostInspects.set(requestId, { port, resolve, reject, timer });
     try {
@@ -4447,7 +4591,7 @@ function resolveHostInspect(requestId, message, port) {
   clearTimeout(pending.timer);
   pendingHostInspects.delete(requestId);
   if (message?.ok) pending.resolve({ text: String(message.text || ""), finalUrl: String(message.finalUrl || "") });
-  else pending.reject(new Error(String(message?.error || "本地引擎读取播放列表失败")));
+  else pending.reject(message?.error ? new Error(String(message.error)) : codedError("stream_invalid", "本地引擎读取播放列表失败"));
 }
 
 function rejectHostInspects(port, error) {
@@ -4587,7 +4731,7 @@ async function updateBrowserDownload(delta) {
 
 async function mergeJob(jobId, patch, { deferPersistence = false } = {}) {
   const safeId = cleanText(jobId, 128);
-  if (!safeId) throw new Error("任务编号无效");
+  if (!safeId) throw codedError("invalid_request", "任务编号无效");
   const now = Date.now();
   const old = jobs.get(safeId);
   const definedPatch = Object.fromEntries(Object.entries(patch || {}).filter(([, value]) => value !== undefined));
@@ -4625,28 +4769,32 @@ function nativeJobStatus(message) {
   return ({ complete: "completed", failed: "failed", cancelled: "cancelled", paused: "paused" })[message?.type] || null;
 }
 
+// A notification names the file (its base name only, user content) and says
+// what happened in the UI language: for a finished file the meta line of a
+// history row, for a failure the reason from lib/job-failure.js. Engine text,
+// links and folder names never reach it.
 async function maybeNotifyJob(job) {
   const status = job?.status;
   if (!job?.jobId || !["completed", "failed"].includes(status)) return;
   const settings = await getSettings();
   if (!settings.showNotifications) return;
+  await workerLanguageReady;
   const filename = displayFilename(job.filename);
   const presentation = jobPresentation(job);
-  const detail = status === "completed"
-    ? completionSummary(job, presentation)
-    : redactJobText(job.message || job.error, 240) || `${filename} 下载失败`;
+  const detail = status === "completed" ? completionSummary(job, presentation) : jobFailureText(job);
+  const revealKey = await isMacPlatform() ? "worker.notify.showInFinder" : "worker.notify.showInFolder";
   // Buttons lead straight to the file; the notification body does too.
   const buttons = status === "completed" && presentation.hasFile
-    ? [{ title: tr("在 Finder 中显示") }, { title: tr("打开") }]
+    ? [{ title: workerText(revealKey) }, { title: workerText("worker.notify.open") }]
     : status === "failed" && presentation.retryable
-      ? [{ title: tr("重试") }]
+      ? [{ title: workerText("worker.notify.retry") }]
       : [];
   try {
     await chrome.notifications.create(`fluxcatch:${job.jobId}:${status}`, {
       type: "basic",
       iconUrl: chrome.runtime.getURL("icons/icon128.png"),
-      title: status === "completed" ? tr("FluxCatch 下载完成") : tr("FluxCatch 下载失败"),
-      message: status === "completed" ? `${filename}\n${tr(detail)}` : tr(detail),
+      title: workerText(status === "completed" ? "worker.notify.completedTitle" : "worker.notify.failedTitle"),
+      message: detail ? `${filename}\n${detail}` : filename,
       ...(buttons.length ? { buttons } : {})
     });
   } catch {
@@ -4654,16 +4802,37 @@ async function maybeNotifyJob(job) {
   }
 }
 
-function completionSummary(job, presentation = jobPresentation(job)) {
-  const parts = [tr("已保存")];
-  const size = job.total || job.bytes || 0;
-  if (size > 0) parts.push(humanBytes(size));
-  if (presentation.media?.duration) parts.push(formatMediaDuration(presentation.media.duration));
-  if (presentation.media?.height) parts.push(`${presentation.media.height}p`);
-  return parts.join(" · ");
+/** The localised reason for a failed job, as a history row shows it. */
+function jobFailureText(job) {
+  const failure = classifyJobFailure({ text: job.error || job.message || "", status: job.status });
+  return describeJobFailure(failure, workerLanguage());
 }
 
+const MEDIA_FORMAT_NAMES = { mp4: "MP4", m4v: "MP4", m4a: "M4A", mp3: "MP3", webm: "WebM", mkv: "MKV", mov: "MOV", aac: "AAC", flac: "FLAC", wav: "WAV", ogg: "OGG", opus: "Opus", ts: "TS" };
+
+/** "MP4 · 1080p · 2.2 GB · 2:28", like a completed history row (ui/v2/rows.js completedMeta). */
+function completionSummary(job, presentation = jobPresentation(job)) {
+  const ext = (/\.([a-z0-9]{2,5})$/i.exec(job.filename || "") || [])[1]?.toLowerCase();
+  const container = String(presentation.media?.container || "").toLowerCase();
+  const height = Number(presentation.media?.height) || 0;
+  const duration = Number(presentation.media?.duration) || 0;
+  return [
+    MEDIA_FORMAT_NAMES[ext] || MEDIA_FORMAT_NAMES[container] || "",
+    height ? `${height}p` : "",
+    formatBytes(job.total || job.bytes || 0, workerLocale()),
+    duration ? formatMediaDuration(duration) : ""
+  ].filter(Boolean).join(" · ");
+}
+
+const ENGINE_SETTINGS_PATH = "options/options.html#local-engine";
+
 async function handleNotificationClick(notificationId, buttonIndex) {
+  if (/^fluxcatch:self-heal:\d+:setup$/.test(String(notificationId || ""))) {
+    // Every "Set up" opens Settings at the local engine section.
+    try { await chrome.tabs.create({ url: chrome.runtime.getURL(ENGINE_SETTINGS_PATH) }); } catch { /* the browser refused a new tab */ }
+    try { await chrome.notifications.clear(notificationId); } catch { /* already dismissed */ }
+    return;
+  }
   const match = /^fluxcatch:(.+):(completed|failed)$/.exec(String(notificationId || ""));
   if (!match) return;
   const [, jobId, status] = match;
@@ -4694,15 +4863,17 @@ async function updateBadge(tabId) {
   // names the running jobs and their overall percent.
   const active = activeDownloadSummary();
   const text = count ? String(Math.min(count, 99)) : "";
-  const color = active ? "#0A66D6" : count ? "#3A3A3C" : "#8E8E93";
+  await workerLanguageReady;
   const title = active
-    ? tr(`FluxCatch — 正在下载 ${active.count} 个任务 · ${active.percent}%`)
-    : tr(count ? `FluxCatch — 检测到 ${count} 个媒体` : "FluxCatch — 暂未检测到媒体");
+    ? workerText("worker.action.downloading", { count: active.count, fraction: active.percent / 100 })
+    : count ? workerText("worker.action.found", { count }) : workerText("worker.action.none");
+  // With no media the badge text is empty, so only two colours ever show.
+  const color = active ? BADGE_COLORS.active : BADGE_COLORS.idle;
   try {
     await chrome.action.setBadgeText({ tabId, text });
     await Promise.allSettled([
       chrome.action.setBadgeBackgroundColor({ tabId, color }),
-      chrome.action.setBadgeTextColor?.({ tabId, color: "#FFFFFF" }),
+      chrome.action.setBadgeTextColor?.({ tabId, color: BADGE_COLORS.text }),
       chrome.action.setTitle({ tabId, title })
     ]);
   } catch {
@@ -4731,10 +4902,10 @@ function scheduleDownloadBadgeRefresh() {
   downloadBadgeTimer?.unref?.();
 }
 
-async function refreshDownloadBadges() {
+async function refreshDownloadBadges({ allTabs = false } = {}) {
   const tabIds = new Set(tabMedia.keys());
   try {
-    for (const tab of await chrome.tabs.query?.({ active: true }) || []) {
+    for (const tab of await chrome.tabs.query?.(allTabs ? {} : { active: true }) || []) {
       if (Number.isInteger(tab?.id)) tabIds.add(tab.id);
     }
   } catch {
@@ -5276,7 +5447,7 @@ function historyRecordForUi(record) {
 
 async function removeHistoryRecord(jobId) {
   await historyReady;
-  if (!jobId) throw new Error("任务编号无效");
+  if (!jobId) throw codedError("invalid_request", "任务编号无效");
   const before = history.length;
   history = history.filter((item) => item.jobId !== jobId);
   rebuildHistoryIndex();
@@ -5319,25 +5490,34 @@ async function markHistoryFileMissing(jobId) {
   if (job) broadcast({ type: "JOB_UPDATED", job: jobForUi(job) });
 }
 
+// The engine answers a file action in English; pages get one coded error.
 function friendlyFileActionError(error) {
+  // The worker's own engine errors (missing, unreachable, finishing setup,
+  // restart needed, not responding …) already name what is wrong.
+  if (FAILURE_CODE_SET.has(error?.failureCode) && /^engine_/.test(error.failureCode)) return error;
   const text = String(error?.message || error || "");
-  if (/no longer exists/i.test(text)) return "文件已不在下载文件夹中";
-  if (/outside the download folder|not a regular file|Unfinished files|not a file/i.test(text)) return "这个文件不在 FluxCatch 的下载文件夹里，请在 Finder 中打开";
-  if (/Trash/i.test(text)) return "无法移到废纸篓，请在 Finder 中操作";
-  if (/未连接|未授权|not found|connect|超时/i.test(text)) return "本地下载引擎未连接，请先在设置里开启";
-  return "操作失败，请在 Finder 中手动打开";
+  if (/no longer exists/i.test(text)) return codedError("file_missing", "文件已不在下载文件夹中");
+  if (/outside the download folder|not a regular file|Unfinished files|not a file/i.test(text)) return codedError("file_outside_folder", "这个文件不在 FluxCatch 的下载文件夹里，请在 Finder 中打开");
+  if (/Trash/i.test(text)) return codedError("trash_failed", "无法移到废纸篓，请在 Finder 中操作");
+  if (/未连接|未授权|not found|connect|超时/i.test(text)) {
+    const code = error?.failureCode === "engine_not_responding" || /超时/.test(text)
+      ? "engine_not_responding"
+      : /未授权/.test(text) ? "engine_not_set_up" : "engine_unreachable";
+    return codedError(code, "本地下载引擎未连接，请先在设置里开启");
+  }
+  return codedError("file_action_failed", "操作失败，请在 Finder 中手动打开");
 }
 
 async function performFileAction(action, jobId) {
-  if (!FILE_ACTIONS.has(action)) throw new Error("不支持的文件操作");
-  if (!jobId) throw new Error("任务编号无效");
+  if (!FILE_ACTIONS.has(action)) throw codedError("invalid_request", "不支持的文件操作");
+  if (!jobId) throw codedError("invalid_request", "任务编号无效");
   await historyReady;
   const job = jobs.get(jobId) || null;
   const record = historyIndex.get(jobId) || null;
   const details = jobDetails.get(jobId) || {};
-  if (!job && !record) throw new Error("找不到这条下载记录");
-  if ((job?.status || record?.status) !== "completed") throw new Error("只有已完成的下载才能打开文件");
-  if (record?.fileMissing) throw new Error("文件已不在下载文件夹中");
+  if (!job && !record) throw codedError("record_missing", "找不到这条下载记录");
+  if ((job?.status || record?.status) !== "completed") throw codedError("file_not_ready", "只有已完成的下载才能打开文件");
+  if (record?.fileMissing) throw codedError("file_missing", "文件已不在下载文件夹中");
   const method = job?.method || record?.method;
   const downloadId = Number.isInteger(job?.downloadId) ? job.downloadId : Number.isInteger(record?.downloadId) ? record.downloadId : null;
   const path = details.path || record?.path || "";
@@ -5351,7 +5531,7 @@ async function performFileAction(action, jobId) {
       nativeError = error;
       if (method !== "browser" && /no longer exists/i.test(error?.message || "")) {
         await markHistoryFileMissing(jobId);
-        throw new Error(friendlyFileActionError(error));
+        throw friendlyFileActionError(error);
       }
     }
   }
@@ -5368,19 +5548,19 @@ async function performFileAction(action, jobId) {
     await markHistoryFileMissing(jobId);
     return { via: "browser", permanent: true };
   }
-  if (nativeError) throw new Error(friendlyFileActionError(nativeError));
-  if (!path) throw new Error("这条记录没有保存文件位置");
-  throw new Error("需要本地下载引擎权限才能打开文件");
+  if (nativeError) throw friendlyFileActionError(nativeError);
+  if (!path) throw codedError("file_missing", "这条记录没有保存文件位置");
+  throw codedError("engine_not_set_up", "需要本地下载引擎权限才能打开文件");
 }
 
 async function nativeFileAction(request, timeoutMs = 20_000) {
-  if (!await hasNativePermission()) throw new Error("尚未授权连接本地引擎");
+  if (!await hasNativePermission()) throw codedError("engine_not_set_up", "尚未授权连接本地引擎");
   const port = await ensureNativePort({ requireCompatibility: false });
   const requestId = crypto.randomUUID();
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       pendingHostFileActions.delete(requestId);
-      reject(new Error("本地引擎响应超时"));
+      reject(codedError("engine_not_responding", "本地引擎响应超时"));
     }, timeoutMs);
     pendingHostFileActions.set(requestId, { port, resolve, reject, timer });
     try {
@@ -5404,7 +5584,7 @@ function resolveHostFileAction(requestId, message, port) {
       downloadDir: cleanLocalPath(message.downloadDir) || null
     });
   }
-  else pending.reject(new Error(String(message?.error || "本地引擎未能完成文件操作")));
+  else pending.reject(message?.error ? new Error(String(message.error)) : codedError("file_action_failed", "本地引擎未能完成文件操作"));
 }
 
 function rejectHostFileActions(port, error) {
@@ -5419,15 +5599,15 @@ function rejectHostFileActions(port, error) {
 // The engine owns the folder picker (a native macOS sheet) and the persisted
 // choice; the worker only mirrors the result into the public host status.
 async function chooseDownloadFolder({ reset = false } = {}) {
-  if (!await hasNativePermission()) throw new Error("尚未授权连接本地引擎");
+  if (!await hasNativePermission()) throw codedError("engine_not_set_up", "尚未授权连接本地引擎");
   let result;
   try {
     result = await nativeFileAction({ type: "choose_folder", ...(reset ? { reset: true } : {}) }, 5 * 60_000);
   } catch (error) {
-    if (/cancel/i.test(error?.message || "")) throw new Error("已取消选择");
+    if (/cancel/i.test(error?.message || "")) throw codedError("cancelled", "已取消选择");
     throw error;
   }
-  if (!result?.downloadDir) throw new Error("无法更改保存位置");
+  if (!result?.downloadDir) throw codedError("folder_change_failed", "无法更改保存位置");
   hostStatus = { ...hostStatus, downloadDir: result.downloadDir };
   broadcast({ type: "HOST_EVENT", event: hostEventForUi({ type: "pong" }), hostStatus: hostStatusForUi(hostStatus) });
   return { downloadDir: result.downloadDir, hostStatus: hostStatusForUi(hostStatus) };
@@ -5489,14 +5669,14 @@ async function verifyHistoryFiles() {
 }
 
 async function retryJob(jobId) {
-  if (!jobId) throw new Error("任务编号无效");
+  if (!jobId) throw codedError("invalid_request", "任务编号无效");
   const retry = jobDetails.get(jobId)?.retry;
-  if (!retry) throw new Error("这条任务无法重试，请回到来源页面重新下载");
+  if (!retry) throw codedError("not_retryable", "这条任务无法重试，请回到来源页面重新下载");
   let candidate;
   try {
     candidate = requireTabCandidate(retry.tabId, retry.reference);
   } catch {
-    throw new Error("来源页面的媒体信息已失效，请重新打开页面后再下载");
+    throw codedError("source_expired", "来源页面的媒体信息已失效，请重新打开页面后再下载");
   }
   return startDownload(candidate, retry.options, retry.tabId);
 }
@@ -5510,8 +5690,8 @@ function isActiveJob(job) {
 // under the user_supplied provenance.
 async function downloadUserUrl(tabId, rawUrl, options, context = {}) {
   const url = canonicalizeUrl(cleanText(rawUrl, 4096));
-  if (!url || !/^https?:$/i.test(new URL(url).protocol)) throw new Error("请输入 http 或 https 的媒体地址");
-  if (isPolicyBlocked(url, "")) throw new Error("商店版本不支持从此平台下载");
+  if (!url || !/^https?:$/i.test(new URL(url).protocol)) throw codedError("url_scheme_invalid", "请输入 http 或 https 的媒体地址");
+  if (isPolicyBlocked(url, "")) throw codedError("site_not_supported", "商店版本不支持从此平台下载");
   const settings = await getSettings();
   const networkScope = networkScopeForSettings(settings);
   requireNetworkRequest({ url, purpose: "user_download", provenance: "user_supplied", networkScope, userInitiated: true });
@@ -5523,7 +5703,7 @@ async function downloadUserUrl(tabId, rawUrl, options, context = {}) {
     mime = head.mime;
     contentLength = head.contentLength;
     classified = classifyMedia({ url, mime, contentLength });
-    if (!classified) throw new Error("这个地址不是可下载的媒体（视频、音频或播放列表）");
+    if (!classified) throw codedError("not_media", "这个地址不是可下载的媒体（视频、音频或播放列表）");
   }
   let tab = null;
   try { tab = await chrome.tabs.get(tabId); } catch { tab = null; }
@@ -5538,7 +5718,7 @@ async function downloadUserUrl(tabId, rawUrl, options, context = {}) {
     tabUrl: canonicalizeUrl(tab?.url) || ""
   });
   const candidate = tabMedia.get(tabId)?.get(`${classified.kind}:${url}`);
-  if (!accepted || !candidate) throw new Error("该地址被当前设置忽略（域名屏蔽或小于最小媒体大小）");
+  if (!accepted || !candidate) throw codedError("ignored_by_settings", "该地址被当前设置忽略（域名屏蔽或小于最小媒体大小）");
   await persistSession();
   return startDownload(candidate, options, tabId, context);
 }
@@ -5573,42 +5753,42 @@ async function probeUserUrl(url) {
       lastError = error;
     }
   }
-  throw new Error(`无法读取这个地址的类型，请确认链接可以直接打开（${lastError?.message || "网络错误"}）`);
+  throw codedError("url_unreadable", `无法读取这个地址的类型，请确认链接可以直接打开（${lastError?.message || "网络错误"}）`);
 }
 
 async function pauseJob(jobId) {
-  if (!jobId) throw new Error("任务编号无效");
+  if (!jobId) throw codedError("invalid_request", "任务编号无效");
   const job = jobs.get(jobId);
-  if (!job) throw new Error("任务不存在或已结束");
-  if (!isActiveJob(job) || job.status === "pausing") throw new Error("这条任务现在不能暂停");
+  if (!job) throw codedError("job_ended", "任务不存在或已结束");
+  if (!isActiveJob(job) || job.status === "pausing") throw codedError("cannot_pause", "这条任务现在不能暂停");
   if (job.method === "browser") {
-    if (!Number.isInteger(job.downloadId)) throw new Error("这条任务现在不能暂停");
+    if (!Number.isInteger(job.downloadId)) throw codedError("cannot_pause", "这条任务现在不能暂停");
     await chrome.downloads.pause(job.downloadId);
     await mergeJob(jobId, { status: "paused", message: PAUSED_JOB_MESSAGE, speed: 0 });
     return { status: "paused" };
   }
   const port = await ensureNativePort();
-  if (!hostStatus.capabilities?.pause) throw new Error("当前安装的本地下载引擎不支持暂停，请更新引擎");
+  if (!hostStatus.capabilities?.pause) throw codedError("pause_unsupported", "当前安装的本地下载引擎不支持暂停，请更新引擎");
   await mergeJob(jobId, { status: "pausing", message: "正在暂停…" });
   port.postMessage({ type: "pause", jobId });
   return { status: "pausing" };
 }
 
 async function resumeJob(jobId, context = {}) {
-  if (!jobId) throw new Error("任务编号无效");
+  if (!jobId) throw codedError("invalid_request", "任务编号无效");
   const job = jobs.get(jobId);
-  if (!job || job.status !== "paused") throw new Error("这条任务不在暂停状态");
+  if (!job || job.status !== "paused") throw codedError("not_paused", "这条任务不在暂停状态");
   if (job.method === "browser") {
-    if (!Number.isInteger(job.downloadId)) throw new Error("这条任务无法继续，请回到来源页面重新下载");
+    if (!Number.isInteger(job.downloadId)) throw codedError("cannot_resume", "这条任务无法继续，请回到来源页面重新下载");
     await chrome.downloads.resume(job.downloadId);
     await mergeJob(jobId, { status: "downloading", message: "浏览器正在下载" });
     await reconcileBrowserJob(job, false);
     return { method: "browser", jobId };
   }
   const recipe = job.resume;
-  if (!recipe) throw new Error("这条任务无法继续，请回到来源页面重新下载");
+  if (!recipe) throw codedError("cannot_resume", "这条任务无法继续，请回到来源页面重新下载");
   const candidate = await findCandidateByRecipe(recipe);
-  if (!candidate) throw new Error("来源页面的媒体信息已失效，请重新打开页面后再下载");
+  if (!candidate) throw codedError("source_expired", "来源页面的媒体信息已失效，请重新打开页面后再下载");
   // The engine hands the same output name back to a job that asks for it,
   // which is how the checkpoint or the staged segments are picked up again.
   const options = { ...(recipe.options || {}), filename: recipe.filename || recipe.options?.filename };
@@ -5685,7 +5865,7 @@ function normalizeResumeRecipe(value) {
 async function openJobSource(jobId) {
   await historyReady;
   const url = jobDetails.get(jobId)?.sourceUrl || historyIndex.get(jobId)?.sourceUrl || "";
-  if (!url) throw new Error("这条记录没有来源页面");
+  if (!url) throw codedError("source_missing", "这条记录没有来源页面");
   const tab = await chrome.tabs.create({ url });
   return { tabId: tab?.id ?? null };
 }
@@ -5908,7 +6088,7 @@ function disconnectedHostStatus({ needsPermission = false, failureReason = null,
 }
 
 function requireCompatibleNativeHost() {
-  if (hostCompatibility(hostStatus).compatible !== true) throw new Error(HOST_MISMATCH_MESSAGE);
+  if (hostCompatibility(hostStatus).compatible !== true) throw codedError("engine_update_needed", HOST_MISMATCH_MESSAGE);
 }
 
 function ytdlpNetworkDisabled() {
@@ -6059,7 +6239,7 @@ async function hasNativePermission() {
 }
 
 function validTabId(value) {
-  if (!Number.isInteger(value) || value < 0) throw new Error("标签页编号无效");
+  if (!Number.isInteger(value) || value < 0) throw codedError("invalid_request", "标签页编号无效");
   return value;
 }
 
@@ -6069,7 +6249,7 @@ function requireTabCandidate(tabId, reference) {
   const generation = cleanText(reference?.generation, 64);
   const currentGeneration = tabGenerations.get(tabId);
   if (!id || !kind || !generation || !currentGeneration || generation !== currentGeneration) {
-    throw new Error("该媒体候选项已失效，请重新扫描页面");
+    throw codedError("media_stale", "该媒体候选项已失效，请重新扫描页面");
   }
   const map = tabMedia.get(tabId);
   let item = [...(map?.values() || [])].find((candidate) =>
@@ -6081,9 +6261,9 @@ function requireTabCandidate(tabId, reference) {
     && !candidate.mergedInto
     && (candidate.aliases || []).some((alias) => alias.id === id)
   );
-  if (!item) throw new Error("该媒体候选项已失效，请重新扫描页面");
+  if (!item) throw codedError("media_stale", "该媒体候选项已失效，请重新扫描页面");
   if (item.mergedInto) item = [...(map?.values() || [])].find((candidate) => candidate.id === item.mergedInto);
-  if (!item || item.mergedInto) throw new Error("该媒体候选项已失效，请重新扫描页面");
+  if (!item || item.mergedInto) throw codedError("media_stale", "该媒体候选项已失效，请重新扫描页面");
   return item;
 }
 
@@ -6095,7 +6275,26 @@ function isContentSender(sender) {
   return sender?.id === chrome.runtime.id && Number.isInteger(sender.tab?.id) && sender.tab.id >= 0 && Boolean(canonicalizeUrl(sender.url));
 }
 
+/**
+ * A candidate as pages see it. A worker-named title ("Media" / "媒体") is
+ * given in the current UI language and flagged, so a page can use its own
+ * untitled label instead.
+ */
 function withoutManifestText(item) {
+  const result = publicCandidate(item);
+  if (!UNTITLED_MEDIA_TITLES.has(result.title)) return result;
+  const title = workerText("worker.untitledMedia");
+  const ext = (/\.([a-z0-9]{1,8})$/i.exec(result.suggestedFilename || "") || [])[1];
+  const stem = String(result.suggestedFilename || "").replace(/\.[a-z0-9]{1,8}$/i, "");
+  return {
+    ...result,
+    title,
+    ...(UNTITLED_MEDIA_TITLES.has(stem) ? { suggestedFilename: `${sanitizeFilename(title)}${ext ? `.${ext}` : ""}` } : {}),
+    titleIsFallback: true
+  };
+}
+
+function publicCandidate(item) {
   if (item?.kind === "dash_pair") {
     const now = Date.now();
     const site = item.site === "generic" ? "generic" : "bilibili";
@@ -6144,9 +6343,30 @@ function redactJobText(value, max) {
   });
   text = text
     .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer <已隐藏>")
-    .replace(/\b(authorization|cookie|set-cookie|access[_-]?token|refresh[_-]?token|token|signature|sig|api[_-]?key)\s*[:=]\s*[^\s,;]+/gi, "$1=<已隐藏>")
-    .replace(/(?:\/Users\/|\/home\/|\/private\/|\/var\/|\/tmp\/|\/opt\/|\/usr\/|\/Applications\/|\/Library\/|[A-Za-z]:\\).*/g, "<本地路径已隐藏>");
-  return cleanText(text, max);
+    .replace(/\b(authorization|cookie|set-cookie|access[_-]?token|refresh[_-]?token|token|signature|sig|api[_-]?key)\s*[:=]\s*[^\s,;]+/gi, "$1=<已隐藏>");
+  // Local paths, wherever they live: the home folder, system folders, other
+  // drives (/Volumes/<drive>/…), network shares and Windows drives, so no
+  // folder name reaches a stored record or a notification. A quoted path is
+  // hidden to its closing quote. An unquoted one runs on through spaces
+  // (folder names have them) and stops only at a ": " that starts plain text
+  // again, the "path: reason" shape of engine and FFmpeg messages.
+  const hidden = "<本地路径已隐藏>";
+  text = text
+    .replace(/\bfile:\/\/\S*/gi, hidden)
+    // A quote inside the path (Bob's, an escaped \' in a Python repr) does
+    // not close it; only a quote followed by a boundary does.
+    .replace(/(['"])(?:~\/|\/|[A-Za-z]:\\|\\\\)(?:\\.|(?!\1(?:[\s:;,)\]]|$)).)*(?:\1|$)/g, hidden);
+  const pathStart = /\/(?:Users|home|private|var|tmp|opt|usr|Applications|Library|Volumes|Network|System|mnt|media|run|srv)\/|[A-Za-z]:\\|(?<![\w.:/~%\\-])(?:~\/|\/(?=[^\s/]+\/)|\\\\(?=[^\s\\]))/;
+  let kept = "";
+  for (let match = pathStart.exec(text); match; match = pathStart.exec(text)) {
+    const tail = text.slice(match.index);
+    const pieces = tail.split(/(?=:\s)/);
+    let length = pieces[0].length;
+    for (let index = 1; index < pieces.length && /[/\\]/.test(pieces[index].slice(1)); index += 1) length += pieces[index].length;
+    kept += text.slice(0, match.index) + hidden;
+    text = tail.slice(length);
+  }
+  return cleanText(kept + text, max);
 }
 
 function displayFilename(value) {

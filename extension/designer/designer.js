@@ -1,126 +1,176 @@
+// FluxCatch UI editor (a developer tool: Settings -> Lab -> Developer).
+// Edits the layout values of the fluxcatch.uiCustomization.v1 record: spacing,
+// width, text size, corner radius and accent. Settings applies them only while
+// Developer tools is on. Copy is not editable: v2 copy is never overridden
+// (rename table, §5 note); copy saved by older editors stays in the record
+// untouched. The editor's own words live in ui/v2/messages/settings.js.
+import { bootLocale } from "../ui/v2/locale.js";
+import { msg } from "../ui/v2/messages.js";
+import { brandMark } from "../ui/v2/components.js";
+import { controlOf, numberField, textField } from "../ui/v2/controls.js";
 import {
+  COPY_FIELDS,
   DEFAULT_UI_CUSTOMIZATION,
+  LAYOUT_LIMITS,
   applyUiCustomization,
   customizationExportPayload,
+  loadDeveloperTools,
   loadUiCustomization,
+  normalizeHex,
   normalizeUiCustomization,
   parseCustomizationJson,
+  readTokenHex,
   saveUiCustomization
 } from "../ui/customization.js";
 
-const form = document.querySelector("#designerForm");
-const preview = document.querySelector("#previewCanvas");
-const status = document.querySelector("#designerStatus");
-const jsonInput = document.querySelector("#jsonInput");
-const jsonError = document.querySelector("#jsonError");
-const fields = Object.freeze({
-  pageTitle: document.querySelector("#pageTitleInput"),
-  pageDescription: document.querySelector("#pageDescriptionInput"),
-  runtimeTitle: document.querySelector("#runtimeTitleInput"),
-  runtimeDescription: document.querySelector("#runtimeDescriptionInput"),
-  basicTitle: document.querySelector("#basicTitleInput"),
-  basicDescription: document.querySelector("#basicDescriptionInput"),
-  performanceTitle: document.querySelector("#performanceTitleInput"),
-  performanceDescription: document.querySelector("#performanceDescriptionInput"),
-  detectionTitle: document.querySelector("#detectionTitleInput"),
-  detectionDescription: document.querySelector("#detectionDescriptionInput"),
-  privacyTitle: document.querySelector("#privacyTitleInput"),
-  privacyDescription: document.querySelector("#privacyDescriptionInput"),
-  localTitle: document.querySelector("#localTitleInput"),
-  localDescription: document.querySelector("#localDescriptionInput"),
-  notificationsTitle: document.querySelector("#notificationsTitleInput"),
-  notificationsDescription: document.querySelector("#notificationsDescriptionInput"),
-  labTitle: document.querySelector("#labTitleInput"),
-  labDescription: document.querySelector("#labDescriptionInput"),
-  firstSecondGap: document.querySelector("#firstSecondGapInput"),
-  sectionGap: document.querySelector("#sectionGapInput"),
-  contentWidth: document.querySelector("#contentWidthInput"),
-  fontScale: document.querySelector("#fontScaleInput"),
-  radius: document.querySelector("#radiusInput"),
-  accentColor: document.querySelector("#accentColorInput")
+const $ = (selector) => document.querySelector(selector);
+
+// Units are message keys, so the Chinese UI reads them in Chinese.
+const LAYOUT_FIELDS = Object.freeze({
+  firstSecondGap: { label: "settings.designer.firstSecondGap", step: 1, unit: "settings.designer.unitPx" },
+  sectionGap: { label: "settings.designer.sectionGap", step: 1, unit: "settings.designer.unitPx" },
+  contentWidth: { label: "settings.designer.contentWidth", step: 10, unit: "settings.designer.unitPx" },
+  fontScale: { label: "settings.designer.fontScale", step: 0.05, unit: "settings.designer.unitScale" },
+  radius: { label: "settings.designer.radius", step: 1, unit: "settings.designer.unitPx" }
 });
 
-document.addEventListener("DOMContentLoaded", initialize, { once: true });
+const fields = {};
+let accent = "";
+let stored = { ...DEFAULT_UI_CUSTOMIZATION };
+let started = false;
+
+await bootLocale();
+document.addEventListener("DOMContentLoaded", () => void initialize());
+if (document.readyState !== "loading") void initialize();
 
 async function initialize() {
+  if (started) return;
+  started = true;
+  document.title = `${msg("settings.editor.name")} · ${msg("brand.name")}`;
+  for (const element of document.querySelectorAll("[data-msg]")) element.textContent = msg(element.dataset.msg);
+  $("#topbarInner").prepend(brandMark({ size: "m" }));
+  buildFields();
   bindEvents();
   try {
-    writeFields(await loadUiCustomization());
-    setStatus("界面配置已读取。预览中的更改需保存后才会应用到设置页。", "");
-  } catch (error) {
+    stored = await loadUiCustomization();
+    writeFields(stored);
+    setStatus(msg("settings.designer.loaded"));
+  } catch {
     writeFields(DEFAULT_UI_CUSTOMIZATION);
-    setStatus(error?.message || "读取界面配置失败，已显示默认值。", "error");
+    setStatus(msg("settings.designer.loadFailed"));
+  }
+  try {
+    $("#devState").textContent = (await loadDeveloperTools()) ? "" : msg("settings.designer.devOff");
+  } catch {
+    $("#devState").textContent = msg("settings.designer.devOff");
   }
 }
 
-function bindEvents() {
-  form.addEventListener("input", renderPreview);
-  form.addEventListener("submit", (event) => void save(event));
-  document.querySelector("#resetButton").addEventListener("click", () => void resetDefaults());
-  document.querySelector("#importButton").addEventListener("click", importJson);
-  document.querySelector("#exportButton").addEventListener("click", exportJson);
-  document.querySelector("#jsonFileInput").addEventListener("change", (event) => void readJsonFile(event));
+// A field under its name. The name takes the row role (as Settings row names
+// do), which keeps the page within six text styles: no label role here.
+function stackedField(label, control) {
+  const stack = document.createElement("div");
+  stack.className = "field-stack";
+  const name = document.createElement("label");
+  name.className = "t-row";
+  name.htmlFor = controlOf(control).id;
+  name.textContent = label;
+  stack.append(name, control);
+  return stack;
 }
 
+function buildFields() {
+  for (const [key, spec] of Object.entries(LAYOUT_FIELDS)) {
+    const [min, max] = LAYOUT_LIMITS[key];
+    const control = numberField({ id: `${key}Input`, name: key, min, max, step: spec.step, unit: msg(spec.unit), width: "medium" });
+    fields[key] = controlOf(control);
+    $("#layoutFields").append(stackedField(msg(spec.label), control));
+  }
+  const file = textField({ id: "jsonInput", name: "json", multiline: true, rows: 8, width: "fill", spellcheck: false, describedBy: "jsonHelp" });
+  fields.json = controlOf(file);
+  const help = document.createElement("p");
+  help.className = "t-meta";
+  help.id = "jsonHelp";
+  help.textContent = msg("settings.designer.fileHelp");
+  $("#fileFields").append(stackedField(msg("settings.designer.fileLabel"), file), help);
+}
+
+function bindEvents() {
+  $("#designerForm").addEventListener("input", renderPreview);
+  $("#designerForm").addEventListener("submit", (event) => void save(event));
+  $("#accentColorInput").addEventListener("input", (event) => { accent = normalizeHex(event.target.value); renderPreview(); });
+  $("#accentThemeButton").addEventListener("click", () => { accent = ""; writeAccent(); renderPreview(); });
+  $("#resetButton").addEventListener("click", () => void resetDefaults());
+  $("#importButton").addEventListener("click", importJson);
+  $("#exportButton").addEventListener("click", exportJson);
+  $("#jsonFileInput").addEventListener("change", (event) => void readJsonFile(event));
+}
+
+/** The record to store: this form's layout values; any copy already in the record is kept as it is. */
 function collectFields() {
-  return normalizeUiCustomization(Object.fromEntries(Object.entries(fields).map(([key, field]) => [key, field.value])));
+  const values = { language: stored.language || "" };
+  for (const key of Object.keys(COPY_FIELDS)) values[key] = stored[key] || "";
+  for (const key of Object.keys(LAYOUT_FIELDS)) values[key] = fields[key].value;
+  values.accentColor = accent;
+  return normalizeUiCustomization(values);
 }
 
 function writeFields(value) {
   const customization = normalizeUiCustomization(value);
-  for (const [key, field] of Object.entries(fields)) field.value = String(customization[key]);
+  for (const key of Object.keys(LAYOUT_FIELDS)) fields[key].value = String(customization[key]);
+  accent = customization.accentColor;
+  writeAccent();
   renderPreview();
 }
 
+function writeAccent() {
+  $("#accentColorInput").value = accent || readTokenHex("--pond") || $("#accentColorInput").value;
+}
+
 function renderPreview() {
-  const customization = collectFields();
-  applyUiCustomization(customization, { root: preview, copyRoot: preview });
-  for (const input of form.querySelectorAll('input[type="range"],input[type="color"]')) {
-    const output = form.querySelector(`output[for="${input.id}"]`);
-    if (!output) continue;
-    output.value = input.name === "fontScale" ? `${Number(input.value).toFixed(2)}×` : input.name === "accentColor" ? input.value.toUpperCase() : `${input.value}px`;
-  }
+  const preview = $("#previewCanvas");
+  for (const element of preview.querySelectorAll("[data-msg]")) element.textContent = msg(element.dataset.msg);
+  applyUiCustomization(collectFields(), { root: preview });
 }
 
 async function save(event) {
   event.preventDefault();
-  if (!form.reportValidity()) return;
-  setStatus("正在保存…", "");
+  setStatus(msg("settings.designer.saving"));
   try {
-    const saved = await saveUiCustomization(collectFields());
-    writeFields(saved);
-    setStatus("已保存并应用到 FluxCatch 设置页。", "success");
-  } catch (error) {
-    setStatus(error?.message || "保存界面配置失败。", "error");
+    const next = collectFields();
+    stored = await saveUiCustomization(next, undefined, { language: next.language });
+    writeFields(stored);
+    setStatus(msg("settings.designer.saved"));
+  } catch {
+    setStatus(msg("settings.designer.saveFailed"));
   }
 }
 
 async function resetDefaults() {
-  setStatus("正在恢复默认值…", "");
   try {
-    const saved = await saveUiCustomization(DEFAULT_UI_CUSTOMIZATION);
-    writeFields(saved);
-    setStatus("已恢复默认界面并保存。", "success");
-  } catch (error) {
-    setStatus(error?.message || "恢复默认值失败。", "error");
+    stored = await saveUiCustomization(DEFAULT_UI_CUSTOMIZATION);
+    writeFields(stored);
+    setStatus(msg("settings.designer.resetDone"));
+  } catch {
+    setStatus(msg("settings.designer.saveFailed"));
   }
 }
 
 function importJson() {
   clearJsonError();
   try {
-    const customization = parseCustomizationJson(jsonInput.value);
+    const customization = parseCustomizationJson(fields.json.value);
     writeFields(customization);
-    setStatus("JSON 已导入预览。检查后请点击“保存并应用”。", "success");
-  } catch (error) {
-    showJsonError(error?.message || "JSON 格式不正确。");
+    setStatus(msg("settings.designer.imported"));
+  } catch {
+    showJsonError(msg("settings.designer.invalidFile"));
   }
 }
 
 function exportJson() {
   clearJsonError();
   const text = `${JSON.stringify(customizationExportPayload(collectFields()), null, 2)}\n`;
-  jsonInput.value = text;
+  fields.json.value = text;
   const blob = new Blob([text], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
@@ -131,7 +181,7 @@ function exportJson() {
   anchor.click();
   anchor.remove();
   setTimeout(() => URL.revokeObjectURL(url), 0);
-  setStatus("界面配置 JSON 已导出。", "success");
+  setStatus(msg("settings.designer.exported"));
 }
 
 async function readJsonFile(event) {
@@ -139,27 +189,27 @@ async function readJsonFile(event) {
   const file = event.target.files?.[0];
   if (!file) return;
   try {
-    jsonInput.value = await file.text();
+    fields.json.value = await file.text();
     importJson();
-  } catch (error) {
-    showJsonError(error?.message || "读取 JSON 文件失败。");
+  } catch {
+    showJsonError(msg("settings.designer.readFailed"));
   } finally {
     event.target.value = "";
   }
 }
 
-function setStatus(message, type) {
-  status.textContent = message;
-  if (type) status.dataset.state = type;
-  else delete status.dataset.state;
+function setStatus(text) {
+  $("#designerStatus").textContent = text;
 }
 
-function showJsonError(message) {
-  jsonError.textContent = message;
-  jsonError.hidden = false;
+function showJsonError(text) {
+  const node = $("#jsonError");
+  node.textContent = text;
+  node.hidden = false;
 }
 
 function clearJsonError() {
-  jsonError.textContent = "";
-  jsonError.hidden = true;
+  const node = $("#jsonError");
+  node.textContent = "";
+  node.hidden = true;
 }

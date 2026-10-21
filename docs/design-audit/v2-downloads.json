@@ -1,0 +1,4406 @@
+{
+  "label": "v2-downloads",
+  "startedAt": "2026-10-21T00:29:58.406Z",
+  "commit": "8758f45",
+  "budgets": {
+    "stylesPerScreen": 6,
+    "stylesAppWide": 8,
+    "displayPerScreen": 2,
+    "edges": 3,
+    "nesting": 0,
+    "contrast": 0,
+    "clipping": 0,
+    "locale": 0,
+    "rules": 0,
+    "literals": 0,
+    "filenames": 0
+  },
+  "appWidePerLanguage": {
+    "en": 7,
+    "zh": 7
+  },
+  "appWideStyles": [
+    {
+      "key": "Fraunces,Noto Serif SC,Songti SC,serif|17px|600|20px",
+      "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+      "size": "17px",
+      "weight": "600",
+      "lineHeight": "20px",
+      "screens": 24,
+      "sample": "FluxCatch"
+    },
+    {
+      "key": "Fraunces,Noto Serif SC,Songti SC,serif|28px|500|34px",
+      "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+      "size": "28px",
+      "weight": "500",
+      "lineHeight": "34px",
+      "screens": 24,
+      "sample": "Downloads"
+    },
+    {
+      "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|12px|600|16px",
+      "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+      "size": "12px",
+      "weight": "600",
+      "lineHeight": "16px",
+      "screens": 16,
+      "sample": "Today"
+    },
+    {
+      "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|13px|500|20px",
+      "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+      "size": "13px",
+      "weight": "500",
+      "lineHeight": "20px",
+      "screens": 12,
+      "sample": "Download"
+    },
+    {
+      "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|13px|400|20px",
+      "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+      "size": "13px",
+      "weight": "400",
+      "lineHeight": "20px",
+      "screens": 12,
+      "sample": "Local engine isn’t set up"
+    },
+    {
+      "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|13px|500|22px",
+      "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+      "size": "13px",
+      "weight": "500",
+      "lineHeight": "22px",
+      "screens": 12,
+      "sample": "下载"
+    },
+    {
+      "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|13px|400|22px",
+      "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+      "size": "13px",
+      "weight": "400",
+      "lineHeight": "22px",
+      "screens": 12,
+      "sample": "本地引擎尚未设置"
+    },
+    {
+      "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|12px|400|18px",
+      "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+      "size": "12px",
+      "weight": "400",
+      "lineHeight": "18px",
+      "screens": 8,
+      "sample": "3 files · 3.2 GB"
+    },
+    {
+      "key": "Fraunces,Noto Serif SC,Songti SC,serif|19px|400|26px",
+      "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+      "size": "19px",
+      "weight": "400",
+      "lineHeight": "26px",
+      "screens": 8,
+      "sample": "Nothing downloaded yet."
+    },
+    {
+      "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|12px|400|20px",
+      "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+      "size": "12px",
+      "weight": "400",
+      "lineHeight": "20px",
+      "screens": 8,
+      "sample": "3 个文件 · 3.2 GB"
+    }
+  ],
+  "literals": [
+    {
+      "file": "extension/background.js",
+      "line": 4697,
+      "literal": "#0A66D6",
+      "where": "string"
+    },
+    {
+      "file": "extension/background.js",
+      "line": 4697,
+      "literal": "#3A3A3C",
+      "where": "string"
+    },
+    {
+      "file": "extension/background.js",
+      "line": 4697,
+      "literal": "#8E8E93",
+      "where": "string"
+    },
+    {
+      "file": "extension/background.js",
+      "line": 4705,
+      "literal": "#FFFFFF",
+      "where": "string"
+    },
+    {
+      "file": "extension/preview/preview.css",
+      "line": 151,
+      "literal": "#2B2E4A",
+      "where": "color"
+    },
+    {
+      "file": "extension/preview/preview.css",
+      "line": 152,
+      "literal": "#1C2140",
+      "where": "color"
+    },
+    {
+      "file": "extension/ui/components.css",
+      "line": 156,
+      "literal": "%235F6382",
+      "where": "background-image"
+    },
+    {
+      "file": "extension/ui/components.css",
+      "line": 514,
+      "literal": "rgba(0…",
+      "where": "-webkit-mask-image"
+    },
+    {
+      "file": "extension/ui/components.css",
+      "line": 515,
+      "literal": "rgba(0…",
+      "where": "mask-image"
+    },
+    {
+      "file": "extension/ui/customization.js",
+      "line": 9,
+      "literal": "#3E6E92",
+      "where": "string"
+    },
+    {
+      "file": "extension/ui/customization.js",
+      "line": 130,
+      "literal": "#FAF7F2",
+      "where": "string"
+    },
+    {
+      "file": "extension/ui/customization.js",
+      "line": 131,
+      "literal": "#2B2E4A",
+      "where": "string"
+    }
+  ],
+  "screens": [
+    {
+      "id": "downloads-1280",
+      "surface": "downloads",
+      "theme": "morning",
+      "lang": "en",
+      "width": 1280,
+      "height": 900,
+      "display": {
+        "all": 2,
+        "excludingBrand": 1,
+        "brand": 1,
+        "samples": [
+          "h1#pageTitle.t-display “Downloads”"
+        ]
+      },
+      "nesting": {
+        "violations": [],
+        "containers": 3,
+        "maxDepth": 1
+      },
+      "contrast": {
+        "checked": 44,
+        "failures": [],
+        "uncertain": []
+      },
+      "clipping": {
+        "clipped": [],
+        "coveredAtRest": [],
+        "focusObscured": [],
+        "dialogActions": []
+      },
+      "locale": {
+        "leaks": []
+      },
+      "rules": [],
+      "filenames": {
+        "endTruncated": []
+      },
+      "pond": {
+        "present": true,
+        "image": true,
+        "footprint": 2.2,
+        "meanDeltaL": 0.27,
+        "p95DeltaL": 0.65,
+        "meanDeltaChroma": 4.21,
+        "pass": true
+      },
+      "viewport": {
+        "width": 1280,
+        "height": 900,
+        "scrollHeight": 946,
+        "lang": "en"
+      },
+      "screenshot": "shots/downloads-1280-morning-en.png",
+      "checks": {
+        "a": {
+          "value": 6,
+          "budget": 6,
+          "pass": true
+        },
+        "display": {
+          "value": 1,
+          "budget": 2,
+          "pass": true
+        },
+        "b": {
+          "value": 2,
+          "budget": 3,
+          "pass": true
+        },
+        "c": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "d": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "e": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "f": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "g": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "names": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "pond": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        }
+      },
+      "textStyles": [
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|12px|400|18px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "12px",
+          "weight": "400",
+          "lineHeight": "18px",
+          "n": 20
+        },
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|13px|500|20px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "13px",
+          "weight": "500",
+          "lineHeight": "20px",
+          "n": 15
+        },
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|12px|600|16px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "12px",
+          "weight": "600",
+          "lineHeight": "16px",
+          "n": 4
+        },
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|13px|400|20px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "13px",
+          "weight": "400",
+          "lineHeight": "20px",
+          "n": 3
+        },
+        {
+          "key": "Fraunces,Noto Serif SC,Songti SC,serif|17px|600|20px",
+          "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+          "size": "17px",
+          "weight": "600",
+          "lineHeight": "20px",
+          "n": 1
+        },
+        {
+          "key": "Fraunces,Noto Serif SC,Songti SC,serif|28px|500|34px",
+          "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+          "size": "28px",
+          "weight": "500",
+          "lineHeight": "34px",
+          "n": 1
+        }
+      ],
+      "edges": [
+        {
+          "x": 200,
+          "n": 7,
+          "samples": [
+            "div#filters.segmented “All5 Completed3 Failed & cancelled2”",
+            "div#filters.segmented “All5 Completed3 Failed & cancelled2”",
+            "div#filters.segmented “All5 Completed3 Failed & cancelled2”",
+            "div#filters.segmented “All5 Completed3 Failed & cancelled2”"
+          ]
+        },
+        {
+          "x": 272,
+          "n": 22,
+          "samples": [
+            "span.t-wordmark “FluxCatch”",
+            "h1#pageTitle.t-display “Downloads”",
+            "p#pageSummary.t-meta “3 files · 3.2 GB”",
+            "span “Local engine isn’t set up”"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "downloads-960",
+      "surface": "downloads",
+      "theme": "morning",
+      "lang": "en",
+      "width": 960,
+      "height": 900,
+      "display": {
+        "all": 2,
+        "excludingBrand": 1,
+        "brand": 1,
+        "samples": [
+          "h1#pageTitle.t-display “Downloads”"
+        ]
+      },
+      "nesting": {
+        "violations": [],
+        "containers": 3,
+        "maxDepth": 1
+      },
+      "contrast": {
+        "checked": 44,
+        "failures": [],
+        "uncertain": []
+      },
+      "clipping": {
+        "clipped": [],
+        "coveredAtRest": [],
+        "focusObscured": [],
+        "dialogActions": []
+      },
+      "locale": {
+        "leaks": []
+      },
+      "rules": [],
+      "filenames": {
+        "endTruncated": []
+      },
+      "pond": {
+        "present": true,
+        "image": true,
+        "footprint": 9.9,
+        "meanDeltaL": 0.26,
+        "p95DeltaL": 0.63,
+        "meanDeltaChroma": 3.85,
+        "pass": true
+      },
+      "viewport": {
+        "width": 960,
+        "height": 900,
+        "scrollHeight": 946,
+        "lang": "en"
+      },
+      "screenshot": "shots/downloads-960-morning-en.png",
+      "checks": {
+        "a": {
+          "value": 6,
+          "budget": 6,
+          "pass": true
+        },
+        "display": {
+          "value": 1,
+          "budget": 2,
+          "pass": true
+        },
+        "b": {
+          "value": 2,
+          "budget": 3,
+          "pass": true
+        },
+        "c": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "d": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "e": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "f": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "g": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "names": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "pond": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        }
+      },
+      "textStyles": [
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|12px|400|18px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "12px",
+          "weight": "400",
+          "lineHeight": "18px",
+          "n": 20
+        },
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|13px|500|20px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "13px",
+          "weight": "500",
+          "lineHeight": "20px",
+          "n": 15
+        },
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|12px|600|16px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "12px",
+          "weight": "600",
+          "lineHeight": "16px",
+          "n": 4
+        },
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|13px|400|20px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "13px",
+          "weight": "400",
+          "lineHeight": "20px",
+          "n": 3
+        },
+        {
+          "key": "Fraunces,Noto Serif SC,Songti SC,serif|17px|600|20px",
+          "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+          "size": "17px",
+          "weight": "600",
+          "lineHeight": "20px",
+          "n": 1
+        },
+        {
+          "key": "Fraunces,Noto Serif SC,Songti SC,serif|28px|500|34px",
+          "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+          "size": "28px",
+          "weight": "500",
+          "lineHeight": "34px",
+          "n": 1
+        }
+      ],
+      "edges": [
+        {
+          "x": 40,
+          "n": 7,
+          "samples": [
+            "div#filters.segmented “All5 Completed3 Failed & cancelled2”",
+            "div#filters.segmented “All5 Completed3 Failed & cancelled2”",
+            "div#filters.segmented “All5 Completed3 Failed & cancelled2”",
+            "div#filters.segmented “All5 Completed3 Failed & cancelled2”"
+          ]
+        },
+        {
+          "x": 112,
+          "n": 22,
+          "samples": [
+            "span.t-wordmark “FluxCatch”",
+            "h1#pageTitle.t-display “Downloads”",
+            "p#pageSummary.t-meta “3 files · 3.2 GB”",
+            "span “Local engine isn’t set up”"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "downloads-1280",
+      "surface": "downloads",
+      "theme": "dusk",
+      "lang": "en",
+      "width": 1280,
+      "height": 900,
+      "display": {
+        "all": 2,
+        "excludingBrand": 1,
+        "brand": 1,
+        "samples": [
+          "h1#pageTitle.t-display “Downloads”"
+        ]
+      },
+      "nesting": {
+        "violations": [],
+        "containers": 3,
+        "maxDepth": 1
+      },
+      "contrast": {
+        "checked": 44,
+        "failures": [],
+        "uncertain": []
+      },
+      "clipping": {
+        "clipped": [],
+        "coveredAtRest": [],
+        "focusObscured": [],
+        "dialogActions": []
+      },
+      "locale": {
+        "leaks": []
+      },
+      "rules": [],
+      "filenames": {
+        "endTruncated": []
+      },
+      "pond": {
+        "present": true,
+        "image": true,
+        "footprint": 2.6,
+        "meanDeltaL": 0.47,
+        "p95DeltaL": 1.23,
+        "meanDeltaChroma": 8.99,
+        "pass": true
+      },
+      "viewport": {
+        "width": 1280,
+        "height": 900,
+        "scrollHeight": 946,
+        "lang": "en"
+      },
+      "screenshot": "shots/downloads-1280-dusk-en.png",
+      "checks": {
+        "a": {
+          "value": 6,
+          "budget": 6,
+          "pass": true
+        },
+        "display": {
+          "value": 1,
+          "budget": 2,
+          "pass": true
+        },
+        "b": {
+          "value": 2,
+          "budget": 3,
+          "pass": true
+        },
+        "c": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "d": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "e": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "f": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "g": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "names": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "pond": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        }
+      },
+      "textStyles": [
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|12px|400|18px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "12px",
+          "weight": "400",
+          "lineHeight": "18px",
+          "n": 20
+        },
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|13px|500|20px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "13px",
+          "weight": "500",
+          "lineHeight": "20px",
+          "n": 15
+        },
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|12px|600|16px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "12px",
+          "weight": "600",
+          "lineHeight": "16px",
+          "n": 4
+        },
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|13px|400|20px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "13px",
+          "weight": "400",
+          "lineHeight": "20px",
+          "n": 3
+        },
+        {
+          "key": "Fraunces,Noto Serif SC,Songti SC,serif|17px|600|20px",
+          "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+          "size": "17px",
+          "weight": "600",
+          "lineHeight": "20px",
+          "n": 1
+        },
+        {
+          "key": "Fraunces,Noto Serif SC,Songti SC,serif|28px|500|34px",
+          "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+          "size": "28px",
+          "weight": "500",
+          "lineHeight": "34px",
+          "n": 1
+        }
+      ],
+      "edges": [
+        {
+          "x": 200,
+          "n": 7,
+          "samples": [
+            "div#filters.segmented “All5 Completed3 Failed & cancelled2”",
+            "div#filters.segmented “All5 Completed3 Failed & cancelled2”",
+            "div#filters.segmented “All5 Completed3 Failed & cancelled2”",
+            "div#filters.segmented “All5 Completed3 Failed & cancelled2”"
+          ]
+        },
+        {
+          "x": 272,
+          "n": 22,
+          "samples": [
+            "span.t-wordmark “FluxCatch”",
+            "h1#pageTitle.t-display “Downloads”",
+            "p#pageSummary.t-meta “3 files · 3.2 GB”",
+            "span “Local engine isn’t set up”"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "downloads-960",
+      "surface": "downloads",
+      "theme": "dusk",
+      "lang": "en",
+      "width": 960,
+      "height": 900,
+      "display": {
+        "all": 2,
+        "excludingBrand": 1,
+        "brand": 1,
+        "samples": [
+          "h1#pageTitle.t-display “Downloads”"
+        ]
+      },
+      "nesting": {
+        "violations": [],
+        "containers": 3,
+        "maxDepth": 1
+      },
+      "contrast": {
+        "checked": 44,
+        "failures": [],
+        "uncertain": []
+      },
+      "clipping": {
+        "clipped": [],
+        "coveredAtRest": [],
+        "focusObscured": [],
+        "dialogActions": []
+      },
+      "locale": {
+        "leaks": []
+      },
+      "rules": [],
+      "filenames": {
+        "endTruncated": []
+      },
+      "pond": {
+        "present": true,
+        "image": true,
+        "footprint": 11,
+        "meanDeltaL": 0.46,
+        "p95DeltaL": 1.2,
+        "meanDeltaChroma": 8.78,
+        "pass": true
+      },
+      "viewport": {
+        "width": 960,
+        "height": 900,
+        "scrollHeight": 946,
+        "lang": "en"
+      },
+      "screenshot": "shots/downloads-960-dusk-en.png",
+      "checks": {
+        "a": {
+          "value": 6,
+          "budget": 6,
+          "pass": true
+        },
+        "display": {
+          "value": 1,
+          "budget": 2,
+          "pass": true
+        },
+        "b": {
+          "value": 2,
+          "budget": 3,
+          "pass": true
+        },
+        "c": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "d": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "e": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "f": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "g": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "names": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "pond": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        }
+      },
+      "textStyles": [
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|12px|400|18px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "12px",
+          "weight": "400",
+          "lineHeight": "18px",
+          "n": 20
+        },
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|13px|500|20px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "13px",
+          "weight": "500",
+          "lineHeight": "20px",
+          "n": 15
+        },
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|12px|600|16px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "12px",
+          "weight": "600",
+          "lineHeight": "16px",
+          "n": 4
+        },
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|13px|400|20px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "13px",
+          "weight": "400",
+          "lineHeight": "20px",
+          "n": 3
+        },
+        {
+          "key": "Fraunces,Noto Serif SC,Songti SC,serif|17px|600|20px",
+          "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+          "size": "17px",
+          "weight": "600",
+          "lineHeight": "20px",
+          "n": 1
+        },
+        {
+          "key": "Fraunces,Noto Serif SC,Songti SC,serif|28px|500|34px",
+          "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+          "size": "28px",
+          "weight": "500",
+          "lineHeight": "34px",
+          "n": 1
+        }
+      ],
+      "edges": [
+        {
+          "x": 40,
+          "n": 7,
+          "samples": [
+            "div#filters.segmented “All5 Completed3 Failed & cancelled2”",
+            "div#filters.segmented “All5 Completed3 Failed & cancelled2”",
+            "div#filters.segmented “All5 Completed3 Failed & cancelled2”",
+            "div#filters.segmented “All5 Completed3 Failed & cancelled2”"
+          ]
+        },
+        {
+          "x": 112,
+          "n": 22,
+          "samples": [
+            "span.t-wordmark “FluxCatch”",
+            "h1#pageTitle.t-display “Downloads”",
+            "p#pageSummary.t-meta “3 files · 3.2 GB”",
+            "span “Local engine isn’t set up”"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "downloads-empty-1280",
+      "surface": "downloads",
+      "theme": "morning",
+      "lang": "en",
+      "width": 1280,
+      "height": 900,
+      "display": {
+        "all": 3,
+        "excludingBrand": 2,
+        "brand": 1,
+        "samples": [
+          "h1#pageTitle.t-display “Downloads”",
+          "p#emptySentence.t-empty “Nothing downloaded yet.”"
+        ]
+      },
+      "nesting": {
+        "violations": [],
+        "containers": 2,
+        "maxDepth": 1
+      },
+      "contrast": {
+        "checked": 8,
+        "failures": [],
+        "uncertain": []
+      },
+      "clipping": {
+        "clipped": [],
+        "coveredAtRest": [],
+        "focusObscured": [],
+        "dialogActions": []
+      },
+      "locale": {
+        "leaks": []
+      },
+      "rules": [],
+      "filenames": {
+        "endTruncated": []
+      },
+      "pond": {
+        "present": true,
+        "image": true,
+        "footprint": 2.5,
+        "meanDeltaL": 0.27,
+        "p95DeltaL": 0.65,
+        "meanDeltaChroma": 4.2,
+        "pass": true
+      },
+      "viewport": {
+        "width": 1280,
+        "height": 900,
+        "scrollHeight": 900,
+        "lang": "en"
+      },
+      "screenshot": "shots/downloads-empty-1280-morning-en.png",
+      "checks": {
+        "a": {
+          "value": 5,
+          "budget": 6,
+          "pass": true
+        },
+        "display": {
+          "value": 2,
+          "budget": 2,
+          "pass": true
+        },
+        "b": {
+          "value": 2,
+          "budget": 3,
+          "pass": true
+        },
+        "c": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "d": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "e": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "f": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "g": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "names": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "pond": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        }
+      },
+      "textStyles": [
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|13px|400|20px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "13px",
+          "weight": "400",
+          "lineHeight": "20px",
+          "n": 3
+        },
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|13px|500|20px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "13px",
+          "weight": "500",
+          "lineHeight": "20px",
+          "n": 2
+        },
+        {
+          "key": "Fraunces,Noto Serif SC,Songti SC,serif|17px|600|20px",
+          "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+          "size": "17px",
+          "weight": "600",
+          "lineHeight": "20px",
+          "n": 1
+        },
+        {
+          "key": "Fraunces,Noto Serif SC,Songti SC,serif|28px|500|34px",
+          "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+          "size": "28px",
+          "weight": "500",
+          "lineHeight": "34px",
+          "n": 1
+        },
+        {
+          "key": "Fraunces,Noto Serif SC,Songti SC,serif|19px|400|26px",
+          "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+          "size": "19px",
+          "weight": "400",
+          "lineHeight": "26px",
+          "n": 1
+        }
+      ],
+      "edges": [
+        {
+          "x": 200,
+          "n": 1,
+          "samples": [
+            "label.field.url-field “Media link”"
+          ]
+        },
+        {
+          "x": 272,
+          "n": 5,
+          "samples": [
+            "span.t-wordmark “FluxCatch”",
+            "h1#pageTitle.t-display “Downloads”",
+            "span “Local engine isn’t set up”",
+            "p#emptySentence.t-empty “Nothing downloaded yet.”"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "downloads-empty-960",
+      "surface": "downloads",
+      "theme": "morning",
+      "lang": "en",
+      "width": 960,
+      "height": 900,
+      "display": {
+        "all": 3,
+        "excludingBrand": 2,
+        "brand": 1,
+        "samples": [
+          "h1#pageTitle.t-display “Downloads”",
+          "p#emptySentence.t-empty “Nothing downloaded yet.”"
+        ]
+      },
+      "nesting": {
+        "violations": [],
+        "containers": 2,
+        "maxDepth": 1
+      },
+      "contrast": {
+        "checked": 8,
+        "failures": [],
+        "uncertain": []
+      },
+      "clipping": {
+        "clipped": [],
+        "coveredAtRest": [],
+        "focusObscured": [],
+        "dialogActions": []
+      },
+      "locale": {
+        "leaks": []
+      },
+      "rules": [],
+      "filenames": {
+        "endTruncated": []
+      },
+      "pond": {
+        "present": true,
+        "image": true,
+        "footprint": 11,
+        "meanDeltaL": 0.25,
+        "p95DeltaL": 0.62,
+        "meanDeltaChroma": 3.81,
+        "pass": true
+      },
+      "viewport": {
+        "width": 960,
+        "height": 900,
+        "scrollHeight": 900,
+        "lang": "en"
+      },
+      "screenshot": "shots/downloads-empty-960-morning-en.png",
+      "checks": {
+        "a": {
+          "value": 5,
+          "budget": 6,
+          "pass": true
+        },
+        "display": {
+          "value": 2,
+          "budget": 2,
+          "pass": true
+        },
+        "b": {
+          "value": 2,
+          "budget": 3,
+          "pass": true
+        },
+        "c": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "d": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "e": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "f": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "g": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "names": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "pond": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        }
+      },
+      "textStyles": [
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|13px|400|20px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "13px",
+          "weight": "400",
+          "lineHeight": "20px",
+          "n": 3
+        },
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|13px|500|20px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "13px",
+          "weight": "500",
+          "lineHeight": "20px",
+          "n": 2
+        },
+        {
+          "key": "Fraunces,Noto Serif SC,Songti SC,serif|17px|600|20px",
+          "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+          "size": "17px",
+          "weight": "600",
+          "lineHeight": "20px",
+          "n": 1
+        },
+        {
+          "key": "Fraunces,Noto Serif SC,Songti SC,serif|28px|500|34px",
+          "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+          "size": "28px",
+          "weight": "500",
+          "lineHeight": "34px",
+          "n": 1
+        },
+        {
+          "key": "Fraunces,Noto Serif SC,Songti SC,serif|19px|400|26px",
+          "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+          "size": "19px",
+          "weight": "400",
+          "lineHeight": "26px",
+          "n": 1
+        }
+      ],
+      "edges": [
+        {
+          "x": 40,
+          "n": 1,
+          "samples": [
+            "label.field.url-field “Media link”"
+          ]
+        },
+        {
+          "x": 112,
+          "n": 5,
+          "samples": [
+            "span.t-wordmark “FluxCatch”",
+            "h1#pageTitle.t-display “Downloads”",
+            "span “Local engine isn’t set up”",
+            "p#emptySentence.t-empty “Nothing downloaded yet.”"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "downloads-empty-1280",
+      "surface": "downloads",
+      "theme": "dusk",
+      "lang": "en",
+      "width": 1280,
+      "height": 900,
+      "display": {
+        "all": 3,
+        "excludingBrand": 2,
+        "brand": 1,
+        "samples": [
+          "h1#pageTitle.t-display “Downloads”",
+          "p#emptySentence.t-empty “Nothing downloaded yet.”"
+        ]
+      },
+      "nesting": {
+        "violations": [],
+        "containers": 2,
+        "maxDepth": 1
+      },
+      "contrast": {
+        "checked": 8,
+        "failures": [],
+        "uncertain": []
+      },
+      "clipping": {
+        "clipped": [],
+        "coveredAtRest": [],
+        "focusObscured": [],
+        "dialogActions": []
+      },
+      "locale": {
+        "leaks": []
+      },
+      "rules": [],
+      "filenames": {
+        "endTruncated": []
+      },
+      "pond": {
+        "present": true,
+        "image": true,
+        "footprint": 2.3,
+        "meanDeltaL": 0.48,
+        "p95DeltaL": 1.28,
+        "meanDeltaChroma": 8.99,
+        "pass": true
+      },
+      "viewport": {
+        "width": 1280,
+        "height": 900,
+        "scrollHeight": 900,
+        "lang": "en"
+      },
+      "screenshot": "shots/downloads-empty-1280-dusk-en.png",
+      "checks": {
+        "a": {
+          "value": 5,
+          "budget": 6,
+          "pass": true
+        },
+        "display": {
+          "value": 2,
+          "budget": 2,
+          "pass": true
+        },
+        "b": {
+          "value": 2,
+          "budget": 3,
+          "pass": true
+        },
+        "c": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "d": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "e": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "f": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "g": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "names": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "pond": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        }
+      },
+      "textStyles": [
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|13px|400|20px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "13px",
+          "weight": "400",
+          "lineHeight": "20px",
+          "n": 3
+        },
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|13px|500|20px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "13px",
+          "weight": "500",
+          "lineHeight": "20px",
+          "n": 2
+        },
+        {
+          "key": "Fraunces,Noto Serif SC,Songti SC,serif|17px|600|20px",
+          "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+          "size": "17px",
+          "weight": "600",
+          "lineHeight": "20px",
+          "n": 1
+        },
+        {
+          "key": "Fraunces,Noto Serif SC,Songti SC,serif|28px|500|34px",
+          "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+          "size": "28px",
+          "weight": "500",
+          "lineHeight": "34px",
+          "n": 1
+        },
+        {
+          "key": "Fraunces,Noto Serif SC,Songti SC,serif|19px|400|26px",
+          "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+          "size": "19px",
+          "weight": "400",
+          "lineHeight": "26px",
+          "n": 1
+        }
+      ],
+      "edges": [
+        {
+          "x": 200,
+          "n": 1,
+          "samples": [
+            "label.field.url-field “Media link”"
+          ]
+        },
+        {
+          "x": 272,
+          "n": 5,
+          "samples": [
+            "span.t-wordmark “FluxCatch”",
+            "h1#pageTitle.t-display “Downloads”",
+            "span “Local engine isn’t set up”",
+            "p#emptySentence.t-empty “Nothing downloaded yet.”"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "downloads-empty-960",
+      "surface": "downloads",
+      "theme": "dusk",
+      "lang": "en",
+      "width": 960,
+      "height": 900,
+      "display": {
+        "all": 3,
+        "excludingBrand": 2,
+        "brand": 1,
+        "samples": [
+          "h1#pageTitle.t-display “Downloads”",
+          "p#emptySentence.t-empty “Nothing downloaded yet.”"
+        ]
+      },
+      "nesting": {
+        "violations": [],
+        "containers": 2,
+        "maxDepth": 1
+      },
+      "contrast": {
+        "checked": 8,
+        "failures": [],
+        "uncertain": []
+      },
+      "clipping": {
+        "clipped": [],
+        "coveredAtRest": [],
+        "focusObscured": [],
+        "dialogActions": []
+      },
+      "locale": {
+        "leaks": []
+      },
+      "rules": [],
+      "filenames": {
+        "endTruncated": []
+      },
+      "pond": {
+        "present": true,
+        "image": true,
+        "footprint": 9.8,
+        "meanDeltaL": 0.45,
+        "p95DeltaL": 1.16,
+        "meanDeltaChroma": 8.04,
+        "pass": true
+      },
+      "viewport": {
+        "width": 960,
+        "height": 900,
+        "scrollHeight": 900,
+        "lang": "en"
+      },
+      "screenshot": "shots/downloads-empty-960-dusk-en.png",
+      "checks": {
+        "a": {
+          "value": 5,
+          "budget": 6,
+          "pass": true
+        },
+        "display": {
+          "value": 2,
+          "budget": 2,
+          "pass": true
+        },
+        "b": {
+          "value": 2,
+          "budget": 3,
+          "pass": true
+        },
+        "c": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "d": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "e": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "f": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "g": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "names": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "pond": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        }
+      },
+      "textStyles": [
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|13px|400|20px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "13px",
+          "weight": "400",
+          "lineHeight": "20px",
+          "n": 3
+        },
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|13px|500|20px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "13px",
+          "weight": "500",
+          "lineHeight": "20px",
+          "n": 2
+        },
+        {
+          "key": "Fraunces,Noto Serif SC,Songti SC,serif|17px|600|20px",
+          "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+          "size": "17px",
+          "weight": "600",
+          "lineHeight": "20px",
+          "n": 1
+        },
+        {
+          "key": "Fraunces,Noto Serif SC,Songti SC,serif|28px|500|34px",
+          "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+          "size": "28px",
+          "weight": "500",
+          "lineHeight": "34px",
+          "n": 1
+        },
+        {
+          "key": "Fraunces,Noto Serif SC,Songti SC,serif|19px|400|26px",
+          "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+          "size": "19px",
+          "weight": "400",
+          "lineHeight": "26px",
+          "n": 1
+        }
+      ],
+      "edges": [
+        {
+          "x": 40,
+          "n": 1,
+          "samples": [
+            "label.field.url-field “Media link”"
+          ]
+        },
+        {
+          "x": 112,
+          "n": 5,
+          "samples": [
+            "span.t-wordmark “FluxCatch”",
+            "h1#pageTitle.t-display “Downloads”",
+            "span “Local engine isn’t set up”",
+            "p#emptySentence.t-empty “Nothing downloaded yet.”"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "downloads-active-1280",
+      "surface": "downloads",
+      "theme": "morning",
+      "lang": "en",
+      "width": 1280,
+      "height": 900,
+      "display": {
+        "all": 2,
+        "excludingBrand": 1,
+        "brand": 1,
+        "samples": [
+          "h1#pageTitle.t-display “Downloads”"
+        ]
+      },
+      "nesting": {
+        "violations": [],
+        "containers": 3,
+        "maxDepth": 1
+      },
+      "contrast": {
+        "checked": 57,
+        "failures": [],
+        "uncertain": []
+      },
+      "clipping": {
+        "clipped": [],
+        "coveredAtRest": [],
+        "focusObscured": [],
+        "dialogActions": []
+      },
+      "locale": {
+        "leaks": []
+      },
+      "rules": [],
+      "filenames": {
+        "endTruncated": []
+      },
+      "pond": {
+        "present": true,
+        "image": true,
+        "footprint": 2.5,
+        "meanDeltaL": 0.26,
+        "p95DeltaL": 0.6,
+        "meanDeltaChroma": 3.92,
+        "pass": true
+      },
+      "viewport": {
+        "width": 1280,
+        "height": 900,
+        "scrollHeight": 1239,
+        "lang": "en"
+      },
+      "screenshot": "shots/downloads-active-1280-morning-en.png",
+      "checks": {
+        "a": {
+          "value": 6,
+          "budget": 6,
+          "pass": true
+        },
+        "display": {
+          "value": 1,
+          "budget": 2,
+          "pass": true
+        },
+        "b": {
+          "value": 2,
+          "budget": 3,
+          "pass": true
+        },
+        "c": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "d": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "e": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "f": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "g": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "names": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "pond": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        }
+      },
+      "textStyles": [
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|12px|400|18px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "12px",
+          "weight": "400",
+          "lineHeight": "18px",
+          "n": 25
+        },
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|13px|500|20px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "13px",
+          "weight": "500",
+          "lineHeight": "20px",
+          "n": 23
+        },
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|12px|600|16px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "12px",
+          "weight": "600",
+          "lineHeight": "16px",
+          "n": 5
+        },
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|13px|400|20px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "13px",
+          "weight": "400",
+          "lineHeight": "20px",
+          "n": 2
+        },
+        {
+          "key": "Fraunces,Noto Serif SC,Songti SC,serif|17px|600|20px",
+          "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+          "size": "17px",
+          "weight": "600",
+          "lineHeight": "20px",
+          "n": 1
+        },
+        {
+          "key": "Fraunces,Noto Serif SC,Songti SC,serif|28px|500|34px",
+          "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+          "size": "28px",
+          "weight": "500",
+          "lineHeight": "34px",
+          "n": 1
+        }
+      ],
+      "edges": [
+        {
+          "x": 200,
+          "n": 7,
+          "samples": [
+            "div#filters.segmented “All5 Completed3 Failed & cancelled2”",
+            "div#filters.segmented “All5 Completed3 Failed & cancelled2”",
+            "div#filters.segmented “All5 Completed3 Failed & cancelled2”",
+            "div#filters.segmented “All5 Completed3 Failed & cancelled2”"
+          ]
+        },
+        {
+          "x": 272,
+          "n": 28,
+          "samples": [
+            "span.t-wordmark “FluxCatch”",
+            "h1#pageTitle.t-display “Downloads”",
+            "p#pageSummary.t-meta “3 files · 3.2 GB”",
+            "h2#activeHeading.group-label.t-label.text-column “In progress”"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "downloads-active-960",
+      "surface": "downloads",
+      "theme": "morning",
+      "lang": "en",
+      "width": 960,
+      "height": 900,
+      "display": {
+        "all": 2,
+        "excludingBrand": 1,
+        "brand": 1,
+        "samples": [
+          "h1#pageTitle.t-display “Downloads”"
+        ]
+      },
+      "nesting": {
+        "violations": [],
+        "containers": 3,
+        "maxDepth": 1
+      },
+      "contrast": {
+        "checked": 57,
+        "failures": [],
+        "uncertain": []
+      },
+      "clipping": {
+        "clipped": [],
+        "coveredAtRest": [],
+        "focusObscured": [],
+        "dialogActions": []
+      },
+      "locale": {
+        "leaks": []
+      },
+      "rules": [],
+      "filenames": {
+        "endTruncated": []
+      },
+      "pond": {
+        "present": true,
+        "image": true,
+        "footprint": 10.9,
+        "meanDeltaL": 0.26,
+        "p95DeltaL": 0.6,
+        "meanDeltaChroma": 3.74,
+        "pass": true
+      },
+      "viewport": {
+        "width": 960,
+        "height": 900,
+        "scrollHeight": 1151,
+        "lang": "en"
+      },
+      "screenshot": "shots/downloads-active-960-morning-en.png",
+      "checks": {
+        "a": {
+          "value": 6,
+          "budget": 6,
+          "pass": true
+        },
+        "display": {
+          "value": 1,
+          "budget": 2,
+          "pass": true
+        },
+        "b": {
+          "value": 2,
+          "budget": 3,
+          "pass": true
+        },
+        "c": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "d": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "e": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "f": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "g": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "names": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "pond": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        }
+      },
+      "textStyles": [
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|12px|400|18px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "12px",
+          "weight": "400",
+          "lineHeight": "18px",
+          "n": 25
+        },
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|13px|500|20px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "13px",
+          "weight": "500",
+          "lineHeight": "20px",
+          "n": 23
+        },
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|12px|600|16px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "12px",
+          "weight": "600",
+          "lineHeight": "16px",
+          "n": 5
+        },
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|13px|400|20px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "13px",
+          "weight": "400",
+          "lineHeight": "20px",
+          "n": 2
+        },
+        {
+          "key": "Fraunces,Noto Serif SC,Songti SC,serif|17px|600|20px",
+          "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+          "size": "17px",
+          "weight": "600",
+          "lineHeight": "20px",
+          "n": 1
+        },
+        {
+          "key": "Fraunces,Noto Serif SC,Songti SC,serif|28px|500|34px",
+          "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+          "size": "28px",
+          "weight": "500",
+          "lineHeight": "34px",
+          "n": 1
+        }
+      ],
+      "edges": [
+        {
+          "x": 40,
+          "n": 7,
+          "samples": [
+            "div#filters.segmented “All5 Completed3 Failed & cancelled2”",
+            "div#filters.segmented “All5 Completed3 Failed & cancelled2”",
+            "div#filters.segmented “All5 Completed3 Failed & cancelled2”",
+            "div#filters.segmented “All5 Completed3 Failed & cancelled2”"
+          ]
+        },
+        {
+          "x": 112,
+          "n": 28,
+          "samples": [
+            "span.t-wordmark “FluxCatch”",
+            "h1#pageTitle.t-display “Downloads”",
+            "p#pageSummary.t-meta “3 files · 3.2 GB”",
+            "h2#activeHeading.group-label.t-label.text-column “In progress”"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "downloads-active-1280",
+      "surface": "downloads",
+      "theme": "dusk",
+      "lang": "en",
+      "width": 1280,
+      "height": 900,
+      "display": {
+        "all": 2,
+        "excludingBrand": 1,
+        "brand": 1,
+        "samples": [
+          "h1#pageTitle.t-display “Downloads”"
+        ]
+      },
+      "nesting": {
+        "violations": [],
+        "containers": 3,
+        "maxDepth": 1
+      },
+      "contrast": {
+        "checked": 57,
+        "failures": [],
+        "uncertain": []
+      },
+      "clipping": {
+        "clipped": [],
+        "coveredAtRest": [],
+        "focusObscured": [],
+        "dialogActions": []
+      },
+      "locale": {
+        "leaks": []
+      },
+      "rules": [],
+      "filenames": {
+        "endTruncated": []
+      },
+      "pond": {
+        "present": true,
+        "image": true,
+        "footprint": 1.8,
+        "meanDeltaL": 0.42,
+        "p95DeltaL": 1.05,
+        "meanDeltaChroma": 8.8,
+        "pass": true
+      },
+      "viewport": {
+        "width": 1280,
+        "height": 900,
+        "scrollHeight": 1239,
+        "lang": "en"
+      },
+      "screenshot": "shots/downloads-active-1280-dusk-en.png",
+      "checks": {
+        "a": {
+          "value": 6,
+          "budget": 6,
+          "pass": true
+        },
+        "display": {
+          "value": 1,
+          "budget": 2,
+          "pass": true
+        },
+        "b": {
+          "value": 2,
+          "budget": 3,
+          "pass": true
+        },
+        "c": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "d": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "e": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "f": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "g": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "names": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "pond": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        }
+      },
+      "textStyles": [
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|12px|400|18px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "12px",
+          "weight": "400",
+          "lineHeight": "18px",
+          "n": 25
+        },
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|13px|500|20px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "13px",
+          "weight": "500",
+          "lineHeight": "20px",
+          "n": 23
+        },
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|12px|600|16px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "12px",
+          "weight": "600",
+          "lineHeight": "16px",
+          "n": 5
+        },
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|13px|400|20px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "13px",
+          "weight": "400",
+          "lineHeight": "20px",
+          "n": 2
+        },
+        {
+          "key": "Fraunces,Noto Serif SC,Songti SC,serif|17px|600|20px",
+          "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+          "size": "17px",
+          "weight": "600",
+          "lineHeight": "20px",
+          "n": 1
+        },
+        {
+          "key": "Fraunces,Noto Serif SC,Songti SC,serif|28px|500|34px",
+          "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+          "size": "28px",
+          "weight": "500",
+          "lineHeight": "34px",
+          "n": 1
+        }
+      ],
+      "edges": [
+        {
+          "x": 200,
+          "n": 7,
+          "samples": [
+            "div#filters.segmented “All5 Completed3 Failed & cancelled2”",
+            "div#filters.segmented “All5 Completed3 Failed & cancelled2”",
+            "div#filters.segmented “All5 Completed3 Failed & cancelled2”",
+            "div#filters.segmented “All5 Completed3 Failed & cancelled2”"
+          ]
+        },
+        {
+          "x": 272,
+          "n": 28,
+          "samples": [
+            "span.t-wordmark “FluxCatch”",
+            "h1#pageTitle.t-display “Downloads”",
+            "p#pageSummary.t-meta “3 files · 3.2 GB”",
+            "h2#activeHeading.group-label.t-label.text-column “In progress”"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "downloads-active-960",
+      "surface": "downloads",
+      "theme": "dusk",
+      "lang": "en",
+      "width": 960,
+      "height": 900,
+      "display": {
+        "all": 2,
+        "excludingBrand": 1,
+        "brand": 1,
+        "samples": [
+          "h1#pageTitle.t-display “Downloads”"
+        ]
+      },
+      "nesting": {
+        "violations": [],
+        "containers": 3,
+        "maxDepth": 1
+      },
+      "contrast": {
+        "checked": 57,
+        "failures": [],
+        "uncertain": []
+      },
+      "clipping": {
+        "clipped": [],
+        "coveredAtRest": [],
+        "focusObscured": [],
+        "dialogActions": []
+      },
+      "locale": {
+        "leaks": []
+      },
+      "rules": [],
+      "filenames": {
+        "endTruncated": []
+      },
+      "pond": {
+        "present": true,
+        "image": true,
+        "footprint": 8,
+        "meanDeltaL": 0.38,
+        "p95DeltaL": 1.03,
+        "meanDeltaChroma": 7.72,
+        "pass": true
+      },
+      "viewport": {
+        "width": 960,
+        "height": 900,
+        "scrollHeight": 1151,
+        "lang": "en"
+      },
+      "screenshot": "shots/downloads-active-960-dusk-en.png",
+      "checks": {
+        "a": {
+          "value": 6,
+          "budget": 6,
+          "pass": true
+        },
+        "display": {
+          "value": 1,
+          "budget": 2,
+          "pass": true
+        },
+        "b": {
+          "value": 2,
+          "budget": 3,
+          "pass": true
+        },
+        "c": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "d": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "e": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "f": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "g": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "names": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "pond": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        }
+      },
+      "textStyles": [
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|12px|400|18px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "12px",
+          "weight": "400",
+          "lineHeight": "18px",
+          "n": 25
+        },
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|13px|500|20px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "13px",
+          "weight": "500",
+          "lineHeight": "20px",
+          "n": 23
+        },
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|12px|600|16px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "12px",
+          "weight": "600",
+          "lineHeight": "16px",
+          "n": 5
+        },
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|13px|400|20px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "13px",
+          "weight": "400",
+          "lineHeight": "20px",
+          "n": 2
+        },
+        {
+          "key": "Fraunces,Noto Serif SC,Songti SC,serif|17px|600|20px",
+          "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+          "size": "17px",
+          "weight": "600",
+          "lineHeight": "20px",
+          "n": 1
+        },
+        {
+          "key": "Fraunces,Noto Serif SC,Songti SC,serif|28px|500|34px",
+          "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+          "size": "28px",
+          "weight": "500",
+          "lineHeight": "34px",
+          "n": 1
+        }
+      ],
+      "edges": [
+        {
+          "x": 40,
+          "n": 7,
+          "samples": [
+            "div#filters.segmented “All5 Completed3 Failed & cancelled2”",
+            "div#filters.segmented “All5 Completed3 Failed & cancelled2”",
+            "div#filters.segmented “All5 Completed3 Failed & cancelled2”",
+            "div#filters.segmented “All5 Completed3 Failed & cancelled2”"
+          ]
+        },
+        {
+          "x": 112,
+          "n": 28,
+          "samples": [
+            "span.t-wordmark “FluxCatch”",
+            "h1#pageTitle.t-display “Downloads”",
+            "p#pageSummary.t-meta “3 files · 3.2 GB”",
+            "h2#activeHeading.group-label.t-label.text-column “In progress”"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "downloads-1280",
+      "surface": "downloads",
+      "theme": "morning",
+      "lang": "zh",
+      "width": 1280,
+      "height": 900,
+      "display": {
+        "all": 2,
+        "excludingBrand": 1,
+        "brand": 1,
+        "samples": [
+          "h1#pageTitle.t-display “下载记录”"
+        ]
+      },
+      "nesting": {
+        "violations": [],
+        "containers": 3,
+        "maxDepth": 1
+      },
+      "contrast": {
+        "checked": 44,
+        "failures": [],
+        "uncertain": []
+      },
+      "clipping": {
+        "clipped": [],
+        "coveredAtRest": [],
+        "focusObscured": [],
+        "dialogActions": []
+      },
+      "locale": {
+        "leaks": []
+      },
+      "rules": [],
+      "filenames": {
+        "endTruncated": []
+      },
+      "pond": {
+        "present": true,
+        "image": true,
+        "footprint": 2,
+        "meanDeltaL": 0.24,
+        "p95DeltaL": 0.64,
+        "meanDeltaChroma": 4.04,
+        "pass": true
+      },
+      "viewport": {
+        "width": 1280,
+        "height": 900,
+        "scrollHeight": 976,
+        "lang": "zh-CN"
+      },
+      "screenshot": "shots/downloads-1280-morning-zh.png",
+      "checks": {
+        "a": {
+          "value": 6,
+          "budget": 6,
+          "pass": true
+        },
+        "display": {
+          "value": 1,
+          "budget": 2,
+          "pass": true
+        },
+        "b": {
+          "value": 2,
+          "budget": 3,
+          "pass": true
+        },
+        "c": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "d": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "e": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "f": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "g": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "names": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "pond": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        }
+      },
+      "textStyles": [
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|12px|400|20px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "12px",
+          "weight": "400",
+          "lineHeight": "20px",
+          "n": 20
+        },
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|13px|500|22px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "13px",
+          "weight": "500",
+          "lineHeight": "22px",
+          "n": 15
+        },
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|12px|600|16px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "12px",
+          "weight": "600",
+          "lineHeight": "16px",
+          "n": 4
+        },
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|13px|400|22px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "13px",
+          "weight": "400",
+          "lineHeight": "22px",
+          "n": 3
+        },
+        {
+          "key": "Fraunces,Noto Serif SC,Songti SC,serif|17px|600|20px",
+          "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+          "size": "17px",
+          "weight": "600",
+          "lineHeight": "20px",
+          "n": 1
+        },
+        {
+          "key": "Fraunces,Noto Serif SC,Songti SC,serif|28px|500|34px",
+          "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+          "size": "28px",
+          "weight": "500",
+          "lineHeight": "34px",
+          "n": 1
+        }
+      ],
+      "edges": [
+        {
+          "x": 200,
+          "n": 7,
+          "samples": [
+            "div#filters.segmented “全部5 已完成3 失败与取消2”",
+            "div#filters.segmented “全部5 已完成3 失败与取消2”",
+            "div#filters.segmented “全部5 已完成3 失败与取消2”",
+            "div#filters.segmented “全部5 已完成3 失败与取消2”"
+          ]
+        },
+        {
+          "x": 272,
+          "n": 22,
+          "samples": [
+            "span.t-wordmark “FluxCatch”",
+            "h1#pageTitle.t-display “下载记录”",
+            "p#pageSummary.t-meta “3 个文件 · 3.2 GB”",
+            "span “本地引擎尚未设置”"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "downloads-960",
+      "surface": "downloads",
+      "theme": "morning",
+      "lang": "zh",
+      "width": 960,
+      "height": 900,
+      "display": {
+        "all": 2,
+        "excludingBrand": 1,
+        "brand": 1,
+        "samples": [
+          "h1#pageTitle.t-display “下载记录”"
+        ]
+      },
+      "nesting": {
+        "violations": [],
+        "containers": 3,
+        "maxDepth": 1
+      },
+      "contrast": {
+        "checked": 44,
+        "failures": [],
+        "uncertain": []
+      },
+      "clipping": {
+        "clipped": [],
+        "coveredAtRest": [],
+        "focusObscured": [],
+        "dialogActions": []
+      },
+      "locale": {
+        "leaks": []
+      },
+      "rules": [],
+      "filenames": {
+        "endTruncated": []
+      },
+      "pond": {
+        "present": true,
+        "image": true,
+        "footprint": 9.1,
+        "meanDeltaL": 0.23,
+        "p95DeltaL": 0.62,
+        "meanDeltaChroma": 3.79,
+        "pass": true
+      },
+      "viewport": {
+        "width": 960,
+        "height": 900,
+        "scrollHeight": 976,
+        "lang": "zh-CN"
+      },
+      "screenshot": "shots/downloads-960-morning-zh.png",
+      "checks": {
+        "a": {
+          "value": 6,
+          "budget": 6,
+          "pass": true
+        },
+        "display": {
+          "value": 1,
+          "budget": 2,
+          "pass": true
+        },
+        "b": {
+          "value": 2,
+          "budget": 3,
+          "pass": true
+        },
+        "c": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "d": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "e": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "f": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "g": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "names": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "pond": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        }
+      },
+      "textStyles": [
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|12px|400|20px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "12px",
+          "weight": "400",
+          "lineHeight": "20px",
+          "n": 20
+        },
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|13px|500|22px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "13px",
+          "weight": "500",
+          "lineHeight": "22px",
+          "n": 15
+        },
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|12px|600|16px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "12px",
+          "weight": "600",
+          "lineHeight": "16px",
+          "n": 4
+        },
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|13px|400|22px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "13px",
+          "weight": "400",
+          "lineHeight": "22px",
+          "n": 3
+        },
+        {
+          "key": "Fraunces,Noto Serif SC,Songti SC,serif|17px|600|20px",
+          "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+          "size": "17px",
+          "weight": "600",
+          "lineHeight": "20px",
+          "n": 1
+        },
+        {
+          "key": "Fraunces,Noto Serif SC,Songti SC,serif|28px|500|34px",
+          "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+          "size": "28px",
+          "weight": "500",
+          "lineHeight": "34px",
+          "n": 1
+        }
+      ],
+      "edges": [
+        {
+          "x": 40,
+          "n": 7,
+          "samples": [
+            "div#filters.segmented “全部5 已完成3 失败与取消2”",
+            "div#filters.segmented “全部5 已完成3 失败与取消2”",
+            "div#filters.segmented “全部5 已完成3 失败与取消2”",
+            "div#filters.segmented “全部5 已完成3 失败与取消2”"
+          ]
+        },
+        {
+          "x": 112,
+          "n": 22,
+          "samples": [
+            "span.t-wordmark “FluxCatch”",
+            "h1#pageTitle.t-display “下载记录”",
+            "p#pageSummary.t-meta “3 个文件 · 3.2 GB”",
+            "span “本地引擎尚未设置”"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "downloads-1280",
+      "surface": "downloads",
+      "theme": "dusk",
+      "lang": "zh",
+      "width": 1280,
+      "height": 900,
+      "display": {
+        "all": 2,
+        "excludingBrand": 1,
+        "brand": 1,
+        "samples": [
+          "h1#pageTitle.t-display “下载记录”"
+        ]
+      },
+      "nesting": {
+        "violations": [],
+        "containers": 3,
+        "maxDepth": 1
+      },
+      "contrast": {
+        "checked": 44,
+        "failures": [],
+        "uncertain": []
+      },
+      "clipping": {
+        "clipped": [],
+        "coveredAtRest": [],
+        "focusObscured": [],
+        "dialogActions": []
+      },
+      "locale": {
+        "leaks": []
+      },
+      "rules": [],
+      "filenames": {
+        "endTruncated": []
+      },
+      "pond": {
+        "present": true,
+        "image": true,
+        "footprint": 1.7,
+        "meanDeltaL": 0.44,
+        "p95DeltaL": 1.2,
+        "meanDeltaChroma": 9.02,
+        "pass": true
+      },
+      "viewport": {
+        "width": 1280,
+        "height": 900,
+        "scrollHeight": 976,
+        "lang": "zh-CN"
+      },
+      "screenshot": "shots/downloads-1280-dusk-zh.png",
+      "checks": {
+        "a": {
+          "value": 6,
+          "budget": 6,
+          "pass": true
+        },
+        "display": {
+          "value": 1,
+          "budget": 2,
+          "pass": true
+        },
+        "b": {
+          "value": 2,
+          "budget": 3,
+          "pass": true
+        },
+        "c": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "d": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "e": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "f": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "g": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "names": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "pond": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        }
+      },
+      "textStyles": [
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|12px|400|20px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "12px",
+          "weight": "400",
+          "lineHeight": "20px",
+          "n": 20
+        },
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|13px|500|22px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "13px",
+          "weight": "500",
+          "lineHeight": "22px",
+          "n": 15
+        },
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|12px|600|16px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "12px",
+          "weight": "600",
+          "lineHeight": "16px",
+          "n": 4
+        },
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|13px|400|22px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "13px",
+          "weight": "400",
+          "lineHeight": "22px",
+          "n": 3
+        },
+        {
+          "key": "Fraunces,Noto Serif SC,Songti SC,serif|17px|600|20px",
+          "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+          "size": "17px",
+          "weight": "600",
+          "lineHeight": "20px",
+          "n": 1
+        },
+        {
+          "key": "Fraunces,Noto Serif SC,Songti SC,serif|28px|500|34px",
+          "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+          "size": "28px",
+          "weight": "500",
+          "lineHeight": "34px",
+          "n": 1
+        }
+      ],
+      "edges": [
+        {
+          "x": 200,
+          "n": 7,
+          "samples": [
+            "div#filters.segmented “全部5 已完成3 失败与取消2”",
+            "div#filters.segmented “全部5 已完成3 失败与取消2”",
+            "div#filters.segmented “全部5 已完成3 失败与取消2”",
+            "div#filters.segmented “全部5 已完成3 失败与取消2”"
+          ]
+        },
+        {
+          "x": 272,
+          "n": 22,
+          "samples": [
+            "span.t-wordmark “FluxCatch”",
+            "h1#pageTitle.t-display “下载记录”",
+            "p#pageSummary.t-meta “3 个文件 · 3.2 GB”",
+            "span “本地引擎尚未设置”"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "downloads-960",
+      "surface": "downloads",
+      "theme": "dusk",
+      "lang": "zh",
+      "width": 960,
+      "height": 900,
+      "display": {
+        "all": 2,
+        "excludingBrand": 1,
+        "brand": 1,
+        "samples": [
+          "h1#pageTitle.t-display “下载记录”"
+        ]
+      },
+      "nesting": {
+        "violations": [],
+        "containers": 3,
+        "maxDepth": 1
+      },
+      "contrast": {
+        "checked": 44,
+        "failures": [],
+        "uncertain": []
+      },
+      "clipping": {
+        "clipped": [],
+        "coveredAtRest": [],
+        "focusObscured": [],
+        "dialogActions": []
+      },
+      "locale": {
+        "leaks": []
+      },
+      "rules": [],
+      "filenames": {
+        "endTruncated": []
+      },
+      "pond": {
+        "present": true,
+        "image": true,
+        "footprint": 7.4,
+        "meanDeltaL": 0.42,
+        "p95DeltaL": 1.15,
+        "meanDeltaChroma": 7.98,
+        "pass": true
+      },
+      "viewport": {
+        "width": 960,
+        "height": 900,
+        "scrollHeight": 976,
+        "lang": "zh-CN"
+      },
+      "screenshot": "shots/downloads-960-dusk-zh.png",
+      "checks": {
+        "a": {
+          "value": 6,
+          "budget": 6,
+          "pass": true
+        },
+        "display": {
+          "value": 1,
+          "budget": 2,
+          "pass": true
+        },
+        "b": {
+          "value": 2,
+          "budget": 3,
+          "pass": true
+        },
+        "c": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "d": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "e": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "f": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "g": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "names": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "pond": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        }
+      },
+      "textStyles": [
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|12px|400|20px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "12px",
+          "weight": "400",
+          "lineHeight": "20px",
+          "n": 20
+        },
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|13px|500|22px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "13px",
+          "weight": "500",
+          "lineHeight": "22px",
+          "n": 15
+        },
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|12px|600|16px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "12px",
+          "weight": "600",
+          "lineHeight": "16px",
+          "n": 4
+        },
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|13px|400|22px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "13px",
+          "weight": "400",
+          "lineHeight": "22px",
+          "n": 3
+        },
+        {
+          "key": "Fraunces,Noto Serif SC,Songti SC,serif|17px|600|20px",
+          "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+          "size": "17px",
+          "weight": "600",
+          "lineHeight": "20px",
+          "n": 1
+        },
+        {
+          "key": "Fraunces,Noto Serif SC,Songti SC,serif|28px|500|34px",
+          "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+          "size": "28px",
+          "weight": "500",
+          "lineHeight": "34px",
+          "n": 1
+        }
+      ],
+      "edges": [
+        {
+          "x": 40,
+          "n": 7,
+          "samples": [
+            "div#filters.segmented “全部5 已完成3 失败与取消2”",
+            "div#filters.segmented “全部5 已完成3 失败与取消2”",
+            "div#filters.segmented “全部5 已完成3 失败与取消2”",
+            "div#filters.segmented “全部5 已完成3 失败与取消2”"
+          ]
+        },
+        {
+          "x": 112,
+          "n": 22,
+          "samples": [
+            "span.t-wordmark “FluxCatch”",
+            "h1#pageTitle.t-display “下载记录”",
+            "p#pageSummary.t-meta “3 个文件 · 3.2 GB”",
+            "span “本地引擎尚未设置”"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "downloads-empty-1280",
+      "surface": "downloads",
+      "theme": "morning",
+      "lang": "zh",
+      "width": 1280,
+      "height": 900,
+      "display": {
+        "all": 3,
+        "excludingBrand": 2,
+        "brand": 1,
+        "samples": [
+          "h1#pageTitle.t-display “下载记录”",
+          "p#emptySentence.t-empty “还没有下载记录。”"
+        ]
+      },
+      "nesting": {
+        "violations": [],
+        "containers": 2,
+        "maxDepth": 1
+      },
+      "contrast": {
+        "checked": 8,
+        "failures": [],
+        "uncertain": []
+      },
+      "clipping": {
+        "clipped": [],
+        "coveredAtRest": [],
+        "focusObscured": [],
+        "dialogActions": []
+      },
+      "locale": {
+        "leaks": []
+      },
+      "rules": [],
+      "filenames": {
+        "endTruncated": []
+      },
+      "pond": {
+        "present": true,
+        "image": true,
+        "footprint": 2.5,
+        "meanDeltaL": 0.25,
+        "p95DeltaL": 0.67,
+        "meanDeltaChroma": 4.08,
+        "pass": true
+      },
+      "viewport": {
+        "width": 1280,
+        "height": 900,
+        "scrollHeight": 900,
+        "lang": "zh-CN"
+      },
+      "screenshot": "shots/downloads-empty-1280-morning-zh.png",
+      "checks": {
+        "a": {
+          "value": 5,
+          "budget": 6,
+          "pass": true
+        },
+        "display": {
+          "value": 2,
+          "budget": 2,
+          "pass": true
+        },
+        "b": {
+          "value": 2,
+          "budget": 3,
+          "pass": true
+        },
+        "c": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "d": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "e": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "f": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "g": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "names": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "pond": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        }
+      },
+      "textStyles": [
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|13px|400|22px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "13px",
+          "weight": "400",
+          "lineHeight": "22px",
+          "n": 3
+        },
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|13px|500|22px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "13px",
+          "weight": "500",
+          "lineHeight": "22px",
+          "n": 2
+        },
+        {
+          "key": "Fraunces,Noto Serif SC,Songti SC,serif|17px|600|20px",
+          "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+          "size": "17px",
+          "weight": "600",
+          "lineHeight": "20px",
+          "n": 1
+        },
+        {
+          "key": "Fraunces,Noto Serif SC,Songti SC,serif|28px|500|34px",
+          "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+          "size": "28px",
+          "weight": "500",
+          "lineHeight": "34px",
+          "n": 1
+        },
+        {
+          "key": "Fraunces,Noto Serif SC,Songti SC,serif|19px|400|26px",
+          "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+          "size": "19px",
+          "weight": "400",
+          "lineHeight": "26px",
+          "n": 1
+        }
+      ],
+      "edges": [
+        {
+          "x": 200,
+          "n": 1,
+          "samples": [
+            "label.field.url-field “媒体链接”"
+          ]
+        },
+        {
+          "x": 272,
+          "n": 5,
+          "samples": [
+            "span.t-wordmark “FluxCatch”",
+            "h1#pageTitle.t-display “下载记录”",
+            "span “本地引擎尚未设置”",
+            "p#emptySentence.t-empty “还没有下载记录。”"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "downloads-empty-960",
+      "surface": "downloads",
+      "theme": "morning",
+      "lang": "zh",
+      "width": 960,
+      "height": 900,
+      "display": {
+        "all": 3,
+        "excludingBrand": 2,
+        "brand": 1,
+        "samples": [
+          "h1#pageTitle.t-display “下载记录”",
+          "p#emptySentence.t-empty “还没有下载记录。”"
+        ]
+      },
+      "nesting": {
+        "violations": [],
+        "containers": 2,
+        "maxDepth": 1
+      },
+      "contrast": {
+        "checked": 8,
+        "failures": [],
+        "uncertain": []
+      },
+      "clipping": {
+        "clipped": [],
+        "coveredAtRest": [],
+        "focusObscured": [],
+        "dialogActions": []
+      },
+      "locale": {
+        "leaks": []
+      },
+      "rules": [],
+      "filenames": {
+        "endTruncated": []
+      },
+      "pond": {
+        "present": true,
+        "image": true,
+        "footprint": 10.9,
+        "meanDeltaL": 0.25,
+        "p95DeltaL": 0.63,
+        "meanDeltaChroma": 3.85,
+        "pass": true
+      },
+      "viewport": {
+        "width": 960,
+        "height": 900,
+        "scrollHeight": 900,
+        "lang": "zh-CN"
+      },
+      "screenshot": "shots/downloads-empty-960-morning-zh.png",
+      "checks": {
+        "a": {
+          "value": 5,
+          "budget": 6,
+          "pass": true
+        },
+        "display": {
+          "value": 2,
+          "budget": 2,
+          "pass": true
+        },
+        "b": {
+          "value": 2,
+          "budget": 3,
+          "pass": true
+        },
+        "c": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "d": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "e": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "f": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "g": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "names": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "pond": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        }
+      },
+      "textStyles": [
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|13px|400|22px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "13px",
+          "weight": "400",
+          "lineHeight": "22px",
+          "n": 3
+        },
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|13px|500|22px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "13px",
+          "weight": "500",
+          "lineHeight": "22px",
+          "n": 2
+        },
+        {
+          "key": "Fraunces,Noto Serif SC,Songti SC,serif|17px|600|20px",
+          "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+          "size": "17px",
+          "weight": "600",
+          "lineHeight": "20px",
+          "n": 1
+        },
+        {
+          "key": "Fraunces,Noto Serif SC,Songti SC,serif|28px|500|34px",
+          "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+          "size": "28px",
+          "weight": "500",
+          "lineHeight": "34px",
+          "n": 1
+        },
+        {
+          "key": "Fraunces,Noto Serif SC,Songti SC,serif|19px|400|26px",
+          "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+          "size": "19px",
+          "weight": "400",
+          "lineHeight": "26px",
+          "n": 1
+        }
+      ],
+      "edges": [
+        {
+          "x": 40,
+          "n": 1,
+          "samples": [
+            "label.field.url-field “媒体链接”"
+          ]
+        },
+        {
+          "x": 112,
+          "n": 5,
+          "samples": [
+            "span.t-wordmark “FluxCatch”",
+            "h1#pageTitle.t-display “下载记录”",
+            "span “本地引擎尚未设置”",
+            "p#emptySentence.t-empty “还没有下载记录。”"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "downloads-empty-1280",
+      "surface": "downloads",
+      "theme": "dusk",
+      "lang": "zh",
+      "width": 1280,
+      "height": 900,
+      "display": {
+        "all": 3,
+        "excludingBrand": 2,
+        "brand": 1,
+        "samples": [
+          "h1#pageTitle.t-display “下载记录”",
+          "p#emptySentence.t-empty “还没有下载记录。”"
+        ]
+      },
+      "nesting": {
+        "violations": [],
+        "containers": 2,
+        "maxDepth": 1
+      },
+      "contrast": {
+        "checked": 8,
+        "failures": [],
+        "uncertain": []
+      },
+      "clipping": {
+        "clipped": [],
+        "coveredAtRest": [],
+        "focusObscured": [],
+        "dialogActions": []
+      },
+      "locale": {
+        "leaks": []
+      },
+      "rules": [],
+      "filenames": {
+        "endTruncated": []
+      },
+      "pond": {
+        "present": true,
+        "image": true,
+        "footprint": 1.6,
+        "meanDeltaL": 0.41,
+        "p95DeltaL": 1.16,
+        "meanDeltaChroma": 8.47,
+        "pass": true
+      },
+      "viewport": {
+        "width": 1280,
+        "height": 900,
+        "scrollHeight": 900,
+        "lang": "zh-CN"
+      },
+      "screenshot": "shots/downloads-empty-1280-dusk-zh.png",
+      "checks": {
+        "a": {
+          "value": 5,
+          "budget": 6,
+          "pass": true
+        },
+        "display": {
+          "value": 2,
+          "budget": 2,
+          "pass": true
+        },
+        "b": {
+          "value": 2,
+          "budget": 3,
+          "pass": true
+        },
+        "c": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "d": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "e": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "f": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "g": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "names": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "pond": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        }
+      },
+      "textStyles": [
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|13px|400|22px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "13px",
+          "weight": "400",
+          "lineHeight": "22px",
+          "n": 3
+        },
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|13px|500|22px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "13px",
+          "weight": "500",
+          "lineHeight": "22px",
+          "n": 2
+        },
+        {
+          "key": "Fraunces,Noto Serif SC,Songti SC,serif|17px|600|20px",
+          "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+          "size": "17px",
+          "weight": "600",
+          "lineHeight": "20px",
+          "n": 1
+        },
+        {
+          "key": "Fraunces,Noto Serif SC,Songti SC,serif|28px|500|34px",
+          "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+          "size": "28px",
+          "weight": "500",
+          "lineHeight": "34px",
+          "n": 1
+        },
+        {
+          "key": "Fraunces,Noto Serif SC,Songti SC,serif|19px|400|26px",
+          "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+          "size": "19px",
+          "weight": "400",
+          "lineHeight": "26px",
+          "n": 1
+        }
+      ],
+      "edges": [
+        {
+          "x": 200,
+          "n": 1,
+          "samples": [
+            "label.field.url-field “媒体链接”"
+          ]
+        },
+        {
+          "x": 272,
+          "n": 5,
+          "samples": [
+            "span.t-wordmark “FluxCatch”",
+            "h1#pageTitle.t-display “下载记录”",
+            "span “本地引擎尚未设置”",
+            "p#emptySentence.t-empty “还没有下载记录。”"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "downloads-empty-960",
+      "surface": "downloads",
+      "theme": "dusk",
+      "lang": "zh",
+      "width": 960,
+      "height": 900,
+      "display": {
+        "all": 3,
+        "excludingBrand": 2,
+        "brand": 1,
+        "samples": [
+          "h1#pageTitle.t-display “下载记录”",
+          "p#emptySentence.t-empty “还没有下载记录。”"
+        ]
+      },
+      "nesting": {
+        "violations": [],
+        "containers": 2,
+        "maxDepth": 1
+      },
+      "contrast": {
+        "checked": 8,
+        "failures": [],
+        "uncertain": []
+      },
+      "clipping": {
+        "clipped": [],
+        "coveredAtRest": [],
+        "focusObscured": [],
+        "dialogActions": []
+      },
+      "locale": {
+        "leaks": []
+      },
+      "rules": [],
+      "filenames": {
+        "endTruncated": []
+      },
+      "pond": {
+        "present": true,
+        "image": true,
+        "footprint": 7.4,
+        "meanDeltaL": 0.43,
+        "p95DeltaL": 1.13,
+        "meanDeltaChroma": 8.17,
+        "pass": true
+      },
+      "viewport": {
+        "width": 960,
+        "height": 900,
+        "scrollHeight": 900,
+        "lang": "zh-CN"
+      },
+      "screenshot": "shots/downloads-empty-960-dusk-zh.png",
+      "checks": {
+        "a": {
+          "value": 5,
+          "budget": 6,
+          "pass": true
+        },
+        "display": {
+          "value": 2,
+          "budget": 2,
+          "pass": true
+        },
+        "b": {
+          "value": 2,
+          "budget": 3,
+          "pass": true
+        },
+        "c": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "d": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "e": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "f": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "g": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "names": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "pond": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        }
+      },
+      "textStyles": [
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|13px|400|22px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "13px",
+          "weight": "400",
+          "lineHeight": "22px",
+          "n": 3
+        },
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|13px|500|22px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "13px",
+          "weight": "500",
+          "lineHeight": "22px",
+          "n": 2
+        },
+        {
+          "key": "Fraunces,Noto Serif SC,Songti SC,serif|17px|600|20px",
+          "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+          "size": "17px",
+          "weight": "600",
+          "lineHeight": "20px",
+          "n": 1
+        },
+        {
+          "key": "Fraunces,Noto Serif SC,Songti SC,serif|28px|500|34px",
+          "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+          "size": "28px",
+          "weight": "500",
+          "lineHeight": "34px",
+          "n": 1
+        },
+        {
+          "key": "Fraunces,Noto Serif SC,Songti SC,serif|19px|400|26px",
+          "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+          "size": "19px",
+          "weight": "400",
+          "lineHeight": "26px",
+          "n": 1
+        }
+      ],
+      "edges": [
+        {
+          "x": 40,
+          "n": 1,
+          "samples": [
+            "label.field.url-field “媒体链接”"
+          ]
+        },
+        {
+          "x": 112,
+          "n": 5,
+          "samples": [
+            "span.t-wordmark “FluxCatch”",
+            "h1#pageTitle.t-display “下载记录”",
+            "span “本地引擎尚未设置”",
+            "p#emptySentence.t-empty “还没有下载记录。”"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "downloads-active-1280",
+      "surface": "downloads",
+      "theme": "morning",
+      "lang": "zh",
+      "width": 1280,
+      "height": 900,
+      "display": {
+        "all": 2,
+        "excludingBrand": 1,
+        "brand": 1,
+        "samples": [
+          "h1#pageTitle.t-display “下载记录”"
+        ]
+      },
+      "nesting": {
+        "violations": [],
+        "containers": 3,
+        "maxDepth": 1
+      },
+      "contrast": {
+        "checked": 57,
+        "failures": [],
+        "uncertain": []
+      },
+      "clipping": {
+        "clipped": [],
+        "coveredAtRest": [],
+        "focusObscured": [],
+        "dialogActions": []
+      },
+      "locale": {
+        "leaks": []
+      },
+      "rules": [],
+      "filenames": {
+        "endTruncated": []
+      },
+      "pond": {
+        "present": true,
+        "image": true,
+        "footprint": 1.6,
+        "meanDeltaL": 0.27,
+        "p95DeltaL": 0.6,
+        "meanDeltaChroma": 4.23,
+        "pass": true
+      },
+      "viewport": {
+        "width": 1280,
+        "height": 900,
+        "scrollHeight": 1279,
+        "lang": "zh-CN"
+      },
+      "screenshot": "shots/downloads-active-1280-morning-zh.png",
+      "checks": {
+        "a": {
+          "value": 6,
+          "budget": 6,
+          "pass": true
+        },
+        "display": {
+          "value": 1,
+          "budget": 2,
+          "pass": true
+        },
+        "b": {
+          "value": 2,
+          "budget": 3,
+          "pass": true
+        },
+        "c": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "d": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "e": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "f": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "g": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "names": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "pond": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        }
+      },
+      "textStyles": [
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|12px|400|20px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "12px",
+          "weight": "400",
+          "lineHeight": "20px",
+          "n": 25
+        },
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|13px|500|22px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "13px",
+          "weight": "500",
+          "lineHeight": "22px",
+          "n": 23
+        },
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|12px|600|16px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "12px",
+          "weight": "600",
+          "lineHeight": "16px",
+          "n": 5
+        },
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|13px|400|22px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "13px",
+          "weight": "400",
+          "lineHeight": "22px",
+          "n": 2
+        },
+        {
+          "key": "Fraunces,Noto Serif SC,Songti SC,serif|17px|600|20px",
+          "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+          "size": "17px",
+          "weight": "600",
+          "lineHeight": "20px",
+          "n": 1
+        },
+        {
+          "key": "Fraunces,Noto Serif SC,Songti SC,serif|28px|500|34px",
+          "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+          "size": "28px",
+          "weight": "500",
+          "lineHeight": "34px",
+          "n": 1
+        }
+      ],
+      "edges": [
+        {
+          "x": 200,
+          "n": 7,
+          "samples": [
+            "div#filters.segmented “全部5 已完成3 失败与取消2”",
+            "div#filters.segmented “全部5 已完成3 失败与取消2”",
+            "div#filters.segmented “全部5 已完成3 失败与取消2”",
+            "div#filters.segmented “全部5 已完成3 失败与取消2”"
+          ]
+        },
+        {
+          "x": 272,
+          "n": 28,
+          "samples": [
+            "span.t-wordmark “FluxCatch”",
+            "h1#pageTitle.t-display “下载记录”",
+            "p#pageSummary.t-meta “3 个文件 · 3.2 GB”",
+            "h2#activeHeading.group-label.t-label.text-column “进行中”"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "downloads-active-960",
+      "surface": "downloads",
+      "theme": "morning",
+      "lang": "zh",
+      "width": 960,
+      "height": 900,
+      "display": {
+        "all": 2,
+        "excludingBrand": 1,
+        "brand": 1,
+        "samples": [
+          "h1#pageTitle.t-display “下载记录”"
+        ]
+      },
+      "nesting": {
+        "violations": [],
+        "containers": 3,
+        "maxDepth": 1
+      },
+      "contrast": {
+        "checked": 57,
+        "failures": [],
+        "uncertain": []
+      },
+      "clipping": {
+        "clipped": [],
+        "coveredAtRest": [],
+        "focusObscured": [],
+        "dialogActions": []
+      },
+      "locale": {
+        "leaks": []
+      },
+      "rules": [],
+      "filenames": {
+        "endTruncated": []
+      },
+      "pond": {
+        "present": true,
+        "image": true,
+        "footprint": 7.8,
+        "meanDeltaL": 0.25,
+        "p95DeltaL": 0.62,
+        "meanDeltaChroma": 3.78,
+        "pass": true
+      },
+      "viewport": {
+        "width": 960,
+        "height": 900,
+        "scrollHeight": 1189,
+        "lang": "zh-CN"
+      },
+      "screenshot": "shots/downloads-active-960-morning-zh.png",
+      "checks": {
+        "a": {
+          "value": 6,
+          "budget": 6,
+          "pass": true
+        },
+        "display": {
+          "value": 1,
+          "budget": 2,
+          "pass": true
+        },
+        "b": {
+          "value": 2,
+          "budget": 3,
+          "pass": true
+        },
+        "c": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "d": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "e": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "f": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "g": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "names": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "pond": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        }
+      },
+      "textStyles": [
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|12px|400|20px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "12px",
+          "weight": "400",
+          "lineHeight": "20px",
+          "n": 25
+        },
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|13px|500|22px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "13px",
+          "weight": "500",
+          "lineHeight": "22px",
+          "n": 23
+        },
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|12px|600|16px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "12px",
+          "weight": "600",
+          "lineHeight": "16px",
+          "n": 5
+        },
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|13px|400|22px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "13px",
+          "weight": "400",
+          "lineHeight": "22px",
+          "n": 2
+        },
+        {
+          "key": "Fraunces,Noto Serif SC,Songti SC,serif|17px|600|20px",
+          "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+          "size": "17px",
+          "weight": "600",
+          "lineHeight": "20px",
+          "n": 1
+        },
+        {
+          "key": "Fraunces,Noto Serif SC,Songti SC,serif|28px|500|34px",
+          "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+          "size": "28px",
+          "weight": "500",
+          "lineHeight": "34px",
+          "n": 1
+        }
+      ],
+      "edges": [
+        {
+          "x": 40,
+          "n": 7,
+          "samples": [
+            "div#filters.segmented “全部5 已完成3 失败与取消2”",
+            "div#filters.segmented “全部5 已完成3 失败与取消2”",
+            "div#filters.segmented “全部5 已完成3 失败与取消2”",
+            "div#filters.segmented “全部5 已完成3 失败与取消2”"
+          ]
+        },
+        {
+          "x": 112,
+          "n": 28,
+          "samples": [
+            "span.t-wordmark “FluxCatch”",
+            "h1#pageTitle.t-display “下载记录”",
+            "p#pageSummary.t-meta “3 个文件 · 3.2 GB”",
+            "h2#activeHeading.group-label.t-label.text-column “进行中”"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "downloads-active-1280",
+      "surface": "downloads",
+      "theme": "dusk",
+      "lang": "zh",
+      "width": 1280,
+      "height": 900,
+      "display": {
+        "all": 2,
+        "excludingBrand": 1,
+        "brand": 1,
+        "samples": [
+          "h1#pageTitle.t-display “下载记录”"
+        ]
+      },
+      "nesting": {
+        "violations": [],
+        "containers": 3,
+        "maxDepth": 1
+      },
+      "contrast": {
+        "checked": 57,
+        "failures": [],
+        "uncertain": []
+      },
+      "clipping": {
+        "clipped": [],
+        "coveredAtRest": [],
+        "focusObscured": [],
+        "dialogActions": []
+      },
+      "locale": {
+        "leaks": []
+      },
+      "rules": [],
+      "filenames": {
+        "endTruncated": []
+      },
+      "pond": {
+        "present": true,
+        "image": true,
+        "footprint": 2.4,
+        "meanDeltaL": 0.44,
+        "p95DeltaL": 1.12,
+        "meanDeltaChroma": 8.75,
+        "pass": true
+      },
+      "viewport": {
+        "width": 1280,
+        "height": 900,
+        "scrollHeight": 1279,
+        "lang": "zh-CN"
+      },
+      "screenshot": "shots/downloads-active-1280-dusk-zh.png",
+      "checks": {
+        "a": {
+          "value": 6,
+          "budget": 6,
+          "pass": true
+        },
+        "display": {
+          "value": 1,
+          "budget": 2,
+          "pass": true
+        },
+        "b": {
+          "value": 2,
+          "budget": 3,
+          "pass": true
+        },
+        "c": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "d": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "e": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "f": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "g": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "names": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "pond": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        }
+      },
+      "textStyles": [
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|12px|400|20px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "12px",
+          "weight": "400",
+          "lineHeight": "20px",
+          "n": 25
+        },
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|13px|500|22px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "13px",
+          "weight": "500",
+          "lineHeight": "22px",
+          "n": 23
+        },
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|12px|600|16px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "12px",
+          "weight": "600",
+          "lineHeight": "16px",
+          "n": 5
+        },
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|13px|400|22px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "13px",
+          "weight": "400",
+          "lineHeight": "22px",
+          "n": 2
+        },
+        {
+          "key": "Fraunces,Noto Serif SC,Songti SC,serif|17px|600|20px",
+          "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+          "size": "17px",
+          "weight": "600",
+          "lineHeight": "20px",
+          "n": 1
+        },
+        {
+          "key": "Fraunces,Noto Serif SC,Songti SC,serif|28px|500|34px",
+          "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+          "size": "28px",
+          "weight": "500",
+          "lineHeight": "34px",
+          "n": 1
+        }
+      ],
+      "edges": [
+        {
+          "x": 200,
+          "n": 7,
+          "samples": [
+            "div#filters.segmented “全部5 已完成3 失败与取消2”",
+            "div#filters.segmented “全部5 已完成3 失败与取消2”",
+            "div#filters.segmented “全部5 已完成3 失败与取消2”",
+            "div#filters.segmented “全部5 已完成3 失败与取消2”"
+          ]
+        },
+        {
+          "x": 272,
+          "n": 28,
+          "samples": [
+            "span.t-wordmark “FluxCatch”",
+            "h1#pageTitle.t-display “下载记录”",
+            "p#pageSummary.t-meta “3 个文件 · 3.2 GB”",
+            "h2#activeHeading.group-label.t-label.text-column “进行中”"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "downloads-active-960",
+      "surface": "downloads",
+      "theme": "dusk",
+      "lang": "zh",
+      "width": 960,
+      "height": 900,
+      "display": {
+        "all": 2,
+        "excludingBrand": 1,
+        "brand": 1,
+        "samples": [
+          "h1#pageTitle.t-display “下载记录”"
+        ]
+      },
+      "nesting": {
+        "violations": [],
+        "containers": 3,
+        "maxDepth": 1
+      },
+      "contrast": {
+        "checked": 57,
+        "failures": [],
+        "uncertain": []
+      },
+      "clipping": {
+        "clipped": [],
+        "coveredAtRest": [],
+        "focusObscured": [],
+        "dialogActions": []
+      },
+      "locale": {
+        "leaks": []
+      },
+      "rules": [],
+      "filenames": {
+        "endTruncated": []
+      },
+      "pond": {
+        "present": true,
+        "image": true,
+        "footprint": 10.7,
+        "meanDeltaL": 0.42,
+        "p95DeltaL": 1.04,
+        "meanDeltaChroma": 7.63,
+        "pass": true
+      },
+      "viewport": {
+        "width": 960,
+        "height": 900,
+        "scrollHeight": 1189,
+        "lang": "zh-CN"
+      },
+      "screenshot": "shots/downloads-active-960-dusk-zh.png",
+      "checks": {
+        "a": {
+          "value": 6,
+          "budget": 6,
+          "pass": true
+        },
+        "display": {
+          "value": 1,
+          "budget": 2,
+          "pass": true
+        },
+        "b": {
+          "value": 2,
+          "budget": 3,
+          "pass": true
+        },
+        "c": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "d": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "e": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "f": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "g": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "names": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        },
+        "pond": {
+          "value": 0,
+          "budget": 0,
+          "pass": true
+        }
+      },
+      "textStyles": [
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|12px|400|20px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "12px",
+          "weight": "400",
+          "lineHeight": "20px",
+          "n": 25
+        },
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|13px|500|22px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "13px",
+          "weight": "500",
+          "lineHeight": "22px",
+          "n": 23
+        },
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|12px|600|16px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "12px",
+          "weight": "600",
+          "lineHeight": "16px",
+          "n": 5
+        },
+        {
+          "key": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif|13px|400|22px",
+          "family": "Instrument Sans,PingFang SC,Hiragino Sans GB,Microsoft YaHei,Noto Sans SC,sans-serif",
+          "size": "13px",
+          "weight": "400",
+          "lineHeight": "22px",
+          "n": 2
+        },
+        {
+          "key": "Fraunces,Noto Serif SC,Songti SC,serif|17px|600|20px",
+          "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+          "size": "17px",
+          "weight": "600",
+          "lineHeight": "20px",
+          "n": 1
+        },
+        {
+          "key": "Fraunces,Noto Serif SC,Songti SC,serif|28px|500|34px",
+          "family": "Fraunces,Noto Serif SC,Songti SC,serif",
+          "size": "28px",
+          "weight": "500",
+          "lineHeight": "34px",
+          "n": 1
+        }
+      ],
+      "edges": [
+        {
+          "x": 40,
+          "n": 7,
+          "samples": [
+            "div#filters.segmented “全部5 已完成3 失败与取消2”",
+            "div#filters.segmented “全部5 已完成3 失败与取消2”",
+            "div#filters.segmented “全部5 已完成3 失败与取消2”",
+            "div#filters.segmented “全部5 已完成3 失败与取消2”"
+          ]
+        },
+        {
+          "x": 112,
+          "n": 28,
+          "samples": [
+            "span.t-wordmark “FluxCatch”",
+            "h1#pageTitle.t-display “下载记录”",
+            "p#pageSummary.t-meta “3 个文件 · 3.2 GB”",
+            "h2#activeHeading.group-label.t-label.text-column “进行中”"
+          ]
+        }
+      ]
+    }
+  ]
+}

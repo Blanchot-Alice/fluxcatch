@@ -7,79 +7,58 @@ import { captureMediaRefresh, isMediaRefreshCurrent } from "../extension/sidepan
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const extension = path.join(root, "extension");
+const read = (file) => fs.readFileSync(path.join(extension, file), "utf8");
 
 test("manifest exposes the FluxCatch side panel workspace", () => {
-  const manifest = JSON.parse(fs.readFileSync(path.join(extension, "manifest.json"), "utf8"));
+  const manifest = JSON.parse(read("manifest.json"));
   assert.ok(manifest.permissions.includes("sidePanel"));
   assert.equal(manifest.side_panel?.default_path, "sidepanel/sidepanel.html");
   assert.ok(fs.existsSync(path.join(extension, manifest.side_panel.default_path)));
 });
 
-test("side panel ships complete workspace assets and accessible states", () => {
-  const html = fs.readFileSync(path.join(extension, "sidepanel/sidepanel.html"), "utf8");
-  const css = fs.readFileSync(path.join(extension, "sidepanel/sidepanel.css"), "utf8");
-  const tokens = fs.readFileSync(path.join(extension, "ui/tokens.css"), "utf8");
-  const components = fs.readFileSync(path.join(extension, "ui/components.css"), "utf8");
-  const js = fs.readFileSync(path.join(extension, "sidepanel/sidepanel.js"), "utf8");
-
-  assert.match(html, /id="mediaLoading"/);
-  assert.match(html, /id="mediaEmpty"/);
-  assert.match(html, /id="globalError"[^>]*role="alert"/);
-  assert.match(html, /id="jobsList"/);
-  assert.match(html, /id="jobAnnouncer"[^>]*role="status"/);
-  assert.match(html, /id="clearCompletedButton"/);
-  assert.match(html, /<h3>尚未检测到媒体<\/h3>/);
-  assert.match(html, /扫描不会刷新当前页面/);
+test("side panel ships its v2 assets, accessible states and the worker messages it relies on", () => {
+  const html = read("sidepanel/sidepanel.html");
+  const js = read("sidepanel/sidepanel.js");
+  const media = read("ui/v2/media.js");
+  // FILE_ACTION lives in jobs.js, which the Downloads page shares too.
+  const shared = media + read("ui/v2/jobs.js");
+  for (const id of ["mediaState", "mediaRows", "mediaEmptySlot", "engineLine", "jobsState", "focusSlot", "jobRows", "jobsEmptySlot", "urlButton", "settingsButton"]) {
+    assert.match(html, new RegExp(`id="${id}"`), `#${id}`);
+  }
+  assert.match(html, /id="announcer"[^>]*role="status"[^>]*aria-live="polite"/);
+  assert.match(html, /class="toast-region"/);
+  assert.match(html, /class="menu-layer"[^>]*hidden/);
+  assert.match(html, /class="pond" data-pond aria-hidden="true"/);
   assert.match(html, /sidepanel\.css/);
   assert.match(html, /sidepanel\.js/);
-  assert.ok(html.indexOf('href="../ui/tokens.css"') < html.indexOf('href="../ui/components.css"'));
-  assert.ok(html.indexOf('href="../ui/components.css"') < html.indexOf('href="sidepanel.css"'));
-
-  assert.match(tokens, /--primary:#4E7FA2/);
-  assert.match(tokens, /prefers-color-scheme:\s*dark/);
-  assert.match(components, /prefers-reduced-motion:\s*reduce/);
-  assert.match(components, /button:focus-visible/);
 
   assert.match(js, /name:\s*"fluxcatch-sidepanel"/);
-  assert.match(js, /type:\s*"GET_TAB_MEDIA"/);
-  assert.match(js, /type:\s*"GET_JOBS"/);
-  assert.match(js, /type:\s*"CANCEL_JOB"/);
-  assert.match(js, /type:\s*"CLEAR_COMPLETED_JOBS"/);
-  assert.match(js, /focusedJobId/);
-  assert.match(js, /type:\s*"DOWNLOAD"/);
-  assert.match(js, /kind === "dash_pair"/);
-  assert.match(js, /streamTypeLabel/);
-  assert.match(js, /item\.kind !== "youtube" \|\| BUILD_PROFILE\.features\.externalToolNetwork/);
-  assert.match(js, /download\.textContent = advanced \? "检查并下载" : "按默认设置下载"/);
-  assert.match(html, /id="downloadSettingsButton"/);
-  assert.match(html, /Chrome 权限只会在你点击该按钮后请求/);
-  assert.doesNotMatch(js, /chrome\.action\?\.openPopup|打开下载设置|yt-dlp/);
-  assert.match(js, /permissions\.request\(\{ permissions: \["nativeMessaging"\] \}\)/);
-  assert.match(js, /function mediaNeedsLocalEngine[\s\S]*\|\| !trustedBrowserDirect/);
+  for (const type of ["GET_TAB_MEDIA", "GET_JOBS", "CLEAR_COMPLETED_JOBS", "OPEN_DOWNLOADS_PAGE", "SCAN_TAB", "DOWNLOAD_BATCH", "GET_SETTINGS"]) {
+    assert.match(js, new RegExp(`type: "${type}"`), type);
+  }
+  for (const type of ["DOWNLOAD", "DOWNLOAD_URL", "PROBE_MANIFEST", "CANCEL_JOB", "PAUSE_JOB", "RESUME_JOB", "RETRY_JOB", "REMOVE_HISTORY", "OPEN_JOB_SOURCE", "FILE_ACTION", "PING_HOST"]) {
+    assert.match(shared, new RegExp(`type: "${type}"`), `${type} (shared with the popup)`);
+  }
+  assert.match(js, /import \{[\s\S]*createJobList,[\s\S]*createMediaDialog,[\s\S]*mediaRow,[\s\S]*\} from "\.\.\/ui\/v2\/media\.js"/, "the popup's components");
+  assert.match(media, /item\.kind !== "youtube" \|\| Boolean\(BUILD_PROFILE\.features\.externalToolNetwork\)/, "stable builds hide external-tool candidates");
+  assert.match(media, /function downloadNeedsNative[\s\S]*\|\| !trustedBrowserDirect/, "only fixed trusted candidates skip the engine");
+  assert.match(js, /chrome\.tabs\.onActivated\?\.addListener/);
   assert.match(js, /openOptionsPage/);
-});
-
-test("side panel task rows keep long hashes inside the card", () => {
-  const css = fs.readFileSync(path.join(extension, "sidepanel/sidepanel.css"), "utf8");
-  assert.match(css, /\.jobs-list\s*\{[^}]*grid-template-columns:minmax\(0,1fr\)[^}]*min-width:0[^}]*width:100%/);
-  assert.match(css, /\.job-row\s*\{[^}]*width:100%[^}]*max-width:100%[^}]*min-width:0[^}]*overflow:hidden/);
-  assert.match(css, /\.job-head\s*\{[^}]*grid-template-columns:minmax\(0,1fr\) max-content[^}]*width:100%[^}]*max-width:100%/);
-  assert.match(css, /\.job-title\s*\{[^}]*width:100%[^}]*max-width:100%[^}]*min-width:0[^}]*text-overflow:ellipsis/);
-  assert.match(css, /\.job-state\s*\{[^}]*min-width:max-content[^}]*white-space:nowrap/);
+  assert.doesNotMatch(js, /chrome\.action\?\.openPopup|yt-dlp|innerHTML/);
 });
 
 test("side panel drops a tab A media response after tab B becomes active", () => {
-  const js = fs.readFileSync(path.join(extension, "sidepanel/sidepanel.js"), "utf8");
-  const refreshMediaStart = js.indexOf("async function refreshMedia()");
-  const refreshMediaEnd = js.indexOf("\nfunction renderPageContext", refreshMediaStart);
-  const refreshMedia = js.slice(refreshMediaStart, refreshMediaEnd);
-
-  assert.ok(refreshMediaStart >= 0 && refreshMediaEnd > refreshMediaStart);
+  const js = read("sidepanel/sidepanel.js");
+  const start = js.indexOf("async function refreshMedia()");
+  const end = js.indexOf("\nasync function loadJobs", start);
+  const refreshMedia = js.slice(start, end);
+  assert.ok(start >= 0 && end > start);
   assert.match(refreshMedia, /const request = captureMediaRefresh\(state\)/);
-  assert.match(refreshMedia, /GET_TAB_MEDIA", tabId: request\.tabId/);
-  assert.match(refreshMedia, /if \(!isMediaRefreshCurrent\(request, state\)\) return/);
+  const readable = refreshMedia.slice(refreshMedia.indexOf('type: "GET_TAB_MEDIA"'));
+  assert.match(readable, /GET_TAB_MEDIA", tabId: request\.tabId/);
+  assert.match(readable, /if \(!isMediaRefreshCurrent\(request, state\)\) return/);
   assert.ok(
-    refreshMedia.indexOf("!isMediaRefreshCurrent(request, state)") < refreshMedia.indexOf("state.items ="),
+    readable.indexOf("!isMediaRefreshCurrent(request, state)") < readable.indexOf("state.items ="),
     "the tab/token guard must run before a late response mutates Side Panel state"
   );
 
@@ -91,32 +70,9 @@ test("side panel drops a tab A media response after tab B becomes active", () =>
     "the originating tab response remains current before activation changes state");
 });
 
-test("popup and side panel render privacy-safe thumbnails with kind fallbacks", () => {
-  const popupJs = fs.readFileSync(path.join(extension, "popup/popup.js"), "utf8");
-  const popupCss = fs.readFileSync(path.join(extension, "popup/popup.css"), "utf8");
-  const sidepanelJs = fs.readFileSync(path.join(extension, "sidepanel/sidepanel.js"), "utf8");
-  const sidepanelCss = fs.readFileSync(path.join(extension, "sidepanel/sidepanel.css"), "utf8");
-  const thumbnailJs = fs.readFileSync(path.join(extension, "lib/thumbnail.js"), "utf8");
-
-  for (const source of [popupJs, sidepanelJs]) {
-    assert.match(source, /import \{ loadPrivacySafeThumbnail \} from "\.\.\/lib\/thumbnail\.js"/);
-    assert.match(source, /loadPrivacySafeThumbnail\(item\.thumbnailUrl, fallback,\s*\{/);
-    assert.match(source, /allowedThumbnailOrigins:\s*item\.thumbnailAllowedOrigins/);
-    assert.match(source, /allowPrivateNetworkMedia\s*\?\s*"private_network_opt_in"/);
+test("popup and side panel show a type glyph, never remote thumbnails (design review §6.4: posters on full pages only)", () => {
+  for (const file of ["popup/popup.js", "sidepanel/sidepanel.js", "ui/v2/media.js"]) {
+    assert.doesNotMatch(read(file), /loadPrivacySafeThumbnail|thumbnailUrl/, file);
   }
-  assert.match(thumbnailJs, /import \{ BUILD_PROFILE \} from "\.\/build-profile\.js"/);
-  assert.match(thumbnailJs, /enabled = BUILD_PROFILE\.features\.remoteThumbnails/);
-  assert.match(thumbnailJs, /if \(!enabled\) return fallback/);
-  assert.match(thumbnailJs, /credentials:\s*"omit"/);
-  assert.match(thumbnailJs, /referrerPolicy:\s*"no-referrer"/);
-  assert.match(thumbnailJs, /cache:\s*"force-cache"/);
-  assert.match(thumbnailJs, /redirect:\s*"error"/);
-  assert.match(thumbnailJs, /contentType\.startsWith\("image\/"\)/);
-  assert.match(thumbnailJs, /DEFAULT_MAX_THUMBNAIL_BYTES = 8 \* 1024 \* 1024/);
-  assert.match(thumbnailJs, /URL\.createObjectURL\(blob\)/);
-  assert.match(thumbnailJs, /URL\.revokeObjectURL\(objectUrl\)/);
-  assert.match(thumbnailJs, /thumbnail\.replaceWith\(fallback\)/);
-
-  assert.match(popupCss, /\.media-thumbnail\{[^}]*width:48px[^}]*height:48px[^}]*border-radius:var\(--r-row\)[^}]*object-fit:cover/);
-  assert.match(sidepanelCss, /\.media-thumbnail \{[^}]*width:44px[^}]*height:44px[^}]*border-radius:var\(--r-row\)[^}]*object-fit:cover/);
+  assert.match(read("ui/v2/media.js"), /rowLead\(item, \{ poster: false \}\)/);
 });

@@ -1,38 +1,26 @@
 #!/usr/bin/env node
-// Contrast report for the FluxCatch tokens: every text token against every
-// surface in both themes, plus the filled-control pairs. Prints a Markdown
-// table and, with --write, replaces the report section in DESIGN.md.
+// Contrast report for the v2 value ladders (extension/ui/v2/tokens.css):
+// every text token against every surface of Morning and Dusk, plus the filled
+// primary button. Prints a Markdown table; exits 1 when a pair is below its
+// floor. tests/ui-v2.test.js asserts the same floors, and the design audit
+// measures the rendered pages; this script is for reading the numbers.
 //
-//   node scripts/contrast_report.mjs [--write]
+//   node scripts/contrast_report.mjs
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const TOKENS = path.join(ROOT, "extension", "ui", "tokens.css");
-const DESIGN = path.join(ROOT, "DESIGN.md");
+const TOKENS = path.join(ROOT, "extension", "ui", "v2", "tokens.css");
 
-const SURFACES = ["--bg-canvas", "--surface", "--surface-raised", "--surface-cool", "--surface-sunken"];
-const TEXT = {
-  "--text-primary": 4.5,
-  "--text-secondary": 4.5,
-  "--text-muted": 4.5,
-  "--pond-ink": 4.5,
-  "--lilac-ink": 4.5,
-  "--celadon-ink": 4.5,
-  "--ochre-ink": 4.5,
-  "--rose-ink": 4.5,
-  "--vermilion-ink": 4.5,
-  "--harbour-ink": 4.5,
-  "--pond": 3,
-  "--control-border": 3
-};
+const SURFACES = ["--sunken", "--canvas", "--surface", "--raised"];
+const TEXT = ["--text-primary", "--text-secondary", "--text-muted", "--pond-text", "--lilac-text", "--celadon-text", "--ochre-text", "--rose-text", "--vermilion-text", "--harbour-text"];
 const FILLED = [
-  ["--text-on-accent", "--pond-deep", 4.5],
-  ["--text-on-accent", "--celadon-deep", 4.5],
-  ["--text-on-accent", "--vermilion-ink", 4.5],
-  ["--text-on-accent", "--ochre-ink", 4.5]
+  ["--text-on-accent", "--primary-fill"],
+  ["--text-on-accent", "--primary-fill-hover"],
+  ["--text-on-accent", "--primary-fill-pressed"]
 ];
+const FLOOR = 4.5;
 
 function block(css, selector) {
   const start = css.indexOf(selector);
@@ -52,45 +40,22 @@ function contrast(a, b) {
   return (h + 0.05) / (l + 0.05);
 }
 
-function report() {
-  const css = fs.readFileSync(TOKENS, "utf8");
-  const themes = { Morning: block(css, ":root {"), Dusk: block(css, '[data-theme="dark"] {') };
-  const lines = [];
-  let failures = 0;
-  for (const [name, vars] of Object.entries(themes)) {
-    lines.push(`### ${name}`, "", `| Text | floor | ${SURFACES.map((s) => `${s} ${vars[s]}`).join(" | ")} |`, `| --- | --- | ${SURFACES.map(() => "---").join(" | ")} |`);
-    for (const [token, floor] of Object.entries(TEXT)) {
-      const cells = SURFACES.map((surface) => {
-        const ratio = contrast(vars[token], vars[surface]);
-        const ok = ratio >= floor;
-        if (!ok) failures += 1;
-        return `${ratio.toFixed(2)}${ok ? "" : " ✗"}`;
-      });
-      lines.push(`| \`${token}\` ${vars[token]} | ${floor}:1 | ${cells.join(" | ")} |`);
-    }
-    lines.push("", "| Filled control | ratio |", "| --- | --- |");
-    for (const [text, fill, floor] of FILLED) {
-      const ratio = contrast(vars[text], vars[fill]);
-      const ok = ratio >= floor;
-      if (!ok) failures += 1;
-      lines.push(`| \`${text}\` ${vars[text]} on \`${fill}\` ${vars[fill]} | ${ratio.toFixed(2)}${ok ? "" : " ✗"} |`);
-    }
-    lines.push("");
-  }
-  lines.push(`Pairs below their floor: ${failures}.`, "");
-  return { markdown: lines.join("\n"), failures };
+const css = fs.readFileSync(TOKENS, "utf8");
+const themes = { Morning: block(css, ':root,\n[data-theme="morning"] {'), Dusk: block(css, '[data-theme="dusk"] {') };
+const lines = [];
+let failures = 0;
+const cell = (ratio) => {
+  const ok = ratio >= FLOOR;
+  if (!ok) failures += 1;
+  return `${ratio.toFixed(2)}${ok ? "" : " (below 4.5)"}`;
+};
+for (const [name, vars] of Object.entries(themes)) {
+  lines.push(`### ${name}`, "", `| Text | ${SURFACES.map((s) => `${s} ${vars[s]}`).join(" | ")} |`, `| --- | ${SURFACES.map(() => "---").join(" | ")} |`);
+  for (const token of TEXT) lines.push(`| \`${token}\` ${vars[token]} | ${SURFACES.map((surface) => cell(contrast(vars[token], vars[surface]))).join(" | ")} |`);
+  lines.push("", "| Filled control | ratio |", "| --- | --- |");
+  for (const [text, fill] of FILLED) lines.push(`| \`${text}\` ${vars[text]} on \`${fill}\` ${vars[fill]} | ${cell(contrast(vars[text], vars[fill]))} |`);
+  lines.push("");
 }
-
-const { markdown, failures } = report();
-if (process.argv.includes("--write")) {
-  const design = fs.readFileSync(DESIGN, "utf8");
-  const start = "<!-- CONTRAST_REPORT:START -->";
-  const end = "<!-- CONTRAST_REPORT:END -->";
-  const from = design.indexOf(start);
-  const to = design.indexOf(end);
-  if (from < 0 || to < 0) throw new Error("DESIGN.md is missing the contrast report markers");
-  fs.writeFileSync(DESIGN, `${design.slice(0, from + start.length)}\n${markdown}${design.slice(to)}`);
-  console.log(`wrote ${path.relative(ROOT, DESIGN)}`);
-}
-process.stdout.write(markdown);
+lines.push(`Pairs below ${FLOOR}:1: ${failures}.`, "");
+process.stdout.write(lines.join("\n"));
 process.exit(failures ? 1 : 0);

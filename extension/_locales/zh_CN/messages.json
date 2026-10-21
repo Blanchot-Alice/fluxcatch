@@ -3,15 +3,15 @@
     "message": "FluxCatch"
   },
   "extensionDescription": {
-    "message": "检测当前页面请求的直链媒体、HLS 与 DASH 流，并将用户选择的资源保存到本地。"
+    "message": "找出当前页面上的视频与音频，把你选中的保存到这台电脑，不上传任何内容。"
   },
   "commandOpenPopup": {
-    "message": "打开 FluxCatch 弹窗"
+    "message": "打开 FluxCatch"
   },
   "commandOpenDownloads": {
-    "message": "打开下载记录"
+    "message": "全部下载记录"
   },
   "commandOpenWorkspace": {
-    "message": "打开媒体工作台"
+    "message": "打开工作台"
   }
 }

@@ -1,0 +1,35 @@
+/* FluxCatch v2: what the popup and the side panel share on top of system.css
+   (media rows, the media list header's overflow, the downloads list). The
+   dialog's status line, the dialog fields and the list-header meta live in
+   system.css. Tokens only; no colour literals, no 1px rules. */
+
+/* An overflow icon button at the end of a list header keeps its glyph on the
+   column's right edge, like the row overflow. */
+.list-actions .icon-button {
+  margin-inline-end: calc(-1 * var(--space-2));
+}
+
+/* A detected row waiting for its quality probe. */
+.row[aria-busy="true"] .row-meta {
+  color: var(--pond-text);
+}
+
+/* Disabled tertiary actions in list headers stay quiet. */
+.list-actions .btn:disabled {
+  cursor: default;
+}
+
+/* Lists sit directly on the canvas, one column wide. */
+.media-rows,
+.job-rows {
+  min-width: 0;
+}
+
+/* A detected row without an overflow keeps the overflow's footprint, so
+   every Download ends on one right edge (§5). Mirrors .row-actions .icon-button. */
+.row-actions .icon-slot {
+  flex: none;
+  width: var(--icon-button);
+  height: var(--icon-button);
+  margin-inline-end: calc(-1 * var(--space-2));
+}

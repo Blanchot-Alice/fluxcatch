@@ -1,973 +1,1345 @@
-import { BUILD_PROFILE, HOST_MISMATCH_MESSAGE } from "../lib/build-profile.js";
-import { insertTemplateToken, normalizeFormState, notificationStatusText, reconcileSaveCompletion, resolveNotificationLoadState, statesEqual, validateSettings } from "./form-state.js";
+// FluxCatch Settings (design review §6.13) on the v2 system: a nav column and
+// one content column of setting rows. Every control saves itself and shows an
+// inline "Saved"; there is no save bar. Allowing home-network downloads asks
+// first with the shared confirm popover. The local engine is explained once,
+// here, in #local-engine; its one status row (with Set up) sits in Status.
+// Every heading is a section the nav lists. Developer tools (UI editor,
+// version info) live in Lab and are off by default.
+// All copy comes from ui/v2/messages (settings.*), all formatting follows the
+// one UI language, and worker errors reach the user only through errorText.
+import { BUILD_PROFILE } from "../lib/build-profile.js";
+import { bootLocale, loadUiLanguage, onLocaleChange, saveUiLanguage } from "../ui/v2/locale.js";
+import { MESSAGES, msg } from "../ui/v2/messages.js";
+import { brandMark, button, createMenus, createToaster, filename, icon, runAction, status } from "../ui/v2/components.js";
+import { controlOf, isSwitchOn, markSaved, nav, numberField, segmented, select, setSettingError, setSwitch, settingRow, switchControl, textField } from "../ui/v2/controls.js";
+import { errorText, userError } from "../ui/v2/errors.js";
+import { callWorker } from "../ui/v2/runtime.js";
+import { mountPond } from "../ui/v2/pond.js";
+import { bindUiCustomization, loadDeveloperTools, saveDeveloperTools } from "../ui/customization.js";
+import {
+  FILENAME_TOKENS,
+  FORM_LIMITS,
+  OUTPUT_CONTAINERS,
+  PRESETS,
+  TOKEN_LABELS,
+  engineState,
+  insertTemplateToken,
+  matchPreset,
+  renderTemplatePreview,
+  resolveNotificationLoadState,
+  settingsPayload,
+  stateFromSettings,
+  validateSettings
+} from "./form-state.js";
 import { waitForNativeRecovery } from "./native-recovery.js";
-import { isActionPending, restoreFocus, runKeyedAction, withPendingAction } from "../ui/interactions.js";
-import { bindUiCustomization } from "../ui/customization.js";
-import { bindUiI18n, changeUiLanguage, loadUiLanguage } from "../ui/i18n.js";
 
-let initializeStarted = false;
-await bindUiI18n();
+const $ = (selector, root = document) => root.querySelector(selector);
 
-const form = document.querySelector("#settingsForm");
-const saveButton = form.querySelector(".save-btn");
-const discardButton = document.querySelector("#discardChangesButton");
-const dirtyStatus = document.querySelector("#dirtyStatus");
-const status = document.querySelector("#saveStatus");
-const errorSummary = document.querySelector("#errorSummary");
-const errorSummaryList = document.querySelector("#errorSummaryList");
-const nativePermissionButton = document.querySelector("#nativePermissionButton");
-const nativePermissionStatus = document.querySelector("#nativePermissionStatus");
-const nativeInstallGuide = document.querySelector("#nativeInstallGuide");
-const notificationInput = form.elements.namedItem("showNotifications");
-const notificationPermissionStatus = document.querySelector("#notificationPermissionStatus");
-const privateNetworkInput = form.elements.namedItem("allowPrivateNetworkMedia");
-const privateNetworkDialog = document.querySelector("#privateNetworkDialog");
-const privateNetworkCancelButton = document.querySelector("#privateNetworkCancelButton");
-const copyDiagnosticsButton = document.querySelector("#copyDiagnosticsButton");
-const templateInput = form.elements.namedItem("filenameTemplate");
-const optionsLoadState = document.querySelector("#optionsLoadState");
-const optionsLoadMessage = document.querySelector("#optionsLoadMessage");
-const retrySettingsButton = document.querySelector("#retrySettingsButton");
-
-const CAPABILITY_LABELS = Object.freeze({
-  directMedia: "普通视频与音频文件",
-  staticHls: "静态 HLS 视频",
-  staticDash: "静态 DASH 视频",
-  bilibiliDashPair: "哔哩哔哩分离音视频合并",
-  liveHls: "HLS 直播",
-  encryptedHls: "加密 HLS",
-  separateAudioHls: "HLS 独立音轨",
-  externalToolNetwork: "外部下载工具联网",
-  remoteThumbnails: "远程视频封面"
+// Brand and format names are proper nouns, never translated. The message
+// module joins the site names in the UI language.
+const DIRECT_SITES = Object.freeze(["Instagram", "X"]);
+const YOUTUBE = "YouTube";
+const FORMAT_LABELS = Object.freeze({ mp4: "MP4", mkv: "MKV", webm: "WebM" });
+const KB_UNIT = "KB";
+const DEFAULT_LOCATION = "~/Downloads/FluxCatch";
+const DESIGNER_URL = "../designer/designer.html";
+const SHORTCUTS_URL = "chrome://extensions/shortcuts";
+const SHORTCUT_LABELS = Object.freeze({
+  _execute_action: "settings.shortcuts.popup",
+  "open-downloads": "settings.shortcuts.downloads",
+  "open-workspace": "settings.shortcuts.workspace"
 });
 
-const LAB_FEATURES = Object.freeze([
-  "externalToolNetwork",
-  "liveHls",
-  "encryptedHls"
+/** Sections in page order; ids are stable (nav anchors, deep links, tests). */
+const SECTIONS = Object.freeze([
+  { id: "status", key: "settings.section.status" },
+  { id: "local-engine", key: "settings.section.localEngine" },
+  { id: "capabilities", key: "settings.section.capabilities" },
+  { id: "saving", key: "settings.section.saving" },
+  { id: "speed", key: "settings.section.speed" },
+  { id: "finding", key: "settings.section.finding" },
+  { id: "privacy", key: "settings.section.privacy" },
+  { id: "notifications", key: "settings.section.notifications" },
+  { id: "general", key: "settings.section.general" },
+  { id: "lab", key: "settings.section.lab" }
 ]);
 
-const PRESETS = Object.freeze([
-  Object.freeze({ name: "stable", fragments: 4, ranges: 4 }),
-  Object.freeze({ name: "balanced", fragments: 8, ranges: 8 }),
-  Object.freeze({ name: "fast", fragments: 12, ranges: 12 })
-]);
+/** v1 section anchors still land in the right place. */
+const LEGACY_HASHES = Object.freeze({
+  runtime: "status",
+  localCapabilities: "local-engine",
+  basicDownloads: "saving",
+  performance: "speed",
+  detectionNaming: "finding",
+  privacyNetwork: "privacy",
+  developer: "lab"
+});
 
-let baseline = null;
-let diagnostics = null;
-let nativePermissionGranted = false;
-let notificationPermissionGranted = false;
-let ready = false;
-let dirty = false;
-let statusTimer = null;
-let privateNetworkTrigger = null;
-let templateSelection = { start: 0, end: 0 };
+const NUMBER_FIELDS = Object.freeze({
+  concurrentFragments: { min: FORM_LIMITS.concurrencyMin, max: FORM_LIMITS.concurrencyMax, name: "settings.fragments.name", description: "settings.fragments.description" },
+  concurrentRanges: { min: FORM_LIMITS.concurrencyMin, max: FORM_LIMITS.concurrencyMax, name: "settings.ranges.name", description: "settings.ranges.description" },
+  concurrentJobs: { min: FORM_LIMITS.jobsMin, max: FORM_LIMITS.jobsMax, name: "settings.jobs.name", description: "settings.jobs.description" },
+  minimumKB: { min: FORM_LIMITS.minimumKBMin, max: FORM_LIMITS.minimumKBMax, name: "settings.minimum.name", description: "settings.minimum.description", unit: KB_UNIT }
+});
 
-document.addEventListener("DOMContentLoaded", initialize, { once: true });
+const state = {
+  settings: null,
+  loaded: false,
+  loadFailed: false,
+  host: {},
+  nativePermission: null,
+  engineChecking: true,
+  engineFailed: false,
+  // True only while the engine is connected and compatible (engineState "complete").
+  engineReady: false,
+  permissionRemoved: false,
+  retrySeconds: 0,
+  notificationPermission: false,
+  diagnostics: null,
+  developer: false,
+  languagePref: "auto",
+  shortcuts: [],
+  // Typed fields whose value is not stored: invalid input, or a save that failed.
+  invalid: new Set(),
+  templateSelection: { start: 0, end: 0 },
+  languageSaved: false
+};
 
-function initialize() {
-  if (initializeStarted) return;
-  initializeStarted = true;
-  void bindUiCustomization();
-  renderCapabilities();
-  renderLabStates();
-  bindFormInteractions();
-  void load();
+const ui = { rows: {}, controls: {}, engine: [], capabilities: [], install: null, preset: null, nav: null, developerRows: null, version: {} };
+
+let menus = null;
+let toast = () => {};
+let customization = null;
+let pond = null;
+let initStarted = false;
+let saveChain = Promise.resolve();
+let pingInFlight = null;
+let recoveryInFlight = null;
+// Bumped on every build(); a save that finishes after a rebuild re-syncs the new controls.
+let buildGeneration = 0;
+let lastEngineAnnouncement = "";
+
+await bootLocale();
+document.addEventListener("DOMContentLoaded", () => void init());
+if (document.readyState !== "loading") void init();
+
+async function init() {
+  if (initStarted) return;
+  initStarted = true;
+  toast = createToaster($("#toastRegion"));
+  menus = createMenus($("#menuLayer"));
+  // Listen before the first await: a language change that lands while the page is
+  // still starting must not leave it in the old language. Before the first build,
+  // locale.js already holds the new language, so build() picks it up by itself.
+  let built = false;
+  onLocaleChange(() => {
+    if (!built) return;
+    void loadUiLanguage().then((pref) => { state.languagePref = pref; }, () => {}).finally(() => rebuild());
+  });
+  mountChrome();
+  try { state.developer = await loadDeveloperTools(); } catch { state.developer = false; }
+  try { state.languagePref = await loadUiLanguage(); } catch { state.languagePref = "auto"; }
+  state.shortcuts = await readShortcuts();
+  build();
+  built = true;
+  // Layout overrides only: the UI editor never replaces v2 copy (rename table, §5 note).
+  customization = await bindUiCustomization({ onChange: onCustomizationChange }).catch(() => null);
+  bindGlobalEvents();
+  mountPond({ element: $("[data-pond]"), getZones: pondZones }).then((mounted) => { pond = mounted; }).catch(() => {});
+  await load();
 }
 
-function bindFormInteractions() {
-  form.addEventListener("submit", (event) => void save(event));
-  form.addEventListener("input", handleFormMutation);
-  form.addEventListener("change", handleFormMutation);
-  discardButton.addEventListener("click", discardChanges);
-  nativePermissionButton.addEventListener("click", () => void requestNativeAccess());
-  copyDiagnosticsButton.addEventListener("click", () => void copyDiagnostics());
-  retrySettingsButton.addEventListener("click", () => void load());
-  document.querySelector("#openDownloadFolderButton")?.addEventListener("click", (event) => void withPendingAction(event.currentTarget, "options:open-folder", async () => {
-    const response = await chrome.runtime.sendMessage({ type: "OPEN_DOWNLOAD_FOLDER" });
-    if (!response?.ok) throw new Error(response?.error || "无法打开下载文件夹");
-  }, { pendingText: "打开中…", successText: "已打开 ✓", successDurationMs: 800, failureText: "打开失败" }).catch(() => {}));
-  document.querySelector("#chooseDownloadFolderButton")?.addEventListener("click", (event) => void changeDownloadFolder(event.currentTarget, false));
-  document.querySelector("#resetDownloadFolderButton")?.addEventListener("click", (event) => void changeDownloadFolder(event.currentTarget, true));
-  document.querySelector("#openHistoryButton")?.addEventListener("click", (event) => void withPendingAction(event.currentTarget, "options:open-history", async () => {
-    const response = await chrome.runtime.sendMessage({ type: "OPEN_DOWNLOADS_PAGE" });
-    if (!response?.ok) throw new Error(response?.error || "无法打开下载记录");
-  }, { pendingText: "", successDurationMs: 0, failureText: "打开失败" }).catch(() => {}));
-  notificationInput.addEventListener("change", () => void changeNotificationPermission());
-  privateNetworkInput.addEventListener("change", handlePrivateNetworkChange);
-  privateNetworkDialog.addEventListener("close", finishPrivateNetworkConfirmation);
-  window.addEventListener("beforeunload", handleBeforeUnload);
-  chrome.permissions?.onAdded?.addListener(handleNativePermissionChange);
-  chrome.permissions?.onRemoved?.addListener(handleNativePermissionChange);
-
-  for (const button of document.querySelectorAll(".preset-button")) {
-    button.addEventListener("click", () => applyPreset(button));
-  }
-  for (const button of document.querySelectorAll(".token-chip")) {
-    button.addEventListener("mousedown", (event) => event.preventDefault());
-    button.addEventListener("click", () => insertFilenameToken(button.dataset.token));
-  }
-  for (const type of ["click", "keyup", "select", "input", "blur"]) {
-    templateInput.addEventListener(type, rememberTemplateSelection);
-  }
+// ---------- static chrome ----------
+function mountChrome() {
+  $("#topbarInner").append(brandMark({ size: "m" }));
+  const topbar = $("#topbar");
+  const onScroll = () => {
+    topbar.dataset.scrolled = String((globalThis.scrollY || 0) > 0);
+    updateCurrentSection();
+  };
+  globalThis.addEventListener?.("scroll", onScroll, { passive: true });
+  onScroll();
+  $("#loadRetry").addEventListener("click", () => void load());
 }
 
-function handleNativePermissionChange(permissions) {
-  if (!permissions?.permissions?.includes("nativeMessaging")
-      || isActionPending("native-access") || isActionPending("native-recovery")) return;
-  void refreshNativeAccess();
+function applyStaticCopy() {
+  document.title = `${msg("settings.title")} · ${msg("brand.name")}`;
+  for (const element of document.querySelectorAll("[data-msg]")) element.textContent = msg(element.dataset.msg);
 }
 
-async function load() {
-  ready = false;
-  setOptionsLoadState("loading", "正在加载设置…");
-  form.inert = true;
-  form.setAttribute("aria-busy", "true");
-  syncDirtyState();
-  try {
-    const response = await chrome.runtime.sendMessage({ type: "GET_SETTINGS" });
-    if (!response?.ok) throw new Error(response?.error || "读取设置失败");
-    notificationPermissionGranted = await chrome.permissions.contains({ permissions: ["notifications"] });
-    let loaded = stateFromSettings(response.settings || {});
-    const notificationLoad = resolveNotificationLoadState({
-      persisted: loaded.showNotifications,
-      permissionGranted: notificationPermissionGranted
-    });
-    if (notificationLoad.requiresRepair) {
-      const repaired = await chrome.runtime.sendMessage({
-        type: "SAVE_SETTINGS",
-        settings: { ...(response.settings || {}), showNotifications: false }
-      });
-      if (!repaired?.ok) throw new Error(repaired?.error || "通知设置同步失败");
-      loaded = stateFromSettings(repaired.settings || { ...(response.settings || {}), showNotifications: false });
+function bindGlobalEvents() {
+  globalThis.addEventListener?.("beforeunload", (event) => {
+    if (!state.invalid.size) return;
+    event.preventDefault();
+    event.returnValue = "";
+  });
+  globalThis.addEventListener?.("hashchange", () => jumpToHash());
+  const permissions = globalThis.chrome?.permissions;
+  permissions?.onAdded?.addListener((change) => onPermissionChange(change, true));
+  permissions?.onRemoved?.addListener((change) => onPermissionChange(change, false));
+}
+
+function onPermissionChange(change, added) {
+  const names = change?.permissions || [];
+  if (names.includes("notifications")) state.notificationPermission = added;
+  if (!names.includes("nativeMessaging")) return;
+  // A Set up or Retry in flight reconciles the live permission itself.
+  if (pingInFlight || recoveryInFlight || ui.engine.some((view) => view.action.getAttribute("aria-busy") === "true")) return;
+  void checkEngine();
+}
+
+// ---------- building ----------
+function build() {
+  buildGeneration += 1;
+  lastEngineAnnouncement = "";
+  applyStaticCopy();
+  ui.rows = {};
+  ui.controls = {};
+  ui.engine = [];
+  ui.capabilities = [];
+  ui.version = {};
+  const navigation = nav({
+    items: SECTIONS.map((section) => ({ id: section.id, label: msg(section.key) })),
+    current: SECTIONS[0].id,
+    label: msg("settings.navLabel")
+  });
+  ui.nav = navigation;
+  for (const link of navigation.element.querySelectorAll(".nav-item")) {
+    link.addEventListener("click", () => navigation.setCurrent(link.dataset.navId));
+  }
+  $("#navSlot").replaceChildren(navigation.element);
+  const builders = {
+    status: buildStatus,
+    capabilities: buildCapabilities,
+    "local-engine": buildLocalEngine,
+    saving: buildSaving,
+    speed: buildSpeed,
+    finding: buildFinding,
+    privacy: buildPrivacy,
+    notifications: buildNotifications,
+    general: buildGeneral,
+    lab: buildLab
+  };
+  $("#sections").replaceChildren(...SECTIONS.map((section) => sectionNode(section, builders[section.id]())));
+  writeControls();
+  renderEngine();
+  renderLocation();
+  renderDerived();
+  renderDeveloper();
+  renderLoadState();
+}
+
+/** Rebuild for a language switch: same ids, same state, focus kept by id. */
+function rebuild() {
+  const focusedId = document.activeElement?.id || "";
+  // Typed values that were not saved (invalid) survive the rebuild and are re-checked.
+  const pending = [...state.invalid].map((field) => [field, rawValue(field)]);
+  build();
+  for (const [field, raw] of pending) {
+    controlOf(ui.controls[field]).value = raw;
+    void commitField(field);
+  }
+  customization?.refresh();
+  if (state.languageSaved) {
+    state.languageSaved = false;
+    markSaved(ui.rows.language);
+  }
+  if (focusedId) $(`#${focusedId}`)?.focus?.();
+  pond?.refresh();
+}
+
+function sectionNode(section, children) {
+  const element = document.createElement("section");
+  element.className = "settings-section";
+  element.id = section.id;
+  element.setAttribute("aria-labelledby", `${section.id}-heading`);
+  const heading = document.createElement("h2");
+  heading.className = "t-title section-title";
+  heading.id = `${section.id}-heading`;
+  heading.dataset.msg = section.key;
+  heading.textContent = msg(section.key);
+  element.append(heading, ...children);
+  return element;
+}
+
+// settingRow names an action row's buttons by their own words ("All downloads",
+// "Copy") and describes them with the row name; pass several trailing items
+// as an array and it lays them out in one group.
+function row(key, options) {
+  const element = settingRow({ id: `row-${key}`, ...options });
+  ui.rows[key] = element;
+  return element;
+}
+
+function meta(text, { userContent = false } = {}) {
+  const element = document.createElement("span");
+  element.className = "t-meta row-value";
+  if (userContent) element.dataset.userContent = "";
+  element.textContent = text;
+  return element;
+}
+
+/** A status word with its dot in the trailing cell (never the row's "Saved" note). */
+function rowStatus(tone, label) {
+  const element = status(tone, label);
+  element.classList.add("row-status");
+  return element;
+}
+
+function setDescription(rowElement, text) {
+  const node = rowElement?.querySelector(".setting-description");
+  if (!node) return;
+  node.textContent = text || "";
+  node.hidden = !text;
+}
+
+function sites() {
+  return [...DIRECT_SITES];
+}
+
+// ---------- Status ----------
+// The engine's one status row lives here (§6.13: "Local engine · Not set up ·
+// Set up"); #local-engine keeps the one explanation and the install steps.
+function buildStatus() {
+  return [
+    engineRow("engine", { withDescription: true }),
+    row("merge", { name: msg("settings.merge.name"), control: rowStatus("cancelled", msg("settings.notYet")) }),
+    row("direct", { name: msg("settings.direct.name", { sites: sites() }), control: meta(msg("settings.direct.chrome")) }),
+    row("network", { name: msg("settings.network.name"), control: meta(msg("settings.off")) })
+  ];
+}
+
+// ---------- What FluxCatch can save ----------
+// What can be saved today. "Not yet" is for what this build lacks; a format
+// the build has but only the engine saves shows the engine's own state until
+// the engine is Ready (renderEngine), so the list never claims more than works.
+function buildCapabilities() {
+  const features = BUILD_PROFILE.features;
+  const capabilities = [
+    [msg("settings.cap.directMedia"), features.directMedia, true],
+    [msg("settings.cap.streaming"), features.staticHls || features.staticDash, true],
+    [msg("settings.cap.bilibili"), features.bilibiliDashPair, true],
+    [msg("settings.cap.live"), features.liveHls, true],
+    [msg("settings.cap.encrypted"), features.encryptedHls, true],
+    // Next to Encrypted streams: AES-128 streams save, DRM never does.
+    [msg("settings.cap.protected"), false, true],
+    [msg("settings.cap.separateAudio"), features.separateAudioHls, true],
+    [YOUTUBE, features.externalToolNetwork, true],
+    [msg("settings.cap.thumbnails"), features.remoteThumbnails, false]
+  ];
+  return capabilities.map(([name, feature, needsEngine], index) => {
+    const enabled = feature === true;
+    const statusNode = enabled ? rowStatus("complete", msg("settings.yes")) : rowStatus("cancelled", msg("settings.notYet"));
+    ui.capabilities.push({ status: statusNode, enabled, needsEngine });
+    return row(`capability-${index}`, { name, control: statusNode });
+  });
+}
+
+function engineRow(key, { withDescription }) {
+  const statusNode = rowStatus("queued", msg("settings.engine.checking"));
+  const action = button({ kind: "tertiary", label: msg("action.setUp") });
+  action.id = `${key}-action`;
+  action.addEventListener("click", () => {
+    if (action.dataset.engineAction === "setUp") void requestNativeAccess(action);
+    else void runAction(action, "native-retry", () => checkEngine(), { onError: showEngineError });
+  });
+  const element = row(key, { name: msg("settings.engine.name"), description: withDescription ? " " : "", control: [statusNode, action] });
+  let announcer = null;
+  if (withDescription) {
+    setDescription(element, "");
+    // The one place engine state changes are spoken.
+    announcer = document.createElement("span");
+    announcer.className = "sr-only";
+    announcer.id = `${key}-announce`;
+    announcer.setAttribute("role", "status");
+    announcer.setAttribute("aria-atomic", "true");
+    $(".setting-text", element).append(announcer);
+  }
+  ui.engine.push({ row: element, status: statusNode, action, withDescription, announcer });
+  return element;
+}
+
+// ---------- Local engine (the one explanation) ----------
+function buildLocalEngine() {
+  const intro = document.createElement("p");
+  intro.className = "t-body section-intro";
+  intro.dataset.msg = "settings.engine.explain";
+  intro.textContent = msg("settings.engine.explain");
+
+  const install = document.createElement("details");
+  install.className = "install";
+  install.id = "install";
+  const summary = document.createElement("summary");
+  summary.className = "t-row";
+  const words = document.createElement("span");
+  words.textContent = msg("settings.install.summary");
+  // The words lead so they start on the content edge; the chevron trails.
+  summary.append(words, icon("chevron"));
+  const steps = document.createElement("ol");
+  steps.className = "install-steps";
+  const step = (key, command) => {
+    const item = document.createElement("li");
+    item.className = "t-body";
+    const line = document.createElement("span");
+    line.textContent = msg(key);
+    item.append(line);
+    if (command) {
+      const code = document.createElement("span");
+      code.className = "install-command";
+      code.dataset.userContent = "";
+      code.translate = false;
+      code.setAttribute("translate", "no");
+      code.textContent = command;
+      item.append(code);
     }
-    loaded.showNotifications = notificationLoad.checked;
-    writeFormState(loaded);
-    baseline = normalizeFormState(loaded);
-    ready = true;
-    form.inert = false;
-    form.removeAttribute("aria-busy");
-    setOptionsLoadState("ready", "设置已加载");
-    clearValidation();
-    syncDirtyState();
-    renderNotificationStatus();
-    await Promise.allSettled([refreshNativeAccess(), refreshDiagnostics()]);
-  } catch (error) {
-    ready = false;
-    form.inert = true;
-    form.setAttribute("aria-busy", "false");
-    const message = error?.message || "读取设置失败";
-    setOptionsLoadState("error", `${message}。请重新读取。`);
-    setStatus(message, "error", 5000);
-    nativePermissionStatus.textContent = "暂时未能检查本地下载引擎";
-    renderHostStatus({ connected: false }, { permissionGranted: false, failed: true });
-    syncDirtyState();
+    return item;
+  };
+  steps.append(
+    step("settings.install.source", "./scripts/native-install-wrapper.sh"),
+    step("settings.install.zip", "./install-macos.sh"),
+    step("settings.install.browsers"),
+    step("settings.install.done")
+  );
+  install.append(summary, steps);
+  ui.install = install;
+  return [intro, install];
+}
+
+// ---------- Saving ----------
+function buildSaving() {
+  const change = button({ kind: "tertiary", label: msg("settings.location.change") });
+  change.id = "location-change";
+  change.addEventListener("click", () => void changeDownloadFolder(change, false));
+  const reset = button({ kind: "tertiary", label: msg("settings.location.reset") });
+  reset.id = "location-reset";
+  reset.hidden = true;
+  reset.addEventListener("click", () => void changeDownloadFolder(reset, true));
+  const reveal = button({ kind: "tertiary", label: msg("action.showInFinder") });
+  reveal.id = "location-reveal";
+  reveal.addEventListener("click", () => void runAction(reveal, "settings:folder", async () => {
+    await callWorker({ type: "OPEN_DOWNLOAD_FOLDER" });
+    setSettingError(ui.rows.location, "");
+  }, { onError: (error) => setSettingError(ui.rows.location, errorText(error)) }));
+  const location = row("location", { name: msg("settings.location.name"), description: DEFAULT_LOCATION, control: [change, reset, reveal] });
+  const path = $(".setting-description", location);
+  path.classList.add("location-path");
+  path.dataset.userContent = "";
+  ui.controls.locationReset = reset;
+
+  const format = select({
+    id: "field-outputContainer",
+    name: "outputContainer",
+    options: OUTPUT_CONTAINERS.map((value) => ({ value, label: FORMAT_LABELS[value] })),
+    value: "mp4",
+    width: "short",
+    onChange: (value) => void saveChoice("outputContainer", value, "format")
+  });
+  ui.controls.outputContainer = format;
+
+  const template = textField({
+    id: "field-filenameTemplate",
+    name: "filenameTemplate",
+    width: "fill",
+    maxLength: FORM_LIMITS.filenameTemplateMaxLength,
+    spellcheck: false,
+    placeholder: "{title} - {height}",
+    onInput: () => { setSettingError(ui.rows.filename, ""); renderTemplatePreviewLine(); },
+    onChange: () => void commitField("filenameTemplate")
+  });
+  ui.controls.filenameTemplate = template;
+  const input = controlOf(template);
+  for (const type of ["click", "keyup", "select", "input", "blur"]) input.addEventListener(type, rememberTemplateSelection);
+  const filenameRow = row("filename", { name: msg("settings.filename.name"), description: msg("settings.filename.description"), control: template, layout: "stack" });
+  const chips = document.createElement("div");
+  chips.className = "token-chips";
+  chips.setAttribute("role", "group");
+  chips.setAttribute("aria-label", msg("settings.filename.fields"));
+  for (const token of FILENAME_TOKENS) {
+    const chip = button({ kind: "tertiary", label: msg(`settings.token.${TOKEN_LABELS[token]}`) });
+    chip.dataset.token = token;
+    chip.addEventListener("mousedown", (event) => event.preventDefault());
+    chip.addEventListener("click", () => insertFilenameToken(token));
+    chips.append(chip);
+  }
+  const preview = document.createElement("p");
+  preview.className = "t-meta filename-preview";
+  preview.id = "filename-preview";
+  const previewLabel = document.createElement("span");
+  previewLabel.textContent = msg("settings.filename.preview");
+  // The sample name is a filename: row role, middle-truncated (renderTemplatePreviewLine).
+  const previewValue = document.createElement("span");
+  previewValue.className = "filename-preview-value";
+  preview.append(previewLabel, previewValue);
+  $(".setting-trail", filenameRow).append(chips, preview);
+  input.setAttribute("aria-describedby", `${input.getAttribute("aria-describedby") || ""} filename-preview`.trim());
+
+  return [
+    location,
+    row("format", { name: msg("settings.format.name"), description: msg("settings.format.description"), control: format }),
+    filenameRow,
+    // The engine switch leads: "Ask where to save" applies only while Chrome saves these videos.
+    booleanRow("useNativeForDirect", msg("settings.useNative.name", { sites: sites() }), msg("settings.useNative.description"), (checked, element) => void changeUseNative(checked, element)),
+    booleanRow("saveAs", msg("settings.saveAs.name", { sites: sites() }), msg("settings.saveAs.description")),
+    historyRow()
+  ];
+}
+
+function historyRow() {
+  const open = button({ kind: "tertiary", label: msg("settings.history.open") });
+  open.id = "history-open";
+  open.addEventListener("click", () => void runAction(open, "settings:history", () => callWorker({ type: "OPEN_DOWNLOADS_PAGE" }), {
+    onError: (error) => setSettingError(ui.rows.history, errorText(error))
+  }));
+  return row("history", { name: msg("settings.history.name"), control: open });
+}
+
+function booleanRow(field, name, description, onChange) {
+  const control = switchControl({
+    id: `field-${field}`,
+    name: field,
+    onChange: onChange || ((checked, element) => void saveBoolean(field, checked, element))
+  });
+  ui.controls[field] = control;
+  return row(field, { name, description, control });
+}
+
+// ---------- Speed ----------
+function buildSpeed() {
+  // A choice of one value, not tabs: no panels, so a radio group (v1 used pressed buttons).
+  const presets = segmented({
+    id: "field-preset",
+    role: "radiogroup",
+    items: PRESETS.map((preset) => ({ value: preset.name, label: msg(`settings.preset.${preset.name}`) })),
+    current: "",
+    onSelect: (value) => void applyPreset(value)
+  });
+  ui.preset = presets;
+  return [
+    row("preset", { name: msg("settings.preset.name"), description: msg("settings.preset.description"), control: presets.element }),
+    numberRow("concurrentFragments"),
+    numberRow("concurrentRanges"),
+    numberRow("concurrentJobs")
+  ];
+}
+
+function numberRow(field) {
+  const spec = NUMBER_FIELDS[field];
+  const control = numberField({
+    id: `field-${field}`,
+    name: field,
+    min: spec.min,
+    max: spec.max,
+    step: 1,
+    unit: spec.unit || "",
+    onInput: () => setSettingError(ui.rows[field], ""),
+    onChange: () => void commitField(field)
+  });
+  ui.controls[field] = control;
+  return row(field, { name: msg(spec.name), description: msg(spec.description, { min: spec.min, max: spec.max }), control });
+}
+
+// ---------- Finding media ----------
+function buildFinding() {
+  const domains = textField({
+    id: "field-blockedDomains",
+    name: "blockedDomains",
+    multiline: true,
+    rows: 4,
+    width: "fill",
+    spellcheck: false,
+    placeholder: "ads.example.com",
+    onInput: () => setSettingError(ui.rows.blockedDomains, ""),
+    onChange: () => void commitField("blockedDomains")
+  });
+  ui.controls.blockedDomains = domains;
+  return [
+    numberRow("minimumKB"),
+    row("blockedDomains", { name: msg("settings.blocked.name"), description: msg("settings.blocked.description"), control: domains, layout: "stack" })
+  ];
+}
+
+// ---------- Privacy & network ----------
+function buildPrivacy() {
+  return [
+    booleanRow("autoEnrichSiteQuality", msg("settings.enrich.name"), msg("settings.enrich.description")),
+    booleanRow("allowPrivateNetworkMedia", msg("settings.lan.name"), msg("settings.lan.description"), (checked, element) => void changePrivateNetwork(checked, element)),
+    row("signin", { name: msg("settings.signin.name"), description: msg("settings.signin.description"), control: meta(msg("settings.signin.value")) }),
+    row("cloud", { name: msg("settings.cloud.name"), control: meta(msg("settings.none")) })
+  ];
+}
+
+// ---------- Notifications ----------
+function buildNotifications() {
+  return [booleanRow("showNotifications", msg("settings.notify.name"), msg("settings.notify.description"), (checked, element) => void changeNotifications(checked, element))];
+}
+
+// ---------- Language & shortcuts ----------
+function buildGeneral() {
+  const language = select({
+    id: "field-language",
+    name: "language",
+    width: "short",
+    options: [
+      { value: "auto", label: msg("settings.language.auto") },
+      { value: "en", label: MESSAGES.en["settings.language.endonym"] },
+      { value: "zh", label: MESSAGES.zh["settings.language.endonym"] }
+    ],
+    value: state.languagePref,
+    onChange: (value) => void changeLanguage(value)
+  });
+  for (const option of controlOf(language).querySelectorAll("option")) {
+    if (option.value === "en") option.setAttribute("lang", "en");
+    if (option.value === "zh") option.setAttribute("lang", "zh-CN");
+    if (option.value !== "auto") option.setAttribute("translate", "no");
+  }
+  ui.controls.language = language;
+  const change = button({ kind: "tertiary", label: msg("settings.shortcuts.change") });
+  change.id = "shortcuts-change";
+  change.addEventListener("click", () => void runAction(change, "settings:shortcuts", () => globalThis.chrome.tabs.create({ url: SHORTCUTS_URL }), {
+    onError: (error) => setSettingError(ui.rows.shortcuts, errorText(error))
+  }));
+  return [
+    row("language", { name: msg("settings.language.name"), control: language }),
+    row("shortcuts", { name: msg("settings.shortcuts.name"), description: shortcutsText(), control: change })
+  ];
+}
+
+async function readShortcuts() {
+  try {
+    const commands = await globalThis.chrome?.commands?.getAll?.();
+    return Array.isArray(commands) ? commands : [];
+  } catch {
+    return [];
   }
 }
 
-function stateFromSettings(settings) {
-  return {
-    concurrentFragments: settings.concurrentFragments,
-    concurrentRanges: settings.concurrentRanges,
-    concurrentJobs: settings.concurrentJobs,
-    outputContainer: settings.outputContainer,
-    minimumKiB: Math.round(Number(settings.minimumBytes || 0) / 1024),
-    filenameTemplate: settings.filenameTemplate,
-    blockedDomains: Array.isArray(settings.blockedDomains) ? settings.blockedDomains : [],
-    saveAs: Boolean(settings.saveAs),
-    useNativeForDirect: Boolean(settings.useNativeForDirect),
-    allowPrivateNetworkMedia: Boolean(settings.allowPrivateNetworkMedia),
-    autoEnrichSiteQuality: typeof settings.autoEnrichSiteQuality === "boolean"
-      ? settings.autoEnrichSiteQuality
-      : true,
-    showNotifications: Boolean(settings.showNotifications)
-  };
+function shortcutsText() {
+  const parts = state.shortcuts
+    .filter((command) => SHORTCUT_LABELS[command.name] && command.shortcut)
+    .map((command) => `${command.shortcut} ${msg(SHORTCUT_LABELS[command.name])}`);
+  return parts.length ? parts.join(" · ") : msg("settings.shortcuts.none");
 }
 
-function collectRawState() {
-  return {
-    concurrentFragments: form.elements.namedItem("concurrentFragments").value,
-    concurrentRanges: form.elements.namedItem("concurrentRanges").value,
-    concurrentJobs: form.elements.namedItem("concurrentJobs").value,
-    outputContainer: form.elements.namedItem("outputContainer").value,
-    minimumKiB: form.elements.namedItem("minimumKiB").value,
-    filenameTemplate: templateInput.value,
-    blockedDomains: form.elements.namedItem("blockedDomains").value,
-    saveAs: form.elements.namedItem("saveAs").checked,
-    useNativeForDirect: form.elements.namedItem("useNativeForDirect").checked,
-    allowPrivateNetworkMedia: privateNetworkInput.checked,
-    autoEnrichSiteQuality: form.elements.namedItem("autoEnrichSiteQuality").checked,
-    showNotifications: notificationInput.checked
+// ---------- Lab (developer tools) ----------
+function buildLab() {
+  const features = BUILD_PROFILE.features;
+  const unsupported = [
+    features.externalToolNetwork === true ? null : YOUTUBE,
+    features.liveHls === true ? null : msg("settings.cap.live"),
+    features.encryptedHls === true ? null : msg("settings.cap.encrypted"),
+    msg("settings.cap.protected")
+  ].filter(Boolean);
+  const developer = booleanRow("developerTools", msg("settings.dev.name"), msg("settings.dev.description"), (checked, element) => void changeDeveloperTools(checked, element));
+
+  const editor = document.createElement("a");
+  editor.className = "btn btn-tertiary";
+  editor.id = "editor-open";
+  editor.href = DESIGNER_URL;
+  editor.textContent = msg("action.open");
+  const copy = button({ kind: "tertiary", label: msg("settings.version.copy") });
+  copy.id = "version-copy";
+  copy.addEventListener("click", () => void copyVersionInfo(copy));
+  const values = {
+    extensionId: meta("", { userContent: true }),
+    build: meta("", { userContent: true }),
+    engine: meta("", { userContent: true }),
+    compat: rowStatus("cancelled", msg("settings.compat.notConnected"))
   };
+  ui.version = values;
+  const rows = document.createElement("div");
+  rows.className = "developer-rows";
+  rows.id = "developer-rows";
+  rows.append(
+    row("editor", { name: msg("settings.editor.name"), description: msg("settings.editor.description"), control: editor }),
+    row("version", { name: msg("settings.version.name"), description: msg("settings.version.description"), control: copy }),
+    row("versionExtensionId", { name: msg("settings.version.extensionId"), control: values.extensionId }),
+    row("versionBuild", { name: msg("settings.version.build"), control: values.build }),
+    row("versionEngine", { name: msg("settings.version.engine"), control: values.engine }),
+    row("versionCompat", { name: msg("settings.version.compat"), control: values.compat })
+  );
+  ui.developerRows = rows;
+  // No sub-heading: the "Developer tools" row names the group itself.
+  return [
+    row("unsupported", { name: msg("settings.unsupported.name"), description: unsupported.join(" · ") }),
+    developer,
+    rows
+  ];
 }
 
-function writeFormState(value) {
-  const state = normalizeFormState(value);
-  form.elements.namedItem("concurrentFragments").value = state.concurrentFragments;
-  form.elements.namedItem("concurrentRanges").value = state.concurrentRanges;
-  form.elements.namedItem("concurrentJobs").value = state.concurrentJobs;
-  form.elements.namedItem("outputContainer").value = state.outputContainer;
-  form.elements.namedItem("minimumKiB").value = state.minimumKiB;
-  templateInput.value = state.filenameTemplate;
-  form.elements.namedItem("blockedDomains").value = state.blockedDomains.join("\n");
-  for (const key of ["saveAs", "useNativeForDirect", "allowPrivateNetworkMedia", "autoEnrichSiteQuality", "showNotifications"]) {
-    form.elements.namedItem(key).checked = state[key];
+// ---------- writing state into controls ----------
+function formState() {
+  const form = stateFromSettings(state.settings || {});
+  if (state.settings) form.showNotifications = state.settings.showNotifications === true && state.notificationPermission === true;
+  return form;
+}
+
+function writeControls() {
+  const form = formState();
+  for (const field of Object.keys(NUMBER_FIELDS)) {
+    if (!state.invalid.has(field)) controlOf(ui.controls[field]).value = String(form[field]);
   }
-  rememberTemplateSelection();
-  syncPresetState();
-  renderTemplatePreview();
-  renderNetworkScope();
+  controlOf(ui.controls.outputContainer).value = form.outputContainer;
+  if (!state.invalid.has("filenameTemplate")) controlOf(ui.controls.filenameTemplate).value = form.filenameTemplate;
+  if (!state.invalid.has("blockedDomains")) controlOf(ui.controls.blockedDomains).value = form.blockedDomains.join("\n");
+  for (const field of ["saveAs", "useNativeForDirect", "allowPrivateNetworkMedia", "autoEnrichSiteQuality", "showNotifications"]) setSwitch(ui.controls[field], form[field]);
+  setSwitch(ui.controls.developerTools, state.developer);
+  controlOf(ui.controls.language).value = state.languagePref;
+  syncPreset();
+  renderTemplatePreviewLine();
+  renderSwitchGates();
 }
 
-function handleFormMutation(event) {
-  const field = event.target?.name;
-  if (field) clearFieldError(field);
-  hideErrorSummary();
-  clearStatus();
-  if (field === "concurrentFragments" || field === "concurrentRanges") syncPresetState();
-  if (field === "filenameTemplate") renderTemplatePreview();
-  if (field === "allowPrivateNetworkMedia") renderNetworkScope();
-  syncDirtyState();
-  if (field === "showNotifications" && !isActionPending("notification-permission")) renderNotificationStatus();
+function syncPreset() {
+  const fragments = controlOf(ui.controls.concurrentFragments).value;
+  const ranges = controlOf(ui.controls.concurrentRanges).value;
+  const preset = matchPreset(fragments, ranges);
+  ui.preset?.select(preset || "");
+  // No segment is raised for hand-set counts, so the one line says why.
+  setDescription(ui.rows.preset, msg(preset ? "settings.preset.description" : "settings.preset.custom"));
 }
 
-function syncDirtyState() {
-  dirty = Boolean(ready && baseline && !statesEqual(collectRawState(), baseline));
-  form.dataset.dirty = String(dirty);
-  dirtyStatus.textContent = !ready ? "设置尚未就绪" : dirty ? "有未保存的更改" : "所有更改均已保存";
-  const pending = isActionPending("options-save");
-  saveButton.disabled = !ready || !dirty || pending;
-  discardButton.disabled = !ready || !dirty || pending;
+/**
+ * Switches that only apply in some states. The Instagram/X engine switch can
+ * be turned on only once the engine works (turning it off always works, and a
+ * stored On is kept); "Ask where to save" applies only while Chrome saves
+ * those videos, so it rests while the engine switch is on.
+ */
+function renderSwitchGates() {
+  const native = ui.controls.useNativeForDirect;
+  const saveAs = ui.controls.saveAs;
+  if (!native || !saveAs) return;
+  const nativeOn = isSwitchOn(native);
+  native.disabled = !state.engineReady && !nativeOn;
+  saveAs.disabled = nativeOn;
 }
 
-function setOptionsLoadState(type, message) {
-  optionsLoadMessage.textContent = message;
-  optionsLoadState.dataset.state = type;
-  optionsLoadState.hidden = type === "ready";
-  optionsLoadState.querySelector(".spinner").hidden = type !== "loading";
-  retrySettingsButton.hidden = type !== "error";
-  retrySettingsButton.disabled = type === "loading";
+/** After a rebuild during a save, write the stored values of `fields` into the new controls. */
+function syncControls(fields) {
+  const form = formState();
+  for (const field of fields) {
+    const control = ui.controls[field];
+    if (!control || state.invalid.has(field) || !Object.hasOwn(form, field)) continue;
+    if (typeof form[field] === "boolean") setSwitch(control, form[field]);
+    else controlOf(control).value = Array.isArray(form[field]) ? form[field].join("\n") : String(form[field]);
+  }
+  syncPreset();
+  renderTemplatePreviewLine();
 }
 
-function handleBeforeUnload(event) {
-  if (!dirty) return;
-  event.preventDefault();
-  event.returnValue = "";
+function renderDerived() {
+  const settings = state.settings || {};
+  const direct = $(".row-value", ui.rows.direct);
+  if (direct) direct.textContent = msg(settings.useNativeForDirect === true ? "settings.direct.engine" : "settings.direct.chrome");
+  const network = $(".row-value", ui.rows.network);
+  if (network) network.textContent = msg(settings.allowPrivateNetworkMedia === true ? "settings.on" : "settings.off");
+  renderSwitchGates();
 }
 
-function discardChanges() {
-  if (!baseline || !dirty || isActionPending("options-save")) return;
-  writeFormState(baseline);
-  clearValidation();
-  clearStatus();
-  syncDirtyState();
-  renderNotificationStatus();
-}
-
-async function save(event) {
-  event.preventDefault();
-  if (!ready || !dirty || isActionPending("options-save")) return;
-  const submittedState = collectRawState();
-  const validation = validateSettings(submittedState);
-  if (!validation.valid) {
-    renderValidation(validation);
-    syncDirtyState();
+function renderLoadState() {
+  const text = $("#loadText");
+  const retry = $("#loadRetry");
+  const sections = $("#sections");
+  if (state.loaded) {
+    text.textContent = "";
+    retry.hidden = true;
+    sections.inert = false;
+    sections.removeAttribute("inert");
+    sections.removeAttribute("aria-busy");
     return;
   }
+  sections.inert = true;
+  sections.setAttribute("inert", "");
+  sections.setAttribute("aria-busy", "true");
+  text.textContent = msg(state.loadFailed ? "settings.loadFailed" : "settings.loading");
+  retry.hidden = !state.loadFailed;
+}
 
-  clearValidation();
-  setStatus("保存中…", "pending");
-  form.setAttribute("aria-busy", "true");
+// ---------- loading ----------
+async function load() {
+  state.loaded = false;
+  state.loadFailed = false;
+  renderLoadState();
   try {
-    await withPendingAction(saveButton, "options-save", async () => {
-      const normalized = validation.normalized;
-      const settings = {
-        concurrentFragments: normalized.concurrentFragments,
-        concurrentRanges: normalized.concurrentRanges,
-        concurrentJobs: normalized.concurrentJobs,
-        outputContainer: normalized.outputContainer,
-        liveDuration: 0,
-        minimumBytes: normalized.minimumKiB * 1024,
-        filenameTemplate: normalized.filenameTemplate,
-        blockedDomains: normalized.blockedDomains,
-        saveAs: normalized.saveAs,
-        useNativeForDirect: normalized.useNativeForDirect,
-        allowPrivateNetworkMedia: normalized.allowPrivateNetworkMedia,
-        autoEnrichSiteQuality: normalized.autoEnrichSiteQuality,
-        youtubeEnabled: false,
-        showNotifications: normalized.showNotifications
-      };
-      const response = await chrome.runtime.sendMessage({ type: "SAVE_SETTINGS", settings });
-      if (!response?.ok) throw new Error(response?.error || "保存失败");
-      const saved = stateFromSettings(response.settings || settings);
-      saved.showNotifications = normalized.showNotifications;
-      const completion = reconcileSaveCompletion({
-        submitted: submittedState,
-        current: collectRawState(),
-        saved
-      });
-      baseline = completion.baseline;
-      if (!completion.changedDuringSave) writeFormState(completion.formState);
-      clearValidation();
-      syncDirtyState();
-      renderNotificationStatus();
-      if (completion.changedDuringSave) {
-        setStatus("已保存提交内容；保存期间有新的更改", "warning", 5000);
-      } else {
-        setStatus("已保存 ✓", "success", 1800);
-      }
-    }, {
-      pendingText: "保存中…",
-      successText: "已保存 ✓",
-      failureText: "保存失败",
-      successDurationMs: 850,
-      failureDurationMs: 900
+    const response = await callWorker({ type: "GET_SETTINGS" });
+    state.notificationPermission = await permissionsContains("notifications");
+    let settings = response.settings || {};
+    const notifications = resolveNotificationLoadState({
+      persisted: settings.showNotifications === true,
+      permissionGranted: state.notificationPermission
     });
-  } catch (error) {
-    setStatus(error?.message || "保存失败", "error", 5000);
-  } finally {
-    form.removeAttribute("aria-busy");
-    syncDirtyState();
+    if (notifications.requiresRepair) {
+      // The browser grant was revoked: store the preference as off so the
+      // worker and this page agree.
+      const repaired = await callWorker({ type: "SAVE_SETTINGS", settings: { ...settings, showNotifications: false } });
+      settings = repaired.settings || { ...settings, showNotifications: false };
+    }
+    state.settings = settings;
+    state.invalid.clear();
+    state.loaded = true;
+    writeControls();
+    renderDerived();
+    renderLoadState();
+    jumpToHash({ landing: true });
+  } catch {
+    state.loadFailed = true;
+    state.engineChecking = false;
+    state.engineFailed = true;
+    renderLoadState();
+    renderEngine();
+    return;
+  }
+  await Promise.allSettled([checkEngine(), refreshDiagnostics()]);
+}
+
+async function permissionsContains(name) {
+  try { return await globalThis.chrome.permissions.contains({ permissions: [name] }); } catch { return false; }
+}
+
+// ---------- autosave ----------
+/**
+ * Save `patch` on top of the last stored settings, one save at a time, so a
+ * later save never drops an earlier one and invalid fields elsewhere are never
+ * sent. Shows "Saved" on the row, or the error on the row. Resolves true or false.
+ */
+function persist(patch, rowKey) {
+  // The controls in place now; a language switch may rebuild them before this save ends.
+  const generation = buildGeneration;
+  const run = async () => {
+    const base = state.settings || {};
+    const payload = settingsPayload(base, { ...stateFromSettings(base), ...patch }, { changed: Object.keys(patch) });
+    const response = await callWorker({ type: "SAVE_SETTINGS", settings: payload });
+    state.settings = response.settings || payload;
+    if (generation !== buildGeneration) syncControls(Object.keys(patch));
+    // The row is looked up now, so a rebuilt page gets the note, not a detached row.
+    const rowElement = ui.rows[rowKey];
+    setSettingError(rowElement, "");
+    markSaved(rowElement);
+    renderDerived();
+    return true;
+  };
+  const result = saveChain.then(run).catch((error) => {
+    const rowElement = ui.rows[rowKey];
+    setSettingError(rowElement, errorText(error));
+    return false;
+  });
+  saveChain = result;
+  return result;
+}
+
+function issueText(issue) {
+  const key = `settings.error.${issue?.code}`;
+  return Object.prototype.hasOwnProperty.call(MESSAGES.en, key) ? msg(key, issue.params || {}) : msg("toast.genericError");
+}
+
+function rawValue(field) {
+  return controlOf(ui.controls[field])?.value ?? "";
+}
+
+/** Validate one typed field against the stored settings, then save it. */
+async function commitField(field) {
+  const rowKey = field === "filenameTemplate" ? "filename" : field;
+  const rowElement = ui.rows[rowKey];
+  const raw = rawValue(field);
+  const stored = stateFromSettings(state.settings || {});
+  const check = validateSettings({ ...stored, [field]: raw });
+  const issues = check.fieldErrors[field] || [];
+  if (issues.length) {
+    state.invalid.add(field);
+    setSettingError(rowElement, issueText(issues[0]));
+    return;
+  }
+  state.invalid.delete(field);
+  setSettingError(rowElement, "");
+  const value = check.normalized[field];
+  const write = () => {
+    // Keep anything typed while the save was in flight.
+    if (rawValue(field) !== raw) return;
+    controlOf(ui.controls[field]).value = Array.isArray(value) ? value.join("\n") : String(value);
+    if (field === "filenameTemplate") renderTemplatePreviewLine();
+  };
+  if (JSON.stringify(stored[field]) === JSON.stringify(value)) {
+    write();
+    return;
+  }
+  const generation = buildGeneration;
+  if (await persist({ [field]: value }, rowKey)) write();
+  else {
+    // Not stored: keep it on screen as unsaved (leave-page warning, kept across rebuilds).
+    state.invalid.add(field);
+    if (generation !== buildGeneration) controlOf(ui.controls[field]).value = raw;
+  }
+  if (field === "concurrentFragments" || field === "concurrentRanges") syncPreset();
+}
+
+async function saveChoice(field, value, rowKey) {
+  const check = validateSettings({ ...stateFromSettings(state.settings || {}), [field]: value });
+  const issues = check.fieldErrors[field] || [];
+  if (issues.length) {
+    setSettingError(ui.rows[rowKey], issueText(issues[0]));
+    return;
+  }
+  if (!(await persist({ [field]: check.normalized[field] }, rowKey))) {
+    controlOf(ui.controls[field]).value = stateFromSettings(state.settings || {})[field];
   }
 }
 
-function renderValidation(validation) {
-  clearValidation();
-  for (const [field, messages] of Object.entries(validation.fieldErrors)) {
-    const control = form.elements.namedItem(field);
-    const error = document.querySelector(`#${field}Error`);
-    control?.setAttribute("aria-invalid", "true");
-    if (error) {
-      error.textContent = messages.join(" ");
-      error.hidden = false;
+async function saveBoolean(field, checked, element) {
+  if (await persist({ [field]: checked }, field)) return;
+  setSwitch(element, !checked);
+  if (ui.controls[field] !== element) setSwitch(ui.controls[field], formState()[field] === true);
+}
+
+async function changeUseNative(checked, element) {
+  renderSwitchGates();
+  await saveBoolean("useNativeForDirect", checked, element);
+  renderSwitchGates();
+}
+
+async function applyPreset(name) {
+  const preset = PRESETS.find((item) => item.name === name);
+  if (!preset) return;
+  controlOf(ui.controls.concurrentFragments).value = String(preset.fragments);
+  controlOf(ui.controls.concurrentRanges).value = String(preset.ranges);
+  for (const field of ["concurrentFragments", "concurrentRanges"]) {
+    state.invalid.delete(field);
+    setSettingError(ui.rows[field], "");
+  }
+  if (await persist({ concurrentFragments: preset.fragments, concurrentRanges: preset.ranges }, "preset")) {
+    markSaved(ui.rows.concurrentFragments);
+    markSaved(ui.rows.concurrentRanges);
+  } else {
+    // Not stored: the fields and the preset go back to what the worker uses.
+    const stored = stateFromSettings(state.settings || {});
+    controlOf(ui.controls.concurrentFragments).value = String(stored.concurrentFragments);
+    controlOf(ui.controls.concurrentRanges).value = String(stored.concurrentRanges);
+  }
+  syncPreset();
+}
+
+// A risky setting asks first, in place, before anything is saved.
+async function changePrivateNetwork(checked, element) {
+  if (!checked) {
+    await saveBoolean("allowPrivateNetworkMedia", false, element);
+    return;
+  }
+  setSwitch(element, false);
+  // Allowing an opt-in removes nothing, so "Allow" is tertiary, not destructive.
+  const confirmed = await menus.confirm(element, {
+    question: msg("settings.lan.confirm"),
+    confirmLabel: msg("settings.lan.allow"),
+    cancelLabel: msg("action.cancel"),
+    confirmKind: "tertiary"
+  });
+  if (!confirmed) return;
+  setSwitch(element, true);
+  await saveBoolean("allowPrivateNetworkMedia", true, element);
+}
+
+// The permission request is the first call of the switch's own gesture.
+async function changeNotifications(checked, element) {
+  // Looked up when needed: a language switch may rebuild the row while Chrome asks.
+  const rowElement = () => ui.rows.showNotifications;
+  let request = null;
+  if (checked) {
+    try {
+      request = globalThis.chrome.permissions.request({ permissions: ["notifications"] });
+    } catch (error) {
+      setSwitch(element, false);
+      setSettingError(rowElement(), errorText(error));
+      return;
     }
   }
-  errorSummaryList.replaceChildren();
-  for (const error of validation.errors) {
-    const item = document.createElement("li");
-    const link = document.createElement("a");
-    link.href = `#${error.field}`;
-    link.textContent = error.message;
-    link.addEventListener("click", (event) => {
-      event.preventDefault();
-      form.elements.namedItem(error.field)?.focus();
-    });
-    item.append(link);
-    errorSummaryList.append(item);
+  if (!request) {
+    await saveBoolean("showNotifications", false, element);
+    return;
   }
-  errorSummary.hidden = false;
-  form.elements.namedItem(validation.firstInvalidField)?.focus();
+  await runAction(element, "settings:notifications", async () => {
+    const granted = await request;
+    state.notificationPermission = granted === true;
+    if (!granted) {
+      setSwitch(element, false);
+      setSettingError(rowElement(), msg("settings.notify.denied"));
+      return;
+    }
+    await saveBoolean("showNotifications", true, element);
+  }, {
+    onError: (error) => {
+      setSwitch(element, false);
+      setSettingError(rowElement(), errorText(error));
+    }
+  });
 }
 
-function clearValidation() {
-  for (const control of form.querySelectorAll("[aria-invalid]")) control.removeAttribute("aria-invalid");
-  for (const error of form.querySelectorAll(".field-error")) {
-    error.textContent = "";
-    error.hidden = true;
-  }
-  hideErrorSummary();
-}
-
-function clearFieldError(field) {
-  form.elements.namedItem(field)?.removeAttribute("aria-invalid");
-  const error = document.querySelector(`#${field}Error`);
-  if (error) {
-    error.textContent = "";
-    error.hidden = true;
-  }
-}
-
-function hideErrorSummary() {
-  errorSummary.hidden = true;
-  errorSummaryList.replaceChildren();
-}
-
-function applyPreset(button) {
-  form.elements.namedItem("concurrentFragments").value = Number(button.dataset.fragments);
-  form.elements.namedItem("concurrentRanges").value = Number(button.dataset.ranges);
-  clearFieldError("concurrentFragments");
-  clearFieldError("concurrentRanges");
-  hideErrorSummary();
-  clearStatus();
-  syncPresetState();
-  syncDirtyState();
-}
-
-function syncPresetState() {
-  const fragments = Number(form.elements.namedItem("concurrentFragments").value);
-  const ranges = Number(form.elements.namedItem("concurrentRanges").value);
-  const current = PRESETS.find((preset) => preset.fragments === fragments && preset.ranges === ranges)?.name || null;
-  for (const button of document.querySelectorAll(".preset-button")) {
-    const selected = button.dataset.preset === current;
-    button.classList.toggle("is-current", selected);
-    button.setAttribute("aria-pressed", String(selected));
-    if (selected) button.setAttribute("aria-current", "true");
-    else button.removeAttribute("aria-current");
+async function changeLanguage(value) {
+  const rowElement = ui.rows.language;
+  try {
+    state.languagePref = value;
+    state.languageSaved = true;
+    await saveUiLanguage(value);
+    // The page rebuilds on the storage change; mark the current row too in
+    // case the resolved language did not change.
+    markSaved(ui.rows.language || rowElement);
+  } catch (error) {
+    state.languageSaved = false;
+    setSettingError(rowElement, errorText(error));
   }
 }
 
+async function changeDeveloperTools(checked, element) {
+  try {
+    state.developer = await saveDeveloperTools(checked);
+    markSaved(ui.rows.developerTools);
+    renderDeveloper();
+    if (state.developer) void refreshDiagnostics();
+  } catch (error) {
+    setSwitch(element, !checked);
+    setSettingError(ui.rows.developerTools, errorText(error));
+  }
+}
+
+function onCustomizationChange({ enabled }) {
+  state.developer = enabled;
+  setSwitch(ui.controls.developerTools, enabled);
+  renderDeveloper();
+  customization?.refresh();
+}
+
+// ---------- file names ----------
 function rememberTemplateSelection() {
-  templateSelection = {
-    start: Number.isInteger(templateInput.selectionStart) ? templateInput.selectionStart : templateInput.value.length,
-    end: Number.isInteger(templateInput.selectionEnd) ? templateInput.selectionEnd : templateInput.value.length
+  const input = controlOf(ui.controls.filenameTemplate);
+  const length = input.value.length;
+  state.templateSelection = {
+    start: Number.isInteger(input.selectionStart) ? input.selectionStart : length,
+    end: Number.isInteger(input.selectionEnd) ? input.selectionEnd : length
   };
 }
 
 function insertFilenameToken(token) {
-  const inserted = insertTemplateToken(templateInput.value, token, templateSelection.start, templateSelection.end);
-  templateInput.value = inserted.value;
-  templateInput.focus();
-  templateInput.setSelectionRange(inserted.selectionStart, inserted.selectionEnd);
+  const input = controlOf(ui.controls.filenameTemplate);
+  const inserted = insertTemplateToken(input.value, token, state.templateSelection.start, state.templateSelection.end);
+  input.value = inserted.value;
+  input.focus();
+  input.setSelectionRange?.(inserted.selectionStart, inserted.selectionEnd);
   rememberTemplateSelection();
-  clearFieldError("filenameTemplate");
-  hideErrorSummary();
-  clearStatus();
-  renderTemplatePreview();
-  syncDirtyState();
+  setSettingError(ui.rows.filename, "");
+  renderTemplatePreviewLine();
+  void commitField("filenameTemplate");
 }
 
-function renderTemplatePreview() {
-  const preview = document.querySelector("#filenameTemplatePreview strong");
-  if (!preview) return;
-  const values = { title: "示例视频", host: "media.example.com", kind: "HLS", height: "1080", date: "2026-08-23" };
-  const rendered = String(templateInput.value || "")
-    .replace(/\{(title|host|kind|height|date)\}/g, (_, key) => values[key])
-    .trim();
-  preview.textContent = rendered ? `${rendered}.mp4` : "可能生成空文件名";
-}
-
-function handlePrivateNetworkChange() {
-  renderNetworkScope();
-  if (!privateNetworkInput.checked || baseline?.allowPrivateNetworkMedia === true) return;
-  privateNetworkInput.checked = false;
-  renderNetworkScope();
-  syncDirtyState();
-  privateNetworkTrigger = privateNetworkInput;
-  privateNetworkDialog.returnValue = "";
-  privateNetworkInput.setAttribute("aria-controls", "privateNetworkDialog");
-  privateNetworkInput.setAttribute("aria-expanded", "true");
-  if (typeof privateNetworkDialog.showModal === "function") {
-    privateNetworkDialog.showModal();
-    queueMicrotask(() => privateNetworkCancelButton.focus());
-  } else {
-    const confirmed = typeof globalThis.confirm === "function"
-      && globalThis.confirm("允许 FluxCatch 访问你局域网中的媒体设备？保留网络仍会被禁止。");
-    privateNetworkDialog.returnValue = confirmed ? "confirm" : "cancel";
-    finishPrivateNetworkConfirmation();
-  }
-}
-
-function finishPrivateNetworkConfirmation() {
-  privateNetworkInput.checked = privateNetworkDialog.returnValue === "confirm";
-  privateNetworkInput.setAttribute("aria-expanded", "false");
-  renderNetworkScope();
-  syncDirtyState();
-  const trigger = privateNetworkTrigger;
-  privateNetworkTrigger = null;
-  const restoreTrigger = () => {
-    restoreFocus(trigger);
-  };
-  // Native <dialog> focus restoration completes after its close event and can
-  // run after animation-frame callbacks. Use the next task so the browser
-  // cannot move focus back onto the now-hidden dialog action afterwards.
-  if (typeof globalThis.setTimeout === "function") {
-    globalThis.setTimeout(restoreTrigger, 0);
-  } else {
-    queueMicrotask(restoreTrigger);
-  }
-}
-
-function renderNetworkScope() {
-  setRuntimeStatus(
-    "runtimeNetworkStatus",
-    privateNetworkInput.checked ? "公共网络与已确认的局域网" : "仅公共网络",
-    privateNetworkInput.checked ? "warning" : "ok"
-  );
-}
-
-function renderNotificationStatus(override = "") {
-  if (override) {
-    notificationPermissionStatus.textContent = override;
-    return;
-  }
-  notificationPermissionStatus.textContent = notificationStatusText({
-    checked: notificationInput.checked,
-    baselineChecked: baseline?.showNotifications === true,
-    dirty,
-    permissionGranted: notificationPermissionGranted
+function renderTemplatePreviewLine() {
+  const value = $("#filename-preview .filename-preview-value");
+  if (!value) return;
+  // The values the worker writes (background.js renderFilename): the stream
+  // kind in lower case, the height with "p", today's UTC date.
+  const name = renderTemplatePreview(rawValue("filenameTemplate"), {
+    title: msg("settings.filename.sampleTitle"),
+    host: "media.example.com",
+    kind: "hls",
+    height: "1080p",
+    date: new Date().toISOString().slice(0, 10)
   });
-}
-
-async function changeNotificationPermission() {
-  if (isActionPending("notification-permission")) return;
-  const wantsNotifications = notificationInput.checked;
-  notificationPermissionStatus.textContent = wantsNotifications ? "正在请求通知权限…" : "通知将在保存后关闭";
-  if (!wantsNotifications) {
-    // The persisted setting remains the sole switch for emitting notifications.
-    // Retaining an existing optional grant keeps Discard reversible; this copy
-    // is explicit that the browser-level grant is not revoked here.
-    syncDirtyState();
-    renderNotificationStatus();
+  if (!name) {
+    value.textContent = msg("settings.filename.emptyPreview");
     return;
   }
-
-  let permissionRequest;
-  try {
-    // This must remain the first asynchronous platform call made by the
-    // notification switch's originating user gesture.
-    permissionRequest = chrome.permissions.request({ permissions: ["notifications"] });
-  } catch (error) {
-    notificationPermissionGranted = false;
-    notificationInput.checked = false;
-    syncDirtyState();
-    renderNotificationStatus(error?.message || "通知权限请求失败");
-    return;
-  }
-
-  let outcome = "";
-  try {
-    await withPendingAction(notificationInput, "notification-permission", async () => {
-      const granted = await permissionRequest;
-      notificationPermissionGranted = granted;
-      if (!granted) {
-        notificationInput.checked = false;
-        outcome = "未授予通知权限，通知保持关闭";
-      } else {
-        outcome = "通知权限已开启；保存后生效";
-      }
-    }, { successDurationMs: 0, failureDurationMs: 0 });
-  } catch (error) {
-    notificationPermissionGranted = false;
-    notificationInput.checked = false;
-    outcome = error?.message || "通知权限请求失败";
-  } finally {
-    syncDirtyState();
-    renderNotificationStatus(outcome);
-  }
+  const shown = filename(name);
+  shown.classList.add("t-row");
+  value.replaceChildren(shown);
 }
 
-async function requestNativeAccess() {
-  if (isActionPending("native-access")) return;
-  let permissionRequest;
-  let permissionDenied = false;
-  try {
-    // Native Messaging optional permission must be requested directly from
-    // this button's gesture, before awaiting any unrelated work.
-    permissionRequest = chrome.permissions.request({ permissions: ["nativeMessaging"] });
-  } catch (error) {
-    nativePermissionStatus.textContent = error?.message || "本地下载引擎授权失败";
-    return;
-  }
-
-  let granted = nativePermissionGranted;
-  try {
-    await withPendingAction(nativePermissionButton, "native-access", async () => {
-      granted = await permissionRequest;
-      nativePermissionGranted = granted;
-      if (!granted) {
-        permissionDenied = true;
-        renderHostStatus({ connected: false, needsPermission: true }, { permissionGranted: false });
-        nativePermissionStatus.textContent = "暂未开启；检测与预览仍可用，多数保存需本地下载引擎";
-        throw new Error("暂未开启本地下载引擎");
-      }
-      nativePermissionStatus.textContent = "正在连接并检查本地工具…";
-      const host = await pingNativeHost();
-      renderHostStatus(host, { permissionGranted: true });
-      const recovery = await recoverNativeApi(host);
-      if (recovery.recoveryBlocked) {
-        throw nativeAccessFlowFailure(
-          "native_recovery_blocked",
-          "Chrome 的连接接口长期未恢复，请完全退出并重新启动 Chrome"
-        );
-      }
-      if (recovery.hostStatus?.needsPermission) {
-        renderNativePermissionRequired("本地下载引擎授权已撤销；检测与预览仍可用，多数保存需重新授权");
-        throw nativeAccessFlowFailure(
-          "native_permission_removed",
-          "本地下载引擎授权已撤销"
-        );
-      }
-      if (!recovery.diagnosticsRefreshed) await refreshDiagnostics();
-      // Keep this as the final awaited check in the operation. onRemoved is
-      // intentionally ignored while either native action owns the button, so
-      // the successful action state must be gated on the live permission.
-      nativePermissionGranted = await chrome.permissions.contains({ permissions: ["nativeMessaging"] });
-      if (!nativePermissionGranted) {
-        renderNativePermissionRequired("本地下载引擎授权已撤销；检测与预览仍可用，多数保存需重新授权");
-        throw nativeAccessFlowFailure(
-          "native_permission_removed",
-          "本地下载引擎授权已撤销"
-        );
-      }
-    }, {
-      pendingText: "正在检查…",
-      successText: "检查完成 ✓",
-      failureText: "未完成",
-      successDurationMs: 700,
-      failureDurationMs: 900
-    });
-  } catch (error) {
-    if (permissionDenied) {
-      renderNativePermissionRequired("暂未开启；检测与预览仍可用，多数保存需本地下载引擎");
-    } else if (error?.preserveNativeStatus !== true) {
-      renderHostStatus({ connected: false }, { permissionGranted: granted, failed: true });
-      nativePermissionStatus.textContent = error?.message || "检查失败，请确认配套程序已安装后重试";
-    }
-  } finally {
-    try {
-      nativePermissionGranted = await chrome.permissions.contains({ permissions: ["nativeMessaging"] });
-      if (!nativePermissionGranted) {
-        renderNativePermissionRequired(permissionDenied
-          ? "暂未开启；检测与预览仍可用，多数保存需本地下载引擎"
-          : "本地下载引擎授权已撤销；检测与预览仍可用，多数保存需重新授权");
-      }
-    } catch (error) {
-      nativePermissionStatus.textContent = error?.message || "暂时未能确认本地下载引擎授权状态";
-    }
-    nativePermissionButton.textContent = nativePermissionGranted ? "重新检查" : "开启本地下载引擎";
-  }
-}
-
-function nativeAccessFlowFailure(code, message) {
-  return Object.assign(new Error(message), { code, preserveNativeStatus: true });
-}
-
-function renderNativePermissionRequired(message) {
-  nativePermissionGranted = false;
-  renderHostStatus({ connected: false, needsPermission: true }, { permissionGranted: false });
-  nativePermissionStatus.textContent = message;
-}
-
-async function refreshNativeAccess() {
-  nativePermissionGranted = await chrome.permissions.contains({ permissions: ["nativeMessaging"] });
-  nativePermissionButton.textContent = nativePermissionGranted ? "重新检查" : "开启本地下载引擎";
-  if (!nativePermissionGranted) {
-    nativePermissionStatus.textContent = "检测与预览仍可用；多数媒体保存需要开启，仅可信 Instagram/X 固定来源例外";
-    renderHostStatus({ connected: false, needsPermission: true }, { permissionGranted: false });
-    return;
-  }
-  nativePermissionStatus.textContent = "已获授权；正在检查本地处理程序…";
-  try {
-    const host = await pingNativeHost();
-    renderHostStatus(host, { permissionGranted: true });
-    await recoverNativeApi(host);
-  } catch (error) {
-    renderHostStatus({ connected: false }, { permissionGranted: true, failed: true });
-    nativePermissionStatus.textContent = error?.message || "暂时未能连接本地下载引擎";
-  } finally {
-    try {
-      nativePermissionGranted = await chrome.permissions.contains({ permissions: ["nativeMessaging"] });
-      if (!nativePermissionGranted) {
-        renderNativePermissionRequired("本地下载引擎尚未授权；检测与预览仍可用，多数保存需先授权");
-      }
-    } catch {
-      // Keep the last truthful host result when Chrome cannot answer the
-      // permission query; the next permission event or recheck retries it.
-    }
-  }
-}
-
-async function recoverNativeApi(host) {
-  // While the worker reloads the extension to obtain the API, this page is
-  // about to be replaced; a recovery request now would only race the reload.
-  if (host?.failureReason !== "api_unavailable" || host.selfHealing === true) {
-    return { recoveryBlocked: false, diagnosticsRefreshed: false, hostStatus: host };
-  }
-  try {
-    return await withPendingAction(nativePermissionButton, "native-recovery", () => completeNativeApiRecovery(host), {
-      pendingText: "正在初始化…",
-      successDurationMs: 0,
-      failureDurationMs: 0
-    });
-  } finally {
-    nativePermissionButton.textContent = nativePermissionGranted ? "重新检查" : "开启本地下载引擎";
-  }
-}
-
-async function completeNativeApiRecovery(host) {
-  let response = await requestNativeApiRecovery();
-  let recoveredHost = response.hostStatus || host;
-  if (recoveredHost.needsPermission) {
-    renderNativePermissionRequired("本地下载引擎授权已撤销；检测与预览仍可用，多数保存需重新授权");
-    return { recoveryBlocked: false, diagnosticsRefreshed: false, hostStatus: recoveredHost };
-  }
-  renderHostStatus(recoveredHost, { permissionGranted: true });
-  const retryAfterMs = Number.isFinite(response.retryAfterMs)
-    ? Math.max(0, Math.min(120_000, response.retryAfterMs))
-    : 0;
-  if (retryAfterMs > 0) {
-    nativePermissionStatus.textContent = `授权已生效，Chrome 正在完成初始化；约 ${Math.ceil(retryAfterMs / 1000)} 秒后自动重试…`;
-    // Deliberately do not message the service worker during this wait. Its
-    // measured MV3 idle lifecycle can then end, and the PING below starts a
-    // fresh worker whose optional nativeMessaging API binding is complete.
-    await waitForNativeRecovery(retryAfterMs);
-    nativePermissionGranted = await chrome.permissions.contains({ permissions: ["nativeMessaging"] });
-    if (!nativePermissionGranted) {
-      recoveredHost = { connected: false, needsPermission: true };
-      renderHostStatus(recoveredHost, { permissionGranted: false });
-      return { recoveryBlocked: false, diagnosticsRefreshed: false, hostStatus: recoveredHost };
-    }
-    nativePermissionStatus.textContent = "正在自动重试本地下载引擎…";
-    recoveredHost = await pingNativeHost();
-    if (recoveredHost.needsPermission) {
-      renderNativePermissionRequired("本地下载引擎授权已撤销；检测与预览仍可用，多数保存需重新授权");
-      return { recoveryBlocked: false, diagnosticsRefreshed: false, hostStatus: recoveredHost };
-    }
-    renderHostStatus(recoveredHost, { permissionGranted: true });
-    if (recoveredHost.failureReason === "api_unavailable") {
-      response = await requestNativeApiRecovery();
-      recoveredHost = response.hostStatus || recoveredHost;
-      if (recoveredHost.needsPermission) {
-        renderNativePermissionRequired("本地下载引擎授权已撤销；检测与预览仍可用，多数保存需重新授权");
-        return { recoveryBlocked: false, diagnosticsRefreshed: false, hostStatus: recoveredHost };
-      }
-      renderHostStatus(recoveredHost, { permissionGranted: true });
-    } else {
-      await refreshDiagnostics();
-      return { recoveryBlocked: false, diagnosticsRefreshed: true, hostStatus: recoveredHost };
-    }
-  }
-  if (response.recoveryBlocked) {
-    nativePermissionStatus.textContent = "Chrome 的连接接口长期未恢复。请完全退出并重新启动 Chrome，再返回此页点击“重新检查”。";
-  }
-  const recoveryBlocked = response.recoveryBlocked === true;
-  const diagnosticsRefreshed = !recoveryBlocked && recoveredHost.connected === true;
-  if (diagnosticsRefreshed) await refreshDiagnostics();
-  return { recoveryBlocked, diagnosticsRefreshed, hostStatus: recoveredHost };
-}
-
-async function requestNativeApiRecovery() {
-  const response = await chrome.runtime.sendMessage({ type: "RECOVER_NATIVE_API" });
-  if (!response?.ok) throw new Error(response?.error || "暂时未能恢复本地下载引擎");
-  return response;
-}
-
-function pingNativeHost() {
-  return runKeyedAction("native-ping", async () => {
-    const response = await chrome.runtime.sendMessage({ type: "PING_HOST" });
-    if (!response?.ok) throw new Error(response?.error || "暂时未能检查本地下载引擎");
-    return response.hostStatus || {};
-  });
-}
-
-export function renderHostStatus(host = {}, { permissionGranted = nativePermissionGranted, failed = false } = {}) {
-  const connected = host.connected === true;
-  renderDownloadLocation(host);
-  const compatible = connected && host.compatible === true;
-  const mismatch = connected && host.compatible !== true;
-  const failureReason = ["api_unavailable", "host_missing", "connection_failed"].includes(host.failureReason)
-    ? host.failureReason
-    : failed ? "connection_failed" : null;
-  const nativeRestartRequired = failureReason === "api_unavailable" && host.restartRequired === true;
-  const nativeSelfHealing = failureReason === "api_unavailable" && host.selfHealing === true;
-  const ffmpeg = host.capabilities?.ffmpeg;
-  const ytdlp = host.capabilities?.ytdlp;
-  const ffmpegInstalled = Boolean(ffmpeg ? ffmpeg.available : host.ffmpeg);
-  const ytdlpInstalled = ytdlp?.installed === true || ytdlp?.available === true;
-  const ytdlpAvailable = ytdlp?.available === true;
-  const externalGateOpen = BUILD_PROFILE.features.externalToolNetwork === true;
-  nativePermissionButton.textContent = permissionGranted && !host.needsPermission ? "重新检查" : "开启本地下载引擎";
-  nativeInstallGuide.open = failureReason === "host_missing";
-
-  if (!permissionGranted || host.needsPermission) {
-    setMatrixStatus("capabilityNativeConnection", "尚未授权检查", "unknown");
-    setMatrixStatus("capabilityNativeProtocol", "等待授权", "unknown");
-    setMatrixStatus("capabilityFfmpeg", "尚未检查", "unknown");
-    setMatrixStatus("capabilityYtDlp", "尚未检查", "unknown");
-    setRuntimeStatus("runtimeNativeStatus", "尚未授权", "warning");
-    setRuntimeStatus("runtimeFfmpegStatus", "尚未检查", "warning");
-  } else if (failureReason === "api_unavailable") {
-    setMatrixStatus("capabilityNativeConnection", nativeSelfHealing ? "授权已生效 · 正在自动重新连接" : nativeRestartRequired ? "授权已生效 · 需要重启浏览器" : "授权已生效 · 浏览器接口待恢复", "mismatch");
-    setMatrixStatus("capabilityNativeProtocol", nativeSelfHealing ? "FluxCatch 正在重新加载" : nativeRestartRequired ? "接口长期未恢复 · 请重启 Chrome" : "等待 Chrome 初始化连接接口", "unknown");
-    setMatrixStatus("capabilityFfmpeg", "等待连接后检查", "unknown");
-    setMatrixStatus("capabilityYtDlp", "等待连接后检查", "unknown");
-    setRuntimeStatus("runtimeNativeStatus", nativeSelfHealing ? "正在自动重新连接" : nativeRestartRequired ? "需要重启浏览器" : "正在初始化连接接口", "warning");
-    setRuntimeStatus("runtimeFfmpegStatus", "等待本地程序", "warning");
-  } else if (!connected) {
-    setMatrixStatus("capabilityNativeConnection", failureReason === "host_missing" ? "未安装或未注册" : "连接失败 · 请重试", "missing");
-    setMatrixStatus("capabilityNativeProtocol", "等待连接", "unknown");
-    setMatrixStatus("capabilityFfmpeg", "等待连接后检查", "unknown");
-    setMatrixStatus("capabilityYtDlp", "等待连接后检查", "unknown");
-    setRuntimeStatus("runtimeNativeStatus", "未连接", "bad");
-    setRuntimeStatus("runtimeFfmpegStatus", "等待本地程序", "warning");
-  } else {
-    setMatrixStatus("capabilityNativeConnection", `已连接${host.version ? ` · ${host.version}` : ""}`, "ready");
-    setMatrixStatus("capabilityNativeProtocol", compatible ? `匹配 · 协议 ${host.protocolVersion}` : "协议或能力配置不匹配", compatible ? "ready" : "mismatch");
-    setMatrixStatus("capabilityFfmpeg", ffmpegInstalled ? compatible ? "已安装 · 本地处理可用" : "已安装 · 协议不匹配" : "未安装", ffmpegInstalled ? compatible ? "ready" : "mismatch" : "missing");
-    setMatrixStatus("capabilityYtDlp", ytdlpInstalled
-      ? externalGateOpen && ytdlpAvailable && ytdlp.networkDisabled === false && compatible ? "已安装 · 可用" : "已安装 · 联网功能未开放"
-      : "未安装", ytdlpInstalled ? externalGateOpen && ytdlpAvailable && ytdlp.networkDisabled === false && compatible ? "ready" : "gated" : "missing");
-    setRuntimeStatus("runtimeNativeStatus", compatible ? "已连接" : "版本不匹配", compatible ? "ok" : "bad");
-    setRuntimeStatus("runtimeFfmpegStatus", ffmpegInstalled ? compatible ? "本地处理可用" : "已安装但不可用" : "未安装", ffmpegInstalled ? compatible ? "ok" : "bad" : "bad");
-  }
-
-  const externalAvailable = Boolean(externalGateOpen && compatible && ytdlpAvailable && ytdlp.networkDisabled === false);
-  setMatrixStatus("capabilityExternalNetwork", !externalGateOpen
-    ? "当前构建未启用"
-    : externalAvailable ? "可用" : ytdlpInstalled ? "工具已安装 · 联网仍受限" : "需要安装工具",
-  externalAvailable ? "ready" : "gated");
-  nativePermissionStatus.textContent = !permissionGranted || host.needsPermission
-    ? "加速大文件、合并视频片段或转换格式时需要开启"
-    : failureReason === "api_unavailable"
-      ? nativeSelfHealing
-        ? "授权已生效，FluxCatch 正在自动重新加载以完成连接；此页会自动刷新"
-        : nativeRestartRequired
-          ? "Chrome 的连接接口长期未恢复。请完全退出并重新启动 Chrome，再返回此页点击“重新检查”。"
-          : "授权已生效，正在等待 Chrome 初始化；FluxCatch 将自动重试"
-      : failureReason === "host_missing"
-        ? "已授权，但本地下载引擎未安装或未注册；请在源码根目录运行 ./scripts/native-install-wrapper.sh 后重试"
-        : failureReason === "connection_failed"
-          ? "已授权，但本地引擎连接失败；请稍后重新检查，若持续失败请在 chrome://extensions 中查看错误"
-    : mismatch
-      ? HOST_MISMATCH_MESSAGE
-      : connected && compatible
-        ? "已就绪 · 可加速大文件、合并视频片段并转换格式"
-        : "已授权；等待连接配套程序";
-}
-
-function setMatrixStatus(id, text, state) {
-  const element = document.querySelector(`#${id}`);
-  if (!element) return;
-  element.textContent = text;
-  element.dataset.state = state;
-}
-
-// The engine reports its real output folder once connected; until then the
-// row shows the documented default so the path is never blank.
-function renderDownloadLocation(host = {}) {
-  const element = document.querySelector("#downloadLocationPath");
-  if (!element) return;
-  const path = typeof host.downloadDir === "string" && host.downloadDir.startsWith("/")
-    ? host.downloadDir.replace(/^\/Users\/[^/]+(?=\/|$)/, "~")
-    : "~/Downloads/FluxCatch";
-  element.textContent = path;
-  element.title = typeof host.downloadDir === "string" && host.downloadDir ? host.downloadDir : "";
-  const reset = document.querySelector("#resetDownloadFolderButton");
-  if (reset) reset.hidden = path === "~/Downloads/FluxCatch";
+// ---------- save location ----------
+function renderLocation() {
+  const rowElement = ui.rows.location;
+  if (!rowElement) return;
+  const full = typeof state.host?.downloadDir === "string" && state.host.downloadDir.startsWith("/") ? state.host.downloadDir : "";
+  const shown = full ? full.replace(/^\/Users\/[^/]+(?=\/|$)/, "~") : DEFAULT_LOCATION;
+  const path = $(".setting-description", rowElement);
+  path.textContent = shown;
+  path.hidden = false;
+  path.title = full;
+  ui.controls.locationReset.hidden = shown === DEFAULT_LOCATION;
 }
 
 // The folder picker is a native sheet shown by the engine; the permission
 // request stays inside this click so Chrome can prompt when needed.
-async function changeDownloadFolder(button, reset) {
-  const status = document.querySelector("#downloadLocationStatus");
-  let permissionRequest;
+async function changeDownloadFolder(buttonElement, reset) {
+  const rowElement = ui.rows.location;
+  let request;
   try {
-    permissionRequest = chrome.permissions.request({ permissions: ["nativeMessaging"] });
+    request = globalThis.chrome.permissions.request({ permissions: ["nativeMessaging"] });
   } catch (error) {
-    if (status) status.textContent = error?.message || "本地下载引擎授权失败";
+    setSettingError(rowElement, errorText(error));
     return;
   }
-  await withPendingAction(button, reset ? "options:reset-folder" : "options:choose-folder", async () => {
-    if (!await permissionRequest) throw new Error("请先允许使用本地下载引擎，再更改保存位置");
-    if (status) status.textContent = reset ? "正在恢复默认位置…" : "请在弹出的窗口中选择文件夹…";
-    const response = await chrome.runtime.sendMessage({ type: "CHOOSE_DOWNLOAD_FOLDER", reset });
-    if (!response?.ok) throw new Error(response?.error || "无法更改保存位置");
-    renderDownloadLocation({ downloadDir: response.downloadDir });
-    if (status) status.textContent = reset ? "已恢复默认保存位置" : "保存位置已更新";
-  }, { pendingText: reset ? "恢复中…" : "选择中…", successText: "完成 ✓", failureText: "未更改", successDurationMs: 900, failureDurationMs: 1200 }).catch((error) => {
-    if (status) status.textContent = error?.message || "无法更改保存位置";
+  await runAction(buttonElement, reset ? "settings:reset-folder" : "settings:choose-folder", async () => {
+    if (!(await request)) throw userError(msg("toast.engineNeeded"));
+    state.nativePermission = true;
+    const response = await callWorker({ type: "CHOOSE_DOWNLOAD_FOLDER", reset });
+    state.host = { ...state.host, downloadDir: response.downloadDir };
+    renderLocation();
+    setSettingError(rowElement, "");
+    markSaved(rowElement);
+  }, {
+    // Closing the folder sheet is the user's own choice, not an error.
+    onError: (error) => setSettingError(rowElement, error?.code === "cancelled" ? "" : errorText(error))
   });
 }
 
-function setRuntimeStatus(id, text, dotState) {
-  const element = document.querySelector(`#${id}`);
-  if (!element) return;
-  element.textContent = text;
-  const dot = element.closest(".status-item")?.querySelector(".status-dot");
-  if (!dot) return;
-  dot.classList.toggle("ok", dotState === "ok");
-  dot.classList.toggle("bad", dotState === "bad");
-}
-
-function renderCapabilities() {
-  const list = document.querySelector("#capabilityList");
-  list.replaceChildren();
-  for (const [feature, label] of Object.entries(CAPABILITY_LABELS)) {
-    const enabled = BUILD_PROFILE.features[feature] === true;
-    const item = document.createElement("li");
-    item.dataset.feature = feature;
-    item.dataset.enabled = String(enabled);
-    const name = document.createElement("span");
-    name.textContent = label;
-    const value = document.createElement("strong");
-    value.textContent = enabled ? "可用" : "未启用";
-    item.append(name, value);
-    list.append(item);
-  }
-}
-
-function renderLabStates() {
-  const items = document.querySelectorAll(".roadmap-list li");
-  for (let index = 0; index < items.length; index += 1) {
-    const feature = LAB_FEATURES[index];
-    const enabled = BUILD_PROFILE.features[feature] === true;
-    items[index].dataset.feature = feature;
-    items[index].dataset.enabled = String(enabled);
-    const state = items[index].querySelector(".roadmap-status");
-    if (state) state.textContent = enabled ? "可用" : feature === "externalToolNetwork" ? "规划中" : "未开放";
-  }
-}
-
-function refreshDiagnostics() {
-  return runKeyedAction("options-diagnostics", async () => {
-    const response = await chrome.runtime.sendMessage({ type: "GET_DIAGNOSTICS" });
-    if (!response?.ok) throw new Error(response?.error || "读取诊断信息失败");
-    diagnostics = response.diagnostics;
-    const extension = diagnostics.extension || {};
-    const native = diagnostics.native || {};
-    document.querySelector("#diagnosticExtensionVersion").textContent = extension.version || "未知";
-    document.querySelector("#diagnosticExtensionId").textContent = extension.id || "未知";
-    document.querySelector("#diagnosticBuild").textContent = `${extension.channel || "未知"} · ${extension.commit || "未知"}`;
-    document.querySelector("#diagnosticNativeVersion").textContent = native.connected ? native.version || "未知" : "未连接";
-    document.querySelector("#diagnosticProtocol").textContent = native.compatible === true
-      ? `匹配 · 协议 ${native.protocolVersion} · 能力配置 ${native.capabilityProfileVersion}`
-      : native.connected ? "不匹配" : "等待连接";
-    return diagnostics;
+// ---------- local engine ----------
+function renderEngine() {
+  const view = engineState({
+    checking: state.engineChecking,
+    permission: state.nativePermission === true,
+    host: state.host,
+    failed: state.engineFailed,
+    retrySeconds: state.retrySeconds,
+    removed: state.permissionRemoved
   });
+  state.engineReady = view.tone === "complete";
+  for (const entry of ui.engine) {
+    entry.status.dataset.tone = view.tone;
+    entry.status.textContent = msg(view.label);
+    entry.action.dataset.engineAction = view.action;
+    const label = entry.action.querySelector("span");
+    if (label) label.textContent = msg(view.action === "setUp" ? "action.setUp" : "action.retry");
+    // A Ready engine offers no action; Retry follows a failure only.
+    entry.action.hidden = !view.action || (view.checking === true && state.nativePermission === null);
+    const detail = view.description ? msg(view.description, view.params) : "";
+    if (entry.withDescription) setDescription(entry.row, detail);
+    if (entry.announcer) {
+      const spoken = msg("settings.engine.announce", { state: msg(view.label), detail });
+      if (spoken !== lastEngineAnnouncement) {
+        lastEngineAnnouncement = spoken;
+        entry.announcer.textContent = spoken;
+      }
+    }
+  }
+  // The install steps open by themselves when the engine is missing; the user
+  // closes them. Once the engine works they step aside, and return if it breaks.
+  if (ui.install) {
+    ui.install.hidden = state.engineReady;
+    if (view.install === true) ui.install.open = true;
+  }
+  // Until the engine is Ready, what needs it shows the engine's own state, not
+  // "Not yet" (which means the build lacks it) and not "Yes".
+  const mirror = (node, ready) => {
+    if (!node) return;
+    const [tone, key] = state.engineReady ? ready : [view.tone, view.label];
+    node.dataset.tone = tone;
+    node.textContent = msg(key);
+  };
+  mirror($(".row-status", ui.rows.merge), view.merging ? ["complete", "settings.yes"] : ["cancelled", "settings.notYet"]);
+  for (const capability of ui.capabilities) {
+    if (capability.enabled && capability.needsEngine) mirror(capability.status, ["complete", "settings.yes"]);
+  }
+  renderSwitchGates();
+  renderLocation();
 }
 
-async function copyDiagnostics() {
-  if (isActionPending("copy-diagnostics")) return;
+function showEngineError() {
+  // The engine rows carry the state; a failed check reads as "Couldn't connect".
+  state.engineFailed = true;
+  renderEngine();
+}
+
+async function requestNativeAccess(buttonElement) {
+  let request;
   try {
-    await withPendingAction(copyDiagnosticsButton, "copy-diagnostics", async () => {
-      if (!diagnostics) await refreshDiagnostics();
-      await navigator.clipboard.writeText(JSON.stringify(diagnostics, null, 2));
-      setStatus("诊断信息已复制", "success", 1800);
-    }, {
-      pendingText: "正在复制…",
-      successText: "已复制 ✓",
-      failureText: "复制失败",
-      successDurationMs: 700,
-      failureDurationMs: 900
-    });
-  } catch (error) {
-    setStatus(error?.message || "复制诊断信息失败", "error", 5000);
+    // Native Messaging is optional: request it straight from the click.
+    request = globalThis.chrome.permissions.request({ permissions: ["nativeMessaging"] });
+  } catch {
+    showEngineError();
+    return;
+  }
+  await runAction(buttonElement, "native-access", async () => {
+    const granted = await request;
+    state.nativePermission = granted === true;
+    if (!granted) {
+      state.host = { connected: false, needsPermission: true };
+      renderEngine();
+      return;
+    }
+    state.permissionRemoved = false;
+    await checkEngine();
+  }, { onError: showEngineError });
+}
+
+/** Ask the engine how it is, finish Chrome's setup when needed, then reconcile the live permission. */
+async function checkEngine() {
+  state.nativePermission = await permissionsContains("nativeMessaging");
+  if (!state.nativePermission) {
+    state.engineChecking = false;
+    state.host = { connected: false, needsPermission: true };
+    renderEngine();
+    return;
+  }
+  state.engineChecking = true;
+  state.engineFailed = false;
+  renderEngine();
+  try {
+    const host = await pingHost();
+    state.host = host;
+    state.engineChecking = false;
+    renderEngine();
+    await recoverNativeApi(host);
+    await refreshDiagnostics().catch(() => {});
+  } catch {
+    state.host = { connected: false };
+    state.engineFailed = true;
+  } finally {
+    state.engineChecking = false;
+    const granted = await permissionsContains("nativeMessaging");
+    if (state.nativePermission && !granted) state.permissionRemoved = true;
+    state.nativePermission = granted;
+    if (!granted) state.host = { connected: false, needsPermission: true };
+    renderEngine();
   }
 }
 
-function setStatus(message, type = "success", duration = 0) {
-  clearTimeout(statusTimer);
-  statusTimer = null;
-  status.textContent = message;
-  status.dataset.statusType = type;
-  if (duration > 0) statusTimer = setTimeout(() => clearStatus(), duration);
+function pingHost() {
+  pingInFlight ||= callWorker({ type: "PING_HOST" })
+    .then((response) => response.hostStatus || {})
+    .finally(() => { pingInFlight = null; });
+  return pingInFlight;
 }
 
-function clearStatus() {
-  clearTimeout(statusTimer);
-  statusTimer = null;
-  status.textContent = "";
-  delete status.dataset.statusType;
+function recoverNativeApi(host) {
+  // While the worker reloads the extension to obtain the API, this page is
+  // about to be replaced; a recovery request now would only race the reload.
+  if (host?.failureReason !== "api_unavailable" || host.selfHealing === true) return Promise.resolve();
+  recoveryInFlight ||= completeNativeApiRecovery(host).finally(() => { recoveryInFlight = null; });
+  return recoveryInFlight;
 }
 
-const uiLanguageSelect = document.querySelector("#uiLanguageSelect");
-if (uiLanguageSelect) {
-  loadUiLanguage().then((value) => { uiLanguageSelect.value = value; }).catch(() => {});
-  uiLanguageSelect.addEventListener("change", () => { void changeUiLanguage(uiLanguageSelect.value); });
+async function completeNativeApiRecovery(host) {
+  let response = await callWorker({ type: "RECOVER_NATIVE_API" });
+  let recovered = response.hostStatus || host;
+  state.host = recovered;
+  renderEngine();
+  if (recovered.needsPermission) return;
+  const retryAfterMs = Number.isFinite(response.retryAfterMs) ? Math.max(0, Math.min(120_000, response.retryAfterMs)) : 0;
+  if (retryAfterMs > 0) {
+    state.retrySeconds = Math.ceil(retryAfterMs / 1000);
+    renderEngine();
+    // Deliberately do not message the worker while waiting: its idle lifecycle
+    // can end, and the ping below then starts a fresh worker whose optional
+    // nativeMessaging binding is complete.
+    await waitForNativeRecovery(retryAfterMs);
+    state.retrySeconds = 0;
+    if (!(await permissionsContains("nativeMessaging"))) {
+      state.host = { connected: false, needsPermission: true };
+      renderEngine();
+      return;
+    }
+    recovered = await pingHost();
+    state.host = recovered;
+    renderEngine();
+    if (recovered.needsPermission) return;
+    if (recovered.failureReason !== "api_unavailable") return;
+    response = await callWorker({ type: "RECOVER_NATIVE_API" });
+    recovered = response.hostStatus || recovered;
+    state.host = recovered;
+    renderEngine();
+  }
+  if (response.recoveryBlocked === true) {
+    state.host = { ...state.host, connected: false, failureReason: "api_unavailable", restartRequired: true, selfHealing: false };
+    renderEngine();
+  }
 }
 
-// Module scripts normally finish while readyState is "interactive" and before
-// DOMContentLoaded, but the await above can suspend evaluation past the event on
-// slow starts, leaving the late listener registration missed. Initialize now
-// whenever parsing has finished; the guard inside keeps it to a single run.
-if (document.readyState !== "loading") void initialize();
+// ---------- developer: version info ----------
+function renderDeveloper() {
+  if (ui.developerRows) ui.developerRows.hidden = !state.developer;
+  const diagnostics = state.diagnostics;
+  const unknown = msg("settings.version.unknown");
+  const extension = diagnostics?.extension || {};
+  const native = diagnostics?.native || {};
+  if (!ui.version.extensionId) return;
+  ui.version.extensionId.textContent = extension.id || globalThis.chrome?.runtime?.id || unknown;
+  ui.version.build.textContent = [extension.version, extension.channel, extension.commit].filter(Boolean).join(" · ") || unknown;
+  ui.version.engine.textContent = native.connected ? native.version || unknown : msg("settings.compat.notConnected");
+  const compat = !native.connected ? ["cancelled", "settings.compat.notConnected"] : native.compatible === true ? ["complete", "settings.compat.ok"] : ["warning", "settings.engine.updateNeeded"];
+  ui.version.compat.dataset.tone = compat[0];
+  ui.version.compat.textContent = msg(compat[1]);
+}
+
+async function refreshDiagnostics() {
+  const response = await callWorker({ type: "GET_DIAGNOSTICS" });
+  state.diagnostics = response.diagnostics || null;
+  renderDeveloper();
+  return state.diagnostics;
+}
+
+async function copyVersionInfo(buttonElement) {
+  await runAction(buttonElement, "settings:copy-version", async () => {
+    const diagnostics = state.diagnostics || await refreshDiagnostics();
+    await globalThis.navigator.clipboard.writeText(JSON.stringify(diagnostics, null, 2));
+    setSettingError(ui.rows.version, "");
+    toast(msg("settings.version.copied"));
+  }, { onError: (error) => setSettingError(ui.rows.version, errorText(error)) });
+}
+
+// ---------- navigation ----------
+function sectionForHash(hash) {
+  const id = decodeURIComponent(String(hash || "").replace(/^#/, ""));
+  if (!id) return null;
+  if (SECTIONS.some((section) => section.id === id)) return id;
+  return LEGACY_HASHES[id] || null;
+}
+
+/**
+ * Scroll to the section a hash names. Every "Set up" elsewhere opens
+ * #local-engine; on that landing the page starts at Status, whose first row
+ * is the engine with its Set up, and the explanation follows right below it,
+ * so both are in view. A nav click goes to the section itself.
+ */
+function jumpToHash({ landing = false } = {}) {
+  const hash = globalThis.location?.hash || "";
+  const id = sectionForHash(hash);
+  if (!id) return;
+  const raw = hash.replace(/^#/, "");
+  if (raw !== id) globalThis.history?.replaceState?.(null, "", `#${id}`);
+  const target = landing && id === "local-engine" ? "status" : id;
+  $(`#${target}`)?.scrollIntoView?.({ block: "start" });
+  ui.nav?.setCurrent(id);
+}
+
+function updateCurrentSection() {
+  if (!ui.nav) return;
+  const offset = 56 + 24 + 8;
+  let current = SECTIONS[0].id;
+  for (const section of SECTIONS) {
+    const element = $(`#${section.id}`);
+    if (element?.getBoundingClientRect && element.getBoundingClientRect().top - offset <= 0) current = section.id;
+  }
+  const root = document.documentElement;
+  if (root?.scrollHeight && (globalThis.innerHeight || 0) + (globalThis.scrollY || 0) >= root.scrollHeight - 2) current = SECTIONS[SECTIONS.length - 1].id;
+  ui.nav.setCurrent(current);
+}
+
+// ---------- pond zones: the page margins only ----------
+function pondZones() {
+  const page = $("#page").getBoundingClientRect();
+  const width = globalThis.innerWidth;
+  const height = globalThis.innerHeight;
+  return [
+    { x: 0, y: 0, width: Math.max(0, page.left - 12), height },
+    { x: page.right + 12, y: 0, width: Math.max(0, width - page.right - 12), height }
+  ];
+}
+
+// For node probes and the design audit: the current page state, read-only.
+export function settingsSnapshot() {
+  return {
+    loaded: state.loaded,
+    settings: state.settings,
+    developer: state.developer,
+    invalid: [...state.invalid],
+    nativePermission: state.nativePermission,
+    switchOn: (field) => isSwitchOn(ui.controls[field])
+  };
+}
+
+export function whenSaved() {
+  return saveChain;
+}

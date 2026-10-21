@@ -18,17 +18,25 @@ const EXTENSION_DIR = path.join(ROOT, "extension");
 const OUT = path.resolve(process.argv.includes("--out") ? process.argv[process.argv.indexOf("--out") + 1] : path.join(HERE, "out", "shots"));
 const START_TIMEOUT_MS = 25_000;
 
+// Selectors follow the v2 surfaces: the popup's views are [data-view] and the
+// link field of the shared Download dialog is #mediaLink. The Downloads page's
+// #statusLine carries, in priority order, the disconnected line (tone
+// "failed"), the engine line (one action, Set up) and the notification prompt
+// (two actions, Turn on and Don't notify); HIDE_NOTIFY_PROMPT hides the line
+// only when it is the notification prompt, so the engine line stays in shot.
+// The preview has one view per screen (?view=type|text|controls|rows|feedback|overlays).
+const HIDE_NOTIFY_PROMPT = "{ const l = document.querySelector('#statusLine'); if (l && !l.dataset.tone && l.querySelectorAll('.line-actions .btn').length === 2) l.hidden = true; }";
 const SHOTS = [
-  { name: "popup-media-empty", page: "popup/popup.html", width: 372, height: 560 },
-  { name: "popup-jobs", page: "popup/popup.html", width: 372, height: 560, prepare: "document.querySelector('#jobsTab').click()" },
+  { name: "popup-media-empty", page: "popup/popup.html", width: 372, height: 600 },
+  { name: "popup-jobs", page: "popup/popup.html", width: 372, height: 600, prepare: "document.querySelector('[data-view=\"downloads\"]').click()" },
   { name: "sidepanel", page: "sidepanel/sidepanel.html", width: 420, height: 820 },
-  { name: "downloads", page: "downloads/downloads.html", width: 1100, height: 820, prepare: "document.querySelector('#notifyBanner').hidden = true" },
-  { name: "downloads-narrow", page: "downloads/downloads.html", width: 480, height: 820, prepare: "document.querySelector('#notifyBanner').hidden = true" },
-  { name: "downloads-new-link", page: "downloads/downloads.html", width: 1100, height: 820, prepare: "document.querySelector('#notifyBanner').hidden = true; document.querySelector('#newDownloadButton').click(); document.querySelector('#urlInput').value = 'https://example.com/talks/keynote-2026.m3u8'" },
-  { name: "popup-link-dialog", page: "popup/popup.html", width: 372, height: 560, prepare: "document.querySelector('#urlButton').click(); const input = document.querySelector('#urlInput'); input.value = 'https://example.com/clip.mp4'; input.dispatchEvent(new Event('input', { bubbles: true }))" },
+  { name: "downloads", page: "downloads/downloads.html", width: 1100, height: 820, prepare: HIDE_NOTIFY_PROMPT },
+  { name: "downloads-narrow", page: "downloads/downloads.html", width: 480, height: 820, prepare: HIDE_NOTIFY_PROMPT },
+  { name: "downloads-new-link", page: "downloads/downloads.html", width: 1100, height: 820, prepare: `${HIDE_NOTIFY_PROMPT}; document.querySelector('#urlInput').value = 'https://example.com/talks/keynote-2026.m3u8'` },
+  { name: "popup-link-dialog", page: "popup/popup.html", width: 372, height: 600, prepare: "document.querySelector('#urlButton').click(); const input = document.querySelector('#mediaLink'); input.value = 'https://example.com/clip.mp4'; input.dispatchEvent(new Event('input', { bubbles: true }))" },
   { name: "options", page: "options/options.html", width: 1100, height: 900 },
-  { name: "preview", page: "preview/preview.html?theme=system&demo=static", width: 1500, height: 2600 },
-  { name: "preview-compact-reduced", page: "preview/preview.html?density=compact&motion=reduced&demo=static", width: 1500, height: 2600 }
+  ...["type", "text", "controls", "rows", "feedback", "overlays"].map((view) => ({ name: `preview-${view}`, page: `preview/preview.html?demo=static&view=${view}`, width: 1440, height: 1600 })),
+  { name: "preview-compact-reduced", page: "preview/preview.html?view=rows&density=compact&motion=reduced&demo=static", width: 1440, height: 1600 }
 ];
 
 const HISTORY = [

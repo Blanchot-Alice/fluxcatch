@@ -38,3 +38,26 @@ test("DASH progress wording removes transport jargon without duplicating text", 
   assert.equal(friendlyDashMessage("正在无损合并 DASH 音视频"), "正在无损合并音视频");
   assert.equal(friendlyDashMessage("DASH 分片 3/8"), "视频片段 3/8");
 });
+
+test("with lang, DASH wording comes from job-failure.js in that language and never echoes engine text", async () => {
+  const { classifyJobFailure, describeJobActivity, describeJobFailure } = await import("../extension/lib/job-failure.js");
+  const CJK = /[㐀-鿿　-〿＀-￯]/;
+  const failures = [
+    "DASH video track download failed: HTTP Error 403: Forbidden",
+    "DASH audio/video merge failed: FFmpeg failed (1): Conversion failed!",
+    "Protected DASH is metadata-only",
+    "DASH 视频轨启动前签名链接已过期，请刷新页面后重试"
+  ];
+  for (const raw of failures) {
+    for (const lang of ["en", "zh"]) {
+      const visible = friendlyDashMessage(raw, { failed: true, lang });
+      assert.equal(visible, describeJobFailure(classifyJobFailure({ text: raw }), lang), `${lang} ${raw}`);
+      assert.doesNotMatch(visible, /DASH|FFmpeg|Forbidden/, `${lang} ${raw}`);
+      if (lang === "en") assert.doesNotMatch(visible, CJK, raw);
+    }
+  }
+  assert.equal(friendlyDashMessage("DASH 分片 3/8", { lang: "en" }), describeJobActivity("DASH 分片 3/8", "en"));
+  assert.equal(friendlyDashMessage("DASH 分片 3/8", { lang: "en" }), "Part 3 of 8");
+  assert.equal(friendlyDashMessage("正在无损合并 DASH 音视频", { lang: "zh" }), "正在合并画面和声音");
+  assert.equal(friendlyDashMessage("ordinary download failure", { failed: true, lang: "en" }), null, "non-DASH text still returns null");
+});

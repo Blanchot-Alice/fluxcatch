@@ -3,15 +3,15 @@
     "message": "FluxCatch"
   },
   "extensionDescription": {
-    "message": "Detect direct media, HLS, and DASH streams requested by the current page and save user-selected resources locally."
+    "message": "Finds the video and audio on the page you are viewing and saves the ones you choose to your computer. Nothing is uploaded."
   },
   "commandOpenPopup": {
-    "message": "Open the FluxCatch popup"
+    "message": "Open FluxCatch"
   },
   "commandOpenDownloads": {
-    "message": "Open the downloads page"
+    "message": "All downloads"
   },
   "commandOpenWorkspace": {
-    "message": "Open the media workspace"
+    "message": "Open workspace"
   }
 }

@@ -1,163 +1,189 @@
-/* FluxCatch component preview: every section-8 component, both themes side by
-   side, density and motion toggles. Page-only styles; the components below use
-   the shared tokens and primitives exactly as the real screens do. */
-*{padding:0}
-body{min-height:100dvh;font-size:13px;line-height:1.5}
+/* FluxCatch component preview (design review §0: 1440 × auto) on the v2
+   system. The full-page grid of the Downloads page: one centred column of at
+   most 880 px, every text on the text column (lead 56 + gap 16), boxes such
+   as a segmented track on the column edge (as Downloads' filter track),
+   trailing items on the column's right edge, the pond in the margins only. Each view
+   stays within the screen budgets on its own; components keep the styles of
+   ui/v2/system.css and media.css. This file holds the gallery's layout only:
+   tokens only, no colour literals, no 1px rules. */
 
-.preview-bar{position:sticky;top:0;z-index:20;display:flex;align-items:flex-start;justify-content:space-between;gap:24px;padding:18px 28px;background:var(--material);backdrop-filter:var(--blur);-webkit-backdrop-filter:var(--blur);box-shadow:0 1px 0 var(--line-soft)}
-.preview-title{display:flex;align-items:center;gap:14px;min-width:0}
-.preview-title .mark{width:44px;height:44px;flex:none}
-.preview-title h1{font-size:24px;line-height:1.15;font-weight:400}
-.preview-title p{max-width:640px;margin-top:4px;color:var(--text-muted);font-size:12.5px}
-.preview-controls{display:flex;align-items:flex-end;gap:12px;flex:none;flex-wrap:wrap}
-.preview-controls label{display:grid;gap:4px;color:var(--text-muted);font-size:12px;font-weight:500}
-.preview-controls select{min-height:36px;padding:6px 10px;font-size:12.5px;font-weight:500}
-.preview-controls .secondary-btn{min-height:36px;padding:6px 14px}
-
-.preview-panes{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0;min-height:100dvh}
-.preview-pane{padding:28px 28px 48px;color:var(--text-primary)}
-.pane-heading{margin:0 0 20px;font-size:32px;font-weight:400}
-.pane-body{display:grid;gap:36px}
-
-.pv-block{display:grid;gap:12px}
-.pv-label{display:flex;align-items:baseline;gap:10px;color:var(--text-secondary);font-size:13px;font-weight:500}
-.pv-label span{color:var(--text-muted);font-weight:400}
-.pv-note{color:var(--text-muted);font-size:12px}
-
-/* 1 · window chrome */
-.pv-window{display:grid;grid-template-columns:168px minmax(0,1fr);min-height:220px;border-radius:var(--r-panel);background:var(--surface);box-shadow:var(--shadow-card);overflow:hidden}
-.pv-sidebar{padding:14px 10px;background:var(--material);backdrop-filter:var(--blur);-webkit-backdrop-filter:var(--blur);box-shadow:1px 0 0 var(--line-soft)}
-.pv-sidebar-brand{display:grid;padding:4px 10px 14px}
-.pv-sidebar-brand strong{font-family:var(--font-display);font-size:18px;font-weight:400;letter-spacing:var(--tracking-title)}
-.pv-sidebar-brand small{color:var(--text-muted);font-family:var(--font-display);font-size:12px}
-.pv-sidebar nav{display:grid;gap:2px}
-.pv-sidebar a{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:36px;padding:6px 10px;border-radius:var(--r-control);color:var(--text-secondary);font-weight:500;text-decoration:none;transition:background-color var(--motion-base) var(--ease-standard),color var(--motion-base) var(--ease-standard)}
-.pv-sidebar a:hover{background:var(--hover-halo);color:var(--text-primary)}
-.pv-sidebar a.is-current{background:var(--selection);color:var(--text-primary);font-weight:500}
-.pv-sidebar .count{min-width:22px;height:20px;display:inline-grid;place-items:center;padding:0 7px;border-radius:var(--r-pill);background:var(--harbour-tint);color:var(--harbour-ink);font-size:11.5px;font-style:normal;font-weight:500}
-.pv-sidebar .count.rose{background:var(--rose-tint);color:var(--rose-ink)}
-.pv-window-main{padding:14px 16px}
-.pv-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px}
-.pv-toolbar .segmented button{min-height:34px;padding:6px 12px;font-size:12.5px;display:inline-flex;align-items:center;gap:6px}
-.pv-toolbar .segmented .count{min-width:20px;height:20px;padding:0 6px;font-size:11.5px;display:inline-grid;place-items:center;background:var(--harbour-tint);color:var(--harbour-ink)}
-.pv-toolbar .segmented button.active .count{background:var(--pond-tint);color:var(--pond-ink)}
-.pv-toolbar .dl-btn{min-height:36px;padding:6px 16px}
-.pv-window-main .pv-note{margin-top:14px}
-
-/* 2 · list rows */
-.pv-list{display:grid;gap:var(--list-gap);margin:0;padding:0;list-style:none;border-radius:var(--r-panel);background:var(--surface);box-shadow:var(--shadow-card);overflow:hidden}
-.pv-row{display:grid;gap:7px;padding:var(--row-pad-block) var(--row-pad-inline);transition:background-color var(--motion-base) var(--ease-standard)}
-.pv-row:nth-child(even){background:var(--surface-cool)}
-.pv-row:hover{background:var(--surface-raised)}
-.pv-row.is-selected,.pv-row.is-selected:hover{background:var(--selection)}
-.pv-row.is-live{background:var(--surface-raised);box-shadow:inset 0 0 0 1px var(--line-soft)}
-.pv-row-head{display:grid;grid-template-columns:minmax(0,1fr) max-content;align-items:center;gap:10px}
-.pv-name{min-width:0;overflow:hidden;font-family:var(--font-display);font-size:15px;font-weight:450;letter-spacing:var(--tracking-title);text-overflow:ellipsis;white-space:nowrap}
-.pv-state{color:var(--pond-ink);font-size:12px;font-weight:500;white-space:nowrap;font-variant-numeric:tabular-nums}
-.pv-state.paused{color:var(--lilac-ink)}
-.pv-state.done{color:var(--celadon-ink)}
-.pv-state.wait{color:var(--harbour-ink)}
-.pv-state.bad{color:var(--vermilion-ink)}
-.pv-row-sub{display:flex;align-items:baseline;justify-content:space-between;gap:12px;color:var(--text-muted);font-size:12px}
-.pv-domain{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-muted);font-size:12px}
-.pv-figures{flex:none;font-variant-numeric:tabular-nums}
-.pv-figures b{color:var(--text-primary);font-weight:500}
-.pv-figures i{font-style:normal}
-.pv-figures.bad{color:var(--vermilion-ink)}
-.pv-row .progress{height:6px}
-.pv-row-actions{display:flex;align-items:center;gap:2px;margin:2px 0 0 -8px}
-.job-control{display:inline-flex;align-items:center;gap:4px;min-width:36px;min-height:32px;padding:4px 8px;border:0;border-radius:var(--r-control);background:transparent;color:var(--pond-ink);font-family:var(--font);font-size:12px;font-weight:500;cursor:pointer;white-space:nowrap}
-.job-control svg{width:13px;height:13px;flex:none;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
-.job-control.danger-control{color:var(--vermilion-ink)}
-.job-control:hover{background:var(--hover-halo)}
-.job-control.danger-control:hover{background:var(--vermilion-tint)}
-.is-paused .job-control{color:var(--lilac-ink)}
-
-/* 3 · active card */
-.pv-card{padding:18px 20px 20px;border-radius:var(--r-panel);background:var(--surface);box-shadow:var(--shadow-card)}
-.pv-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
-.pv-card-title{font-size:18px;font-weight:400}
-.pv-card-head p{margin-top:3px}
-.pv-card-bar{height:10px;margin-top:14px}
-.pv-card-figures{display:flex;gap:18px;margin-top:10px;color:var(--text-muted);font-size:12.5px;font-variant-numeric:tabular-nums}
-.pv-card-figures b{color:var(--text-primary);font-weight:500}
-.pv-card .job-segments{margin-top:12px}
-
-/* 4 · speed graph */
-.pv-graph{padding:18px 20px 8px;border-radius:var(--r-panel);background:var(--surface);box-shadow:var(--shadow-card)}
-.pv-graph .fc-speed{height:88px}
-.pv-graph .fc-reflection-copy{height:48px;margin-top:0}
-
-/* 5 · dialog */
-.pv-dialog{display:grid;gap:12px;max-width:420px;padding:20px;border-radius:var(--r-panel);background:var(--surface);box-shadow:var(--shadow-float)}
-.pv-dialog h4{font-size:18px;font-weight:400}
-.pv-dialog label{display:grid;gap:6px;color:var(--text-secondary);font-size:12.5px;font-weight:500}
-.pv-dialog input,.pv-dialog select{width:100%;min-height:40px;padding:8px 11px;font-size:13px;font-weight:400;color:var(--text-primary)}
-.pv-picker{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px}
-.pv-picker .secondary-btn{min-height:40px;padding:8px 14px}
-.pv-dialog-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
-.pv-dialog-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:4px}
-.pv-dialog-actions button{min-height:40px;padding:8px 16px}
-.pv-dialog .primary{min-width:112px}
-
-/* 6 · toasts and chips */
-.pv-toasts{display:flex;flex-wrap:wrap;gap:10px}
-.pv-toast{position:static;display:inline-flex;align-items:center;min-height:38px;padding:7px 14px;border:1px solid transparent;border-radius:var(--r-pill);font-size:12.5px;font-weight:500}
-.pv-chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
-.job-chip,.chip{padding:3px 9px;border-radius:var(--r-pill);background:var(--harbour-tint);color:var(--harbour-ink);font-size:11.5px;font-weight:500;white-space:nowrap}
-.job-chip.done{background:var(--celadon-tint);color:var(--celadon-ink)}
-.job-chip.bad{background:var(--vermilion-tint);color:var(--vermilion-ink)}
-.job-chip.paused{background:var(--lilac-tint);color:var(--lilac-ink)}
-.chip.quality{background:var(--pond-tint);color:var(--pond-ink)}
-.chip.stream{background:var(--lilac-tint);color:var(--lilac-ink)}
-
-/* 7 · empty state */
-.pv-empty{display:grid;place-items:center;gap:4px;min-height:160px;padding:24px;text-align:center}
-.pv-empty p{font-size:24px;font-weight:400;color:var(--text-primary)}
-.pv-empty small{color:var(--text-muted);font-family:var(--font-display);font-size:13px}
-
-/* 8 · settings */
-.pv-settings{display:grid;gap:14px}
-.pv-settings-group{display:grid;gap:4px;padding:18px 20px 20px;border-radius:var(--r-panel);background:var(--surface);box-shadow:var(--shadow-card)}
-.pv-settings-group h4{margin-bottom:10px;font-size:18px;font-weight:400}
-.opt-check{display:grid;grid-template-columns:44px minmax(0,1fr);align-items:center;gap:14px;min-height:56px;padding:10px 12px;border-radius:var(--r-row)}
-.pv-settings-group .opt-check:nth-of-type(even){background:var(--surface-cool)}
-.opt-check .switch{width:44px;height:26px}
-.opt-check .switch::after{width:22px;height:22px}
-.opt-check input:checked+.switch::after{left:20px}
-.opt-check .txt{display:grid;gap:2px;min-width:0;font-weight:500}
-.opt-check .txt small{color:var(--text-muted);font-size:12px;font-weight:400;line-height:1.55}
-.pv-presets{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
-.pv-preset{display:flex;align-items:center;justify-content:space-between;min-height:42px;padding:8px 12px 8px 14px;border:0;border-radius:var(--r-control);background:var(--fill);color:var(--text-primary);font-weight:500;transition:background-color var(--motion-base) var(--ease-standard),color var(--motion-base) var(--ease-standard)}
-.pv-preset span{display:grid;place-items:center;min-width:24px;height:24px;border-radius:var(--r-pill);background:var(--surface);color:var(--text-muted);font-size:12px;font-variant-numeric:tabular-nums}
-.pv-preset.is-current{background:var(--pond-deep);color:var(--text-on-accent)}
-.pv-preset.is-current span{background:color-mix(in srgb,var(--text-on-accent) 22%,transparent);color:var(--text-on-accent)}
-.pv-preset:hover:not(.is-current){background:var(--fill-strong)}
-.pv-field{display:grid;gap:7px;margin-top:14px;color:var(--text-primary);font-weight:500}
-.pv-field input{width:160px;height:40px;padding:0 12px;font-weight:400}
-
-/* 9 · icon */
-.pv-icons{display:flex;align-items:flex-end;gap:20px;flex-wrap:wrap;padding:20px;border-radius:var(--r-panel);background:var(--surface);box-shadow:var(--shadow-card)}
-.pv-icon-128{width:128px;height:128px}
-.pv-icon-48{width:48px;height:48px}
-.pv-icon-16{width:16px;height:16px}
-.pv-icons .pv-note{flex:1 1 220px}
-
-/* palette */
-.pv-swatches{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
-.pv-swatches i{display:grid;gap:2px;align-content:end;min-height:72px;padding:10px;border-radius:var(--r-row);background:var(--sw);color:var(--text-on-accent);font-style:normal}
-.pv-swatches b{font-size:12.5px;font-weight:500}
-.pv-swatches small{font-size:11px;opacity:.85}
-[data-theme="light"] .pv-swatches i{color:#2B2E4A}
-[data-theme="dark"] .pv-swatches i{color:#1C2140}
-
-@media (max-width:1100px){
-  .preview-panes{grid-template-columns:minmax(0,1fr)}
-  .preview-bar{flex-direction:column}
+html {
+  /* The top bar is sticky: keyboard focus never lands under it. */
+  scroll-padding-top: 72px;
 }
-@media (max-width:560px){
-  .preview-pane{padding:20px 16px 40px}
-  .pv-window{grid-template-columns:minmax(0,1fr)}
-  .pv-dialog-grid,.pv-presets{grid-template-columns:minmax(0,1fr)}
-  .pv-swatches{grid-template-columns:repeat(2,minmax(0,1fr))}
+
+.page {
+  padding-bottom: var(--space-12);
+}
+
+.page-head {
+  display: grid;
+  justify-items: start;
+  gap: var(--space-4);
+  padding-top: var(--space-8);
+  padding-bottom: var(--space-2);
+}
+
+.view {
+  display: grid;
+  align-content: start;
+}
+
+/* The page's view switch is a box: its track starts on the column edge, as
+   Downloads' filter track does, while the title above keeps the text column. */
+.view-switch {
+  margin-inline-start: calc(-1 * (var(--lead) + var(--lead-gap)));
+}
+
+/* ---------- specimens: the sample on the text column, its name trailing ---------- */
+.specimens {
+  display: grid;
+  padding-inline-start: calc(var(--lead) + var(--lead-gap));
+}
+
+.specimen {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  column-gap: var(--space-6);
+  padding-block: var(--row-pad);
+}
+
+.specimen > :first-child {
+  min-width: 0;
+}
+
+/* A view that opens with specimens gets the space a group label would give. */
+.view > .specimens:first-child {
+  padding-top: var(--group-above);
+}
+
+/* The extension's icon set, bottoms aligned, on the text column. */
+.icon-specimens {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-6);
+  padding-block: var(--row-pad);
+  padding-inline-start: calc(var(--lead) + var(--lead-gap));
+}
+
+.icon-specimens img {
+  display: block;
+}
+
+/* BrandMark S and M: logo in the lead column, wordmark on the text column. */
+.brand-specimen {
+  min-height: 48px;
+}
+
+/* ---------- controls ---------- */
+.button-specimens {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3) var(--space-6);
+  padding-block: var(--row-pad);
+  padding-inline-start: calc(var(--lead) + var(--lead-gap));
+}
+
+.setting-specimens {
+  padding-inline-start: calc(var(--lead) + var(--lead-gap));
+}
+
+/* Settings' stacked File names row: system.css bleeds the field 12px to the
+   left so the typed text starts on the text column; the field chips sit on
+   that column under it. */
+.setting-specimens .token-chips {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: var(--space-4);
+  row-gap: var(--space-1);
+}
+
+/* A segmented control on the column edge, like the page's view switch and
+   the popup's own switch. */
+.switch-specimen {
+  padding-block: var(--space-2);
+}
+
+.nav-specimen {
+  width: calc(var(--lead) + var(--lead-gap) + var(--field-medium));
+  padding-block: var(--space-2);
+  padding-inline-start: calc(var(--lead) + var(--lead-gap));
+}
+
+/* ---------- status words: each dot hangs in the lead gap, words start on the text column ---------- */
+.status-specimens {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-6);
+  padding-block: var(--row-pad);
+  padding-inline-start: calc(var(--lead) + var(--lead-gap) - 8px - var(--space-2));
+}
+
+/* ---------- floating surfaces shown in place ----------
+   Toasts, menus and the dialog are the builders' own output, laid into the
+   page flow so they can be seen at rest. Each is placed so that its text
+   starts on the text column: one left edge with everything else. */
+
+/* Toast: 16 padding + 8 dot + 8 gap before the words. */
+.toast-specimens {
+  display: grid;
+  justify-items: start;
+  gap: var(--space-3);
+  /* The box starts the group label's 8 px below it, like every other group. */
+  padding-block: 0 var(--space-2);
+  padding-inline-start: calc(var(--lead) + var(--lead-gap) - var(--space-4) - 8px - var(--space-2));
+}
+
+.toast-specimens .toast {
+  animation: none;
+}
+
+/* Menu: 4 padding + 12 item padding + 16 icon + 12 gap before an item's words. */
+.menu-specimen {
+  padding-block: 0 var(--space-2);
+  padding-inline-start: calc(var(--lead) + var(--lead-gap) - var(--space-1) - 2 * var(--space-3) - 16px);
+}
+
+/* Confirmation: 4 menu padding + 16 confirm padding before the question. */
+.confirm-specimen {
+  padding-block: 0 var(--space-2);
+  padding-inline-start: calc(var(--lead) + var(--lead-gap) - var(--space-1) - var(--space-4));
+}
+
+.menu-specimen .menu,
+.confirm-specimen .menu {
+  position: relative;
+  width: max-content;
+}
+
+/* Dialog: 16 body padding before the title, labels and fields. */
+.dialog-specimen {
+  display: flex;
+  flex-direction: column;
+  margin-block: var(--space-2) var(--space-4);
+  margin-inline: calc(var(--lead) + var(--lead-gap) - var(--space-4)) 0;
+}
+
+/* The empty state at rest: system.css gives it 48 px above and below to place
+   the sentence in a real surface's upper third; in the gallery it sits under
+   its group label like any other specimen. The pond still opens around the
+   sentence (setPondOpening). */
+.view > .empty-state {
+  padding-block: 0 var(--space-2);
+}
+
+/* In the page flow the action row has nothing to stick to. */
+.dialog-specimen .dialog-actions {
+  position: relative;
+}
+
+/* ---------- ?demo=static: every animation and transition frozen for screenshots ----------
+   (Reduce motion, ?motion=reduced, is honoured by system.css itself.) */
+:root[data-demo="static"] *,
+:root[data-demo="static"] *::before,
+:root[data-demo="static"] *::after {
+  animation: none !important;
+  transition: none !important;
 }
