@@ -516,7 +516,11 @@ test("MV3 worker registers network and message listeners during module load", as
     },
     permissions: { contains: async () => nativePermission, onAdded: onPermissionsAdded, onRemoved: onPermissionsRemoved },
     action: {
-      setBadgeText: async (value) => badgeUpdates.push(value),
+      // Once the restart below imports a second worker module, two instances
+      // share this fake Chrome (a real browser only ever has one), and the old
+      // one keeps repainting badges from its own timers. Tag each write with
+      // the module that made it so restart assertions can read the fresh worker.
+      setBadgeText: async (value) => badgeUpdates.push({ ...value, worker: (new Error().stack.match(/background\.js\?([a-z-]+)=/) || [])[1] || "unknown" }),
       setBadgeBackgroundColor: async () => {},
       setTitle: async () => {}
     }
@@ -3294,19 +3298,17 @@ test("MV3 worker registers network and message listeners during module load", as
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(settingsState.nativeApiRecovery?.phase, "resumed", "a fresh worker consumes an overdue wait marker");
   assert.equal(settingsState.nativeApiRecovery?.resumeCount, 1, "the fresh worker records the first failed API resume");
-  const biliBadgeUpdatesBeforeRestartActivation = badgeCountFor(29);
-  const lastBiliBadgeText = () => badgeUpdates.filter((item) => item.tabId === 29).at(-1)?.text;
+  // Only the restarted worker's badge writes count here: the first instance is
+  // still alive in this process and repaints tab 29 from its own in-memory pair.
+  const restartedBiliBadges = () => badgeUpdates.filter((item) => item.tabId === 29 && item.worker === "native-recovery");
   onTabActivated.listeners[1].fn({ tabId: 29 });
-  // The restarted worker may apply the restored count first and clear the
-  // volatile pair a few ticks later, so wait for the settled badge, not the
-  // first update.
   for (let attempt = 0; attempt < 200; attempt += 1) {
-    if (badgeCountFor(29) > biliBadgeUpdatesBeforeRestartActivation && lastBiliBadgeText() === "") break;
+    if (restartedBiliBadges().length && restartedBiliBadges().at(-1).text === "") break;
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
-  assert.ok(badgeCountFor(29) > biliBadgeUpdatesBeforeRestartActivation,
+  assert.ok(restartedBiliBadges().length > 0,
     "the restarted worker reapplies the badge from its restored media state");
-  assert.equal(lastBiliBadgeText(), "",
+  assert.equal(restartedBiliBadges().at(-1).text, "",
     "a volatile Bilibili pair is cleared after restart instead of leaving a badge with no downloadable candidate");
   const restartedListener = onMessage.listeners[listenersBeforeRestart].fn;
   const restartedResponse = await new Promise((resolve) => {
