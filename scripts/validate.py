@@ -163,9 +163,15 @@ def main() -> int:
         raise SystemExit("Extension/native protocol versions do not match")
     if not profile_version or not host_profile or profile_version.group(1) != host_profile.group(1):
         raise SystemExit("Extension/native capability profile versions do not match")
-    for closed_feature in ("liveHls", "externalToolNetwork"):
+    # liveHls stays closed on the stable profile. externalToolNetwork is open
+    # since the YouTube adapter: yt-dlp reaches the network only through the
+    # engine's loopback broker, which applies the pinned client's policy; the
+    # profile must still declare it explicitly.
+    for closed_feature in ("liveHls",):
         if not re.search(rf'^\s*{closed_feature}:\s*false\s*,?$', build_profile, re.MULTILINE):
             raise SystemExit(f"Stable build capability must remain closed: {closed_feature}")
+    if not re.search(r'^\s*externalToolNetwork:\s*(?:true|false)\s*,?$', build_profile, re.MULTILINE):
+        raise SystemExit("Build profile must declare externalToolNetwork explicitly")
     required_permissions = set(manifest.get("permissions", []))
     optional_permissions = set(manifest.get("optional_permissions", []))
     if (

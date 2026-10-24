@@ -128,7 +128,7 @@ Play something. The badge lights up. Click it. Download.
 
 ```bash
 npm test                                  # extension unit + UI static tests
-npm run test:coverage                     # 65% lines/branches, 70% functions minimum
+npm run test:coverage                     # unit coverage gate: 65% lines and branches, 55% functions (see below)
 python3 -m unittest discover -s native-host/tests -v
 python3 scripts/validate.py               # manifest + syntax validation
 npm run test:e2e                          # Chrome detection, UI and interaction suite
@@ -139,8 +139,11 @@ node scripts/design-atlas.mjs --before <a> --after <b>  # before/after atlas PDF
 node scripts/build-icons.mjs                            # rasterise the icons from their SVG sources
 ```
 
-CI builds release archives once, retains those exact bytes, and runs Chrome E2E
-against that ZIP. Builds are byte-for-byte reproducible from
+The coverage gate measures the modules the unit tests target; the service
+worker (`extension/background.js`) and the Chrome tooling under `scripts/` are
+exercised by the worker smoke test, the e2e suite and the design audit in
+Chrome for Testing instead. CI builds release archives once, retains those
+exact bytes, and runs Chrome E2E against that ZIP. Builds are byte-for-byte reproducible from
 `SOURCE_DATE_EPOCH` or the commit time.
 
 </details>

@@ -119,7 +119,7 @@ native 压缩包整体解压后，在它的目录里执行 `./install-macos.sh`�
 
 ```bash
 npm test                                  # 扩展单测 + UI 静态测试
-npm run test:coverage                     # 行/分支 ≥65%，函数 ≥70%
+npm run test:coverage                     # 单元覆盖率门槛：行与分支 ≥65%，函数 ≥55%（见下）
 python3 -m unittest discover -s native-host/tests -v
 python3 scripts/validate.py               # manifest 与语法校验
 npm run test:e2e                          # Chrome 检测 / UI / 交互套件
@@ -130,7 +130,9 @@ node scripts/design-atlas.mjs --before <a> --after <b>  # 两次审计的前后�
 node scripts/build-icons.mjs                            # 从 SVG 源文件栅格化图标
 ```
 
-CI 只构建一次发布归档并原样保留这些字节，E2E 跑在这份 ZIP 上。从
+覆盖率门槛只量单元测试针对的模块；service worker（`extension/background.js`）
+和 `scripts/` 下的 Chrome 工具由 worker 冒烟测试、e2e 套件和设计审计在 Chrome for
+Testing 里检验。CI 只构建一次发布归档并原样保留这些字节，E2E 跑在这份 ZIP 上。从
 `SOURCE_DATE_EPOCH` 或提交时间出发，同样的树得到逐字节一致的产物。
 
 </details>

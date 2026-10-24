@@ -3295,14 +3295,18 @@ test("MV3 worker registers network and message listeners during module load", as
   assert.equal(settingsState.nativeApiRecovery?.phase, "resumed", "a fresh worker consumes an overdue wait marker");
   assert.equal(settingsState.nativeApiRecovery?.resumeCount, 1, "the fresh worker records the first failed API resume");
   const biliBadgeUpdatesBeforeRestartActivation = badgeCountFor(29);
+  const lastBiliBadgeText = () => badgeUpdates.filter((item) => item.tabId === 29).at(-1)?.text;
   onTabActivated.listeners[1].fn({ tabId: 29 });
-  for (let attempt = 0; attempt < 30; attempt += 1) {
-    if (badgeCountFor(29) > biliBadgeUpdatesBeforeRestartActivation) break;
+  // The restarted worker may apply the restored count first and clear the
+  // volatile pair a few ticks later, so wait for the settled badge, not the
+  // first update.
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    if (badgeCountFor(29) > biliBadgeUpdatesBeforeRestartActivation && lastBiliBadgeText() === "") break;
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
   assert.ok(badgeCountFor(29) > biliBadgeUpdatesBeforeRestartActivation,
     "the restarted worker reapplies the badge from its restored media state");
-  assert.equal(badgeUpdates.filter((item) => item.tabId === 29).at(-1)?.text, "",
+  assert.equal(lastBiliBadgeText(), "",
     "a volatile Bilibili pair is cleared after restart instead of leaving a badge with no downloadable candidate");
   const restartedListener = onMessage.listeners[listenersBeforeRestart].fn;
   const restartedResponse = await new Promise((resolve) => {
