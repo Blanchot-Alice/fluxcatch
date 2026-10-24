@@ -180,8 +180,52 @@ test("MV3 worker registers network and message listeners during module load", as
     [40, { id: 40, title: "WebRequest route fixture", url: "https://page.example.test/old-route" }],
     [41, { id: 41, title: "Content route fixture", url: "https://page.example.test/content-old" }],
     [42, { id: 42, title: "Manifest identity fixture", url: "https://page.example.test/manifest-assets" }],
-    [43, { id: 43, title: "Document binding fixture", url: "https://page.example.test/document-binding" }]
+    [43, { id: 43, title: "Document binding fixture", url: "https://page.example.test/document-binding" }],
+    [44, { id: 44, title: "Fixture Clip: Studio Walk - Pornhub.com", url: "https://www.pornhub.com/view_video.php?viewkey=645ab8c01b680" }],
+    [45, { id: 45, title: "Pasted link fixture", url: "https://page.example.test/paste" }],
+    [146, { id: 146, title: "An interview with Fixture | The Economist Insider", url: "https://www.economist.com/insider/the-insider/an-interview-with-fixture" }]
   ]);
+  // The Economist Insider: the episode API and the site-proxied playlists.
+  const econMaster = "https://www.economist.com/video-api/playback/hls.m3u8?u=ECON_MASTER_TOKEN";
+  const econMedia1080 = "https://www.economist.com/video-api/playback/hls.m3u8?u=ECON_V1080_TOKEN&t=m";
+  const econMedia540 = "https://www.economist.com/video-api/playback/hls.m3u8?u=ECON_V540_TOKEN&t=m";
+  const econAudio = "https://manifest.prod.boltdns.net/manifest/v2/hls/v7/fmp4/clear/6415803283001/asset/audio/6s/rendition.m3u8?fastly_token=ECON_AUDIO_TOKEN";
+  manifestFixtures.set("https://www.economist.com/video-api/events/an-interview-with-fixture", {
+    text: JSON.stringify({
+      data: {
+        id: 3271, slug: "an-interview-with-fixture", title: "An interview with Fixture", duration: "85 min",
+        video: {
+          id: 6401945528112, name: "Fixture FULL EDIT_final_patch_v2", duration: 5091734, is_live: false, manifest_url_ttl: 3453,
+          sources: [
+            { src: "https://www.economist.com/video-api/playback/hls.m3u8?u=ECON_V4_TOKEN", type: "application/x-mpegURL", ext_x_version: 4 },
+            { src: econMaster, type: "application/x-mpegURL", ext_x_version: 7, codecs: "avc1,mp4a" },
+            { src: "https://evil.example.test/video-api/playback/hls.m3u8?u=ECON_FORGED", type: "application/x-mpegURL", ext_x_version: 9 }
+          ]
+        }
+      }
+    })
+  });
+  manifestFixtures.set(econMaster, {
+    text: [
+      "#EXTM3U", "#EXT-X-VERSION:7",
+      `#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio-0",NAME="en-GB (Main)",DEFAULT=YES,AUTOSELECT=YES,LANGUAGE="en-GB",CHANNELS="2",URI="${econAudio}"`,
+      '#EXT-X-STREAM-INF:PROGRAM-ID=0,BANDWIDTH=4055700,CODECS="mp4a.40.2,avc1.640028",RESOLUTION=1920x1080,AUDIO="audio-0"', econMedia1080,
+      '#EXT-X-STREAM-INF:PROGRAM-ID=0,BANDWIDTH=1527900,CODECS="mp4a.40.2,avc1.4d001f",RESOLUTION=960x540,AUDIO="audio-0"', econMedia540,
+      ""
+    ].join("\n")
+  });
+  for (const [mediaUrl, label] of [[econMedia1080, "1080"], [econMedia540, "540"]]) {
+    manifestFixtures.set(mediaUrl, {
+      text: ["#EXTM3U", "#EXT-X-VERSION:7", "#EXT-X-TARGETDURATION:6", "#EXT-X-PLAYLIST-TYPE:VOD",
+        `#EXT-X-MAP:URI="https://fastly-signed-eu-west-1-prod.brightcovecdn.com/media/v1/hls/v7/clear/6415803283001/asset/${label}/init.m4f?fastly_token=ECON_SEG_TOKEN"`,
+        "#EXTINF:6.0,", `https://fastly-signed-eu-west-1-prod.brightcovecdn.com/media/v1/hls/v7/clear/6415803283001/asset/${label}/segment1.m4f?fastly_token=ECON_SEG_TOKEN`,
+        "#EXT-X-ENDLIST", ""].join("\n")
+    });
+  }
+  manifestFixtures.set(econAudio, {
+    text: ["#EXTM3U", "#EXT-X-VERSION:7", "#EXT-X-TARGETDURATION:6", "#EXT-X-PLAYLIST-TYPE:VOD", "#EXTINF:6.0,",
+      "https://fastly-signed-eu-west-1-prod.brightcovecdn.com/media/v1/hls/v7/clear/6415803283001/asset/audio/segment1.m4f?fastly_token=ECON_SEG_TOKEN", "#EXT-X-ENDLIST", ""].join("\n")
+  });
   const restoredJobs = Array.from({ length: 205 }, (_, index) => ({
     jobId: `old-${index}`,
     method: "native",
@@ -532,10 +576,10 @@ test("MV3 worker registers network and message listeners during module load", as
   assert.equal(response.settings.minimumBytes, 500 * 1024);
   assert.equal(response.settings.autoEnrichSiteQuality, true, "automatic Bilibili enrichment defaults to enabled");
   assert.equal(response.settings.allowPrivateNetworkMedia, false);
-  const unknownHostYoutube = await sendRuntimeMessage({ type: "SAVE_SETTINGS", settings: { youtubeEnabled: true } });
-  assert.equal(unknownHostYoutube.settings.youtubeEnabled, false,
-    "an unknown or unpermitted native capability cannot persist the YouTube switch");
-  assert.equal(settingsState.settings.youtubeEnabled, false);
+  const legacyYoutubeSwitch = await sendRuntimeMessage({ type: "SAVE_SETTINGS", settings: { youtubeEnabled: true } });
+  assert.equal(Object.hasOwn(legacyYoutubeSwitch.settings, "youtubeEnabled"), false,
+    "the retired experimental switch is not a setting any more; the adapter is a build capability");
+  assert.equal(Object.hasOwn(settingsState.settings, "youtubeEnabled"), false);
 
   onBeforeSendHeaders.listeners[0].fn({
     requestId: "content-disposition-name",
@@ -2513,53 +2557,279 @@ test("MV3 worker registers network and message listeners during module load", as
     "activating a tab without media explicitly clears its per-tab badge"
   );
 
-  // ===== YouTube experimental adapter source remains present, but every
-  // setting/candidate/download gate is hard-closed in the 0.2.5 build. =====
-  const youtubeDefaultOff = await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 28 });
-  assert.deepEqual(youtubeDefaultOff.items, [], "YouTube stays invisible while the experimental toggle is off");
-  assert.equal((await sendRuntimeMessage({ type: "GET_SETTINGS" })).settings.youtubeEnabled, false);
-  const youtubeSave = await sendRuntimeMessage({ type: "SAVE_SETTINGS", settings: { youtubeEnabled: true } });
-  assert.equal(youtubeSave.settings.youtubeEnabled, false,
-    "even an explicitly network-enabled host cannot open the 0.2.5 build gate");
+  // ===== YouTube: the watch page is the candidate; yt-dlp behind the
+  // engine's broker answers the ladder and performs the transfer. =====
+  nativePermission = true;
   onTabUpdated.listeners[0].fn(28, { status: "complete" });
   await new Promise((resolve) => setTimeout(resolve, 10));
-  assert.deepEqual((await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 28 })).items, [],
-    "the build gate publishes no YouTube candidate");
-  assert.notEqual(badgeUpdates.filter((item) => item.tabId === 28).at(-1)?.text, "1",
-    "the closed adapter never increments the badge");
+  const youtubeMedia = await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 28 });
+  assert.equal(youtubeMedia.items.length, 1, "a watch tab publishes one YouTube candidate");
+  const youtubeCandidate = youtubeMedia.items[0];
+  assert.equal(youtubeCandidate.kind, "youtube");
+  assert.equal(youtubeCandidate.displayUrl, youtubeWatchUrl, "the candidate is the canonical watch URL without tracking parameters");
+  assert.equal(youtubeCandidate.site, "youtube");
+  assert.equal(youtubeCandidate.title, "YouTube Fixture - FluxCatch");
+  assert.equal(badgeUpdates.filter((item) => item.tabId === 28).at(-1)?.text, "1", "the YouTube row counts on the badge");
+  const youtubeProbeRequest = sendRuntimeMessage({ type: "PROBE_MANIFEST", tabId: 28, candidate: youtubeCandidate });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const inspectRequest = nativeOutgoing.find((message) => message.type === "inspect_youtube");
+  assert.ok(inspectRequest, "the quality probe asks the engine's yt-dlp through the native port");
+  assert.equal(inspectRequest.url, youtubeWatchUrl);
+  assert.deepEqual(inspectRequest.options, { allowPrivateNetworkMedia: false });
+  nativeOnMessage.listeners[0].fn({
+    type: "inspect_youtube_result",
+    requestId: inspectRequest.requestId,
+    ok: true,
+    title: "Fixture Clip",
+    duration: 95,
+    live: false,
+    audioOnly: false,
+    variants: [
+      { height: 1080, width: 1920, bandwidth: 2_800_000, url: "https://rr1.googlevideo.com/videoplayback?sig=YT_SECRET" },
+      { height: 720, width: 1280, bandwidth: 1_600_000 }
+    ]
+  });
+  const youtubeProbe = await youtubeProbeRequest;
+  assert.equal(youtubeProbe.ok, true, youtubeProbe.error);
+  assert.equal(youtubeProbe.probe.kind, "youtube");
+  assert.deepEqual(youtubeProbe.probe.variants.map((variant) => variant.height), [1080, 720]);
+  assert.ok(youtubeProbe.probe.variants.every((variant) => /^https:\/\/fluxcatch\.invalid\/manifest\//.test(variant.url)), "qualities are opaque selectors");
+  assert.doesNotMatch(JSON.stringify(youtubeProbe), /YT_SECRET|googlevideo/, "no format URL crosses to the UI");
+  const probedYoutube = (await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 28 })).items[0];
+  assert.equal(probedYoutube.title, "Fixture Clip", "yt-dlp's title replaces the tab title");
+  assert.equal(probedYoutube.duration, 95);
+  assert.equal(probedYoutube.height, 1080);
+  assert.equal(probedYoutube.suggestedFilename, "Fixture Clip.mp4");
+  const cachedYoutubeProbe = await sendRuntimeMessage({ type: "PROBE_MANIFEST", tabId: 28, candidate: probedYoutube });
+  assert.equal(cachedYoutubeProbe.ok, true);
+  assert.equal(nativeOutgoing.filter((message) => message.type === "inspect_youtube").length, 1, "a fresh inspection is reused");
+
+  const youtubeNativeBefore = nativeOutgoing.filter((message) => message.type === "download").length;
+  const youtubeStart = await sendRuntimeMessage({
+    type: "DOWNLOAD",
+    tabId: 28,
+    candidate: probedYoutube,
+    options: { outputContainer: "mkv", outputFormat: "mkv", variantUrl: youtubeProbe.probe.variants[1].url }
+  });
+  assert.equal(youtubeStart.ok, true, youtubeStart.error);
+  assert.equal(youtubeStart.method, "native");
+  const youtubeNativeMessage = nativeOutgoing.find((message) => message.type === "download" && message.jobId === youtubeStart.jobId);
+  assert.ok(youtubeNativeMessage);
+  assert.equal(nativeOutgoing.filter((message) => message.type === "download").length, youtubeNativeBefore + 1);
+  assert.equal(youtubeNativeMessage.mediaKind, "youtube");
+  assert.equal(youtubeNativeMessage.url, youtubeWatchUrl, "the engine receives the watch page, never a googlevideo URL");
+  assert.equal(youtubeNativeMessage.options.maxHeight, 720, "the chosen quality is an upper bound on height");
+  assert.equal(youtubeNativeMessage.options.outputContainer, "mkv");
+  assert.equal(youtubeNativeMessage.filename, "Fixture Clip.mp4", "named after the video; the engine applies the container suffix");
+  const youtubeBest = await sendRuntimeMessage({ type: "DOWNLOAD", tabId: 28, candidate: probedYoutube, options: { outputContainer: "mp4" } });
+  assert.equal(youtubeBest.ok, true, youtubeBest.error);
+  assert.equal(nativeOutgoing.find((message) => message.type === "download" && message.jobId === youtubeBest.jobId).options.maxHeight, null, "automatic best quality sends no bound");
+  const forgedYoutubeQuality = await sendRuntimeMessage({
+    type: "DOWNLOAD",
+    tabId: 28,
+    candidate: probedYoutube,
+    options: { variantUrl: "https://fluxcatch.invalid/manifest/forged/forged" }
+  });
+  assert.equal(forgedYoutubeQuality.ok, false);
+  assert.equal(forgedYoutubeQuality.code, "quality_unavailable");
+
   nativeOnMessage.listeners[0].fn({
     type: "pong",
-    requestId: "network-disabled-audit",
+    requestId: "ytdlp-missing-audit",
     version: "0.2.5",
     protocolVersion: 1,
     capabilityProfileVersion: 1,
     ffmpeg: true,
     capabilities: {
       ffmpeg: { available: true, networkInput: false, version: "8.1" },
-      ytdlp: { available: false, networkDisabled: true }
+      ytdlp: { available: false, installed: false, networkDisabled: true }
     }
   });
-  const networkDisabledYoutube = await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 28 });
-  assert.deepEqual(networkDisabledYoutube.items, [], "network-disabled external engines withdraw stale YouTube candidates");
-  assert.equal(networkDisabledYoutube.hostStatus.capabilities.ytdlp.networkDisabled, true);
+  const youtubeWithoutTool = await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 28 });
+  assert.equal(youtubeWithoutTool.items.length, 1, "the row stays; the engine's answer decides the download, not the list");
+  assert.equal(youtubeWithoutTool.hostStatus.capabilities.ytdlp.networkDisabled, true);
+  const youtubeToolMissing = await sendRuntimeMessage({ type: "DOWNLOAD", tabId: 28, candidate: probedYoutube, options: {} });
+  assert.equal(youtubeToolMissing.ok, false);
+  assert.equal(youtubeToolMissing.code, "youtube_tool_missing", "a missing yt-dlp is reported through the job-failure code path");
   nativeOnMessage.listeners[0].fn({
     type: "pong",
-    requestId: "network-enabled-fixture-reset",
+    requestId: "ytdlp-restored",
     version: "0.2.5",
     protocolVersion: 1,
     capabilityProfileVersion: 1,
     ffmpeg: true,
-    capabilities: { ytdlp: { available: true, networkDisabled: false, version: "2026.08" } }
+    capabilities: { ffmpeg: { available: true }, ytdlp: { available: true, installed: true, networkDisabled: false, version: "2026.08.19" } }
   });
-  const stillClosed = await sendRuntimeMessage({ type: "SAVE_SETTINGS", settings: { youtubeEnabled: true } });
-  assert.equal(stillClosed.settings.youtubeEnabled, false,
-    "an explicit false networkDisabled capability still cannot bypass the version gate");
-  assert.deepEqual(
-    (await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 28 })).items,
-    [],
-    "the candidate gate remains closed after a forged open capability"
-  );
-  assert.notEqual(badgeUpdates.filter((item) => item.tabId === 28).at(-1)?.text, "1", "the closed adapter never leaves a media badge");
+
+  // A pasted watch link takes the same adapter path from any tab.
+  const pastedYoutube = await sendRuntimeMessage({
+    type: "DOWNLOAD_URL",
+    tabId: 45,
+    url: "https://youtu.be/abcdefghijk?t=3",
+    options: { outputContainer: "mp4" }
+  }, trustedSender);
+  assert.equal(pastedYoutube.ok, true, pastedYoutube.error);
+  const pastedNative = nativeOutgoing.find((message) => message.type === "download" && message.jobId === pastedYoutube.jobId);
+  assert.equal(pastedNative.mediaKind, "youtube");
+  assert.equal(pastedNative.url, "https://www.youtube.com/watch?v=abcdefghijk");
+  assert.equal(pastedNative.filename, "YouTube abcdefghijk.mp4");
+
+  // ===== Adult-site ladders: the page's own scripts name one video's
+  // renditions; the worker groups them into one card and hands the engine
+  // the page's Referer/Origin/UA, never a cookie. =====
+  const pornhubSender = {
+    id: extensionId,
+    url: "https://www.pornhub.com/view_video.php?viewkey=645ab8c01b680",
+    frameId: 0,
+    tab: { id: 44, url: "https://www.pornhub.com/view_video.php?viewkey=645ab8c01b680", title: "Fixture Clip: Studio Walk - Pornhub.com" }
+  };
+  const phMaster1080 = "https://hv-h.phncdn.com/hls/videos/202305/10/431238401/1080P_4000K_431238401.mp4/master.m3u8?h=SIG_1080&e=1792658400&f=1";
+  const phMaster480 = "https://hv-h.phncdn.com/hls/videos/202305/10/431238401/480P_2000K_431238401.mp4/master.m3u8?h=SIG_480&e=1792658400&f=1";
+  for (const [url, height, width] of [[phMaster480, 480, 854], [phMaster1080, 1080, 1920]]) {
+    const accepted = await sendRuntimeMessage({
+      type: "CONTENT_MEDIA",
+      data: { url, mime: "application/vnd.apple.mpegurl", source: "site-payload", width, height, duration: 4352, title: "Fixture Clip: Studio Walk", ladderKey: "pornhub:431238401", ladderRank: height }
+    }, pornhubSender);
+    assert.equal(accepted.accepted, true);
+  }
+  const ladderMedia = await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 44 });
+  assert.equal(ladderMedia.items.length, 1, "one page, one card");
+  const ladderCard = ladderMedia.items[0];
+  assert.equal(ladderCard.kind, "hls");
+  assert.equal(ladderCard.site, "pornhub");
+  assert.equal(ladderCard.provenance, "site_payload");
+  assert.equal(ladderCard.title, "Fixture Clip: Studio Walk");
+  assert.equal(ladderCard.suggestedFilename, "Fixture Clip_ Studio Walk.mp4", "only the filename is made filesystem-safe");
+  assert.equal(ladderCard.height, 1080, "the best rendition leads");
+  assert.equal(ladderCard.duration, 4352);
+  assert.deepEqual(ladderCard.variants.map((variant) => variant.height), [1080, 480]);
+  assert.ok(ladderCard.variants.every((variant) => variant.url.startsWith("https://fluxcatch.invalid/manifest/")));
+  assert.doesNotMatch(JSON.stringify(ladderMedia), /SIG_1080|SIG_480/, "signed playlist addresses never reach the UI");
+  const ladderProbe = await sendRuntimeMessage({ type: "PROBE_MANIFEST", tabId: 44, candidate: ladderCard });
+  assert.equal(ladderProbe.ok, true, ladderProbe.error);
+  assert.deepEqual(ladderProbe.probe.variants.map((variant) => variant.height), [1080, 480], "the dialog's ladder needs no manifest fetch");
+  // The rendition the player streams arrives through webRequest with a fresh
+  // signature: it joins the ladder instead of becoming a second card.
+  onBeforeSendHeaders.listeners[0].fn({
+    requestId: "ph-playing", tabId: 44, url: phMaster1080.replace("SIG_1080", "SIG_LIVE"), type: "xmlhttprequest", documentId: "ph-document", frameId: 0,
+    requestHeaders: [{ name: "Cookie", value: "ss=PH_PRIVATE" }, { name: "Referer", value: "https://www.pornhub.com/" }]
+  });
+  onHeadersReceived.listeners[0].fn({
+    requestId: "ph-playing", tabId: 44, url: phMaster1080.replace("SIG_1080", "SIG_LIVE"), type: "xmlhttprequest", documentId: "ph-document", frameId: 0,
+    responseHeaders: [{ name: "content-type", value: "application/vnd.apple.mpegurl" }, { name: "content-length", value: "512" }]
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const ladderAfterPlayback = await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 44 });
+  assert.equal(ladderAfterPlayback.items.length, 1, "the observed rendition joins its ladder");
+  assert.deepEqual(ladderAfterPlayback.items[0].variants.map((variant) => variant.height), [1080, 480]);
+  assert.equal(ladderAfterPlayback.items[0].title, "Fixture Clip: Studio Walk");
+  // The player re-fetches the leading rendition at the very address the page declared.
+  // A webRequest observation carries no title, so the merge must keep the
+  // page's title instead of re-deriving it from the filesystem-safe filename
+  // (where the colon has already become "_", which titleStem turns into a space).
+  onBeforeSendHeaders.listeners[0].fn({
+    requestId: "ph-replay", tabId: 44, url: phMaster1080, type: "xmlhttprequest", documentId: "ph-document", frameId: 0,
+    requestHeaders: [{ name: "Referer", value: "https://www.pornhub.com/" }, { name: "Origin", value: "https://www.pornhub.com" }]
+  });
+  onHeadersReceived.listeners[0].fn({
+    requestId: "ph-replay", tabId: 44, url: phMaster1080, type: "xmlhttprequest", documentId: "ph-document", frameId: 0,
+    responseHeaders: [{ name: "content-type", value: "application/vnd.apple.mpegurl" }, { name: "content-length", value: "512" }]
+  });
+  let ladderAfterReplay = null;
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    ladderAfterReplay = await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 44 });
+    if ((ladderAfterReplay.items[0]?.sources || []).includes("webRequest")) break;
+  }
+  assert.equal(ladderAfterReplay.items.length, 1);
+  assert.equal(ladderAfterReplay.items[0].title, "Fixture Clip: Studio Walk",
+    "an observation without a title keeps the page's title rather than re-deriving it from the sanitized filename or the tab title");
+  assert.equal(ladderAfterReplay.items[0].suggestedFilename, "Fixture Clip_ Studio Walk.mp4");
+  const ladderStart = await sendRuntimeMessage({
+    type: "DOWNLOAD",
+    tabId: 44,
+    candidate: ladderAfterPlayback.items[0],
+    options: { outputContainer: "mp4", variantUrl: ladderAfterPlayback.items[0].variants[1].url }
+  });
+  assert.equal(ladderStart.ok, true, ladderStart.error);
+  const ladderNative = nativeOutgoing.find((message) => message.type === "download" && message.jobId === ladderStart.jobId);
+  assert.equal(ladderNative.mediaKind, "hls");
+  assert.equal(ladderNative.url, phMaster480, "the chosen rendition's own master goes to the engine");
+  assert.equal(ladderNative.headers.referer, "https://www.pornhub.com/", "the engine replays the page's Referer");
+  assert.equal(ladderNative.headers.origin, "https://www.pornhub.com");
+  assert.equal(Object.hasOwn(ladderNative.headers, "cookie"), false, "no cookie reaches the engine");
+  // A ladder key from a page no adapter owns is just a plain row.
+  await sendRuntimeMessage({
+    type: "CONTENT_MEDIA",
+    data: { url: "https://cdn.example.test/forged/master.m3u8", mime: "application/vnd.apple.mpegurl", source: "site-payload", height: 720, ladderKey: "pornhub:forged", ladderRank: 720 }
+  }, {
+    id: extensionId,
+    url: "https://page.example.test/direct",
+    frameId: 0,
+    tab: { id: 33, url: "https://page.example.test/direct", title: "Generic page title" }
+  });
+  const forgedLadder = (await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 33 })).items.find((item) => item.displayUrl.includes("cdn.example.test/forged"));
+  assert.ok(forgedLadder, "the playlist itself is still a candidate");
+  assert.deepEqual(forgedLadder.variants, [], "but it claims no ladder");
+  assert.equal(forgedLadder.site, "", "and no adapter");
+
+  // ===== The Economist Insider: the session-authenticated episode API names
+  // a site-proxied Brightcove master; the worker preloads what the engine
+  // cannot fetch on its own and the engine takes the rest through the
+  // pinned client. =====
+  // Automatic discovery is credentialed I/O, so it honours the same
+  // autoEnrichSiteQuality switch as Bilibili (an earlier step turned it off).
+  const econSettingsBefore = (await sendRuntimeMessage({ type: "GET_SETTINGS" })).settings;
+  await sendRuntimeMessage({ type: "SAVE_SETTINGS", settings: { ...econSettingsBefore, autoEnrichSiteQuality: true } });
+  const econFetchesBefore = manifestFetches.length;
+  onTabUpdated.listeners[0].fn(146, { status: "complete" });
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  const econMedia = await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 146 });
+  assert.equal(econMedia.items.length, 1, "an Insider episode page yields one HLS card from the API");
+  const econCard = econMedia.items[0];
+  assert.equal(econCard.kind, "hls");
+  assert.equal(econCard.site, "economist");
+  assert.equal(econCard.provenance, "fixed_site_api");
+  assert.equal(econCard.title, "An interview with Fixture", "named by the API, not the tab title");
+  assert.equal(econCard.duration, 5092);
+  assert.doesNotMatch(JSON.stringify(econMedia), /ECON_[A-Z0-9_]*TOKEN/, "signed playback addresses never reach the UI");
+  const econFetches = manifestFetches.slice(econFetchesBefore);
+  assert.ok(econFetches.some((entry) => entry.url.endsWith("/video-api/events/an-interview-with-fixture") && entry.credentials === "include"), "the episode API is read with the browser session");
+  assert.ok(econFetches.some((entry) => entry.url === econMaster && entry.credentials === "include"), "the proxied master is read with the browser session");
+  assert.ok(econFetches.every((entry) => !entry.url.includes("evil.example.test")), "an API answer cannot point outside the site's own playback proxy");
+  const econProbe = await sendRuntimeMessage({ type: "PROBE_MANIFEST", tabId: 146, candidate: econCard });
+  assert.equal(econProbe.ok, true, econProbe.error);
+  assert.deepEqual(econProbe.probe.variants.map((variant) => variant.height), [1080, 540]);
+  assert.equal(econProbe.probe.audioTrackCount, 1, "the separate audio rendition is known");
+  assert.ok(econProbe.probe.variants.every((variant) => variant.url.startsWith("https://fluxcatch.invalid/manifest/")));
+  const econStart = await sendRuntimeMessage({
+    type: "DOWNLOAD",
+    tabId: 146,
+    candidate: econCard,
+    options: { outputContainer: "mp4", variantUrl: econProbe.probe.variants[1].url }
+  });
+  assert.equal(econStart.ok, true, econStart.error);
+  const econNative = nativeOutgoing.find((message) => message.type === "download" && message.jobId === econStart.jobId);
+  assert.equal(econNative.mediaKind, "hls");
+  assert.equal(econNative.url, econMaster);
+  assert.equal(econNative.options.variantUrl, econMedia540, "the chosen rendition is the proxied media playlist");
+  assert.deepEqual(Object.keys(econNative.options.preloadedManifests).sort(), [econMaster, econMedia540].sort(), "the engine receives exactly the two session-gated playlists");
+  assert.ok(econNative.options.preloadedManifests[econMedia540].startsWith("#EXTM3U"));
+  assert.ok(econNative.options.preloadedManifests[econMaster].includes(econAudio), "the master text still names the Brightcove audio rendition for the engine to fetch itself");
+  assert.equal(econNative.options.audioUrl, null, "the engine picks the audio group from the master");
+  const econBest = await sendRuntimeMessage({ type: "DOWNLOAD", tabId: 146, candidate: econCard, options: { outputContainer: "mp4" } });
+  assert.equal(econBest.ok, true, econBest.error);
+  assert.equal(nativeOutgoing.find((message) => message.type === "download" && message.jobId === econBest.jobId).options.variantUrl, econMedia1080, "automatic quality preloads the best rendition");
+  const econRealNow = Date.now;
+  Date.now = () => econRealNow() + 7 * 3600_000;
+  try {
+    const expired = await sendRuntimeMessage({ type: "DOWNLOAD", tabId: 146, candidate: econCard, options: {} });
+    assert.equal(expired.ok, false);
+    assert.equal(expired.code, "link_expired", "a stale manifest token asks for a rescan instead of a failing engine job");
+  } finally {
+    Date.now = econRealNow;
+  }
+  await sendRuntimeMessage({ type: "SAVE_SETTINGS", settings: econSettingsBefore });
 
   // ===== Instagram / X adapters reuse the generic pipeline; private media
   // downloads replay the cookie the page itself sent to the same CDN URL. =====

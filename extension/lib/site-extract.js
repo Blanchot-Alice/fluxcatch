@@ -1,11 +1,14 @@
 /*
- * FluxCatch site payload extraction (Instagram / X).
+ * FluxCatch site payload extraction (Instagram / X / Pornhub / MissAV / Jable).
  *
  * Loaded as a classic content script before content.js, and imported for unit
  * tests via its globalThis side effect. Pure string parsing: no network, no
- * DOM. Both sites embed direct media URLs inside JSON blobs in <script> tags;
- * these helpers pull the signed CDN links out with balanced-bracket slicing
- * so a truncated or adversarial page can never make us execute page code.
+ * DOM, no eval. Instagram and X embed direct media URLs inside JSON blobs in
+ * <script> tags; Pornhub keeps its quality ladder in a `flashvars_<id>` JSON
+ * object; MissAV hides its playlist address in a p,a,c,k,e,d-packed script;
+ * Jable assigns it to `hlsUrl`. Every helper slices balanced brackets or
+ * decodes the packer as data, so a truncated or adversarial page can never
+ * make us execute page code.
  */
 (() => {
   "use strict";
@@ -15,6 +18,11 @@
   const INSTAGRAM_MEDIA_HOST = /(?:^|\.)(?:cdninstagram\.com|fbcdn\.net)$/i;
   const INSTAGRAM_PAGE_HOST = /(?:^|\.)instagram\.com$/i;
   const TWITTER_PAGE_HOST = /(?:^|\.)(?:x|twitter)\.com$/i;
+  const PORNHUB_PAGE_HOST = /(?:^|\.)pornhub(?:premium)?\.(?:com|org|net)$/i;
+  const MISSAV_PAGE_HOST = /(?:^|\.)(?:missav|thisav)\d*\.(?:ws|com|ai|live)$/i;
+  const JABLE_PAGE_HOST = /(?:^|\.)jable\.tv$/i;
+  // Sites whose adapter publishes an HLS ladder or playlist from page scripts.
+  const LADDER_SITES = Object.freeze(["pornhub", "missav", "jable"]);
 
   // Content scripts run in every HTTP(S) frame so generic <video>/<audio>
   // detection keeps working inside embedded players. Large site-specific JSON
@@ -25,7 +33,175 @@
     const host = String(hostname || "").trim().toLowerCase().replace(/\.$/, "");
     if (INSTAGRAM_PAGE_HOST.test(host)) return "instagram";
     if (TWITTER_PAGE_HOST.test(host)) return "twitter";
+    if (PORNHUB_PAGE_HOST.test(host)) return "pornhub";
+    if (MISSAV_PAGE_HOST.test(host)) return "missav";
+    if (JABLE_PAGE_HOST.test(host)) return "jable";
     return null;
+  }
+
+  // An HLS playlist address a page script names: http(s), credential-free,
+  // `.m3u8` path. Hosts are not allow-listed here because every ladder
+  // download goes through the pinned native client and its network policy;
+  // the extension never saves these through Chrome directly.
+  function playlistUrl(value) {
+    try {
+      const url = new URL(typeof value === "string" ? value.trim() : "");
+      if (!/^https?:$/.test(url.protocol) || url.username || url.password) return null;
+      if (!/\.m3u8$/i.test(url.pathname)) return null;
+      url.hash = "";
+      return url.href;
+    } catch {
+      return null;
+    }
+  }
+
+  // Pornhub: `var flashvars_<id> = {...};` carries mediaDefinitions, one HLS
+  // master per quality on the site's CDN (plus a remote "get_media" JSON
+  // entry that is never followed), the title, duration and poster.
+  function extractPornhubLadder(text) {
+    const source = typeof text === "string" ? text : "";
+    if (!source || source.length > MAX_TEXT_LENGTH) return null;
+    const match = /var\s+flashvars_(\d+)\s*=\s*\{/.exec(source);
+    if (!match) return null;
+    const fragment = balancedSlice(source, match.index + match[0].length - 1, "{", "}");
+    if (!fragment) return null;
+    let flashvars;
+    try { flashvars = JSON.parse(fragment); } catch { return null; }
+    if (!flashvars || typeof flashvars !== "object") return null;
+    const definitions = Array.isArray(flashvars.mediaDefinitions) ? flashvars.mediaDefinitions.slice(0, 64) : [];
+    const renditions = [];
+    const seen = new Set();
+    for (const definition of definitions) {
+      if (!definition || typeof definition !== "object") continue;
+      if (String(definition.format || "").toLowerCase() !== "hls") continue;
+      const url = playlistUrl(definition.videoUrl);
+      const height = positive(definition.height) || positive(definition.quality);
+      if (!url || !height || seen.has(url)) continue;
+      seen.add(url);
+      renditions.push({ url, height, width: positive(definition.width) });
+    }
+    if (!renditions.length) return null;
+    renditions.sort((a, b) => b.height - a.height);
+    return {
+      key: `pornhub:${match[1]}`,
+      title: typeof flashvars.video_title === "string" ? flashvars.video_title : "",
+      duration: positive(flashvars.video_duration),
+      thumbnailUrl: typeof flashvars.image_url === "string" ? flashvars.image_url : "",
+      renditions
+    };
+  }
+
+  // Dean Edwards' p,a,c,k,e,d packer, decoded as data: the call ends in
+  // `}('<p>',<a>,<c>,'<k>'.split('|'),0,{})`; every base-<a> token of <p> is
+  // substituted from the word list, exactly as the packer's own loop does.
+  function readQuoted(text, index) {
+    if (text[index] !== "'") return null;
+    let value = "";
+    for (let cursor = index + 1; cursor < text.length; cursor += 1) {
+      const character = text[cursor];
+      if (character === "\\") {
+        const next = text[cursor + 1];
+        if (next === undefined) return null;
+        value += next === "n" ? "\n" : next === "t" ? "\t" : next === "r" ? "\r" : next;
+        cursor += 1;
+        continue;
+      }
+      if (character === "'") return { value, end: cursor + 1 };
+      value += character;
+    }
+    return null;
+  }
+
+  function packedToken(value, base) {
+    const head = value < base ? "" : packedToken(Math.floor(value / base), base);
+    const rest = value % base;
+    return head + (rest > 35 ? String.fromCharCode(rest + 29) : rest.toString(36));
+  }
+
+  function unpackPackedCall(text, start) {
+    const payload = readQuoted(text, start);
+    if (!payload) return null;
+    const tail = /^,\s*(\d+)\s*,\s*(\d+)\s*,\s*/.exec(text.slice(payload.end, payload.end + 40));
+    if (!tail) return null;
+    const words = readQuoted(text, payload.end + tail[0].length);
+    if (!words || !text.startsWith(".split('|')", words.end)) return null;
+    const base = Number(tail[1]);
+    const count = Number(tail[2]);
+    if (!Number.isInteger(base) || base < 2 || base > 95 || !Number.isInteger(count) || count > 20_000) return null;
+    const list = words.value.split("|");
+    const dictionary = new Map();
+    for (let index = 0; index < count; index += 1) {
+      const token = packedToken(index, base);
+      dictionary.set(token, list[index] || token);
+    }
+    return payload.value.replace(/\b\w+\b/g, (token) => (dictionary.has(token) ? dictionary.get(token) : token));
+  }
+
+  function unpackPackedScripts(text) {
+    const source = typeof text === "string" ? text : "";
+    if (!source || source.length > MAX_TEXT_LENGTH) return [];
+    const results = [];
+    let searchFrom = 0;
+    while (results.length < 8) {
+      const at = source.indexOf("}('", searchFrom);
+      if (at === -1) break;
+      searchFrom = at + 3;
+      const unpacked = unpackPackedCall(source, at + 2);
+      if (unpacked) results.push(unpacked);
+    }
+    return results;
+  }
+
+  // MissAV: the packed script assigns `source='https://<cdn>/<uuid>/playlist.m3u8'`
+  // (the master with the full ladder) plus per-height siblings such as
+  // `source1280` that the master already lists.
+  function extractMissavPlaylist(text) {
+    const source = typeof text === "string" ? text : "";
+    if (!source || source.length > MAX_TEXT_LENGTH || !source.includes("m3u8")) return null;
+    const candidates = [source, ...unpackPackedScripts(source)];
+    for (const body of candidates) {
+      const match = /\bsource\s*=\s*'(https?:\/\/[^']+\.m3u8[^']*)'/i.exec(body);
+      const url = match ? playlistUrl(match[1]) : null;
+      if (!url) continue;
+      const pathname = new URL(url).pathname;
+      return { key: `missav:${pathname.replace(/\/playlist\.m3u8$/i, "")}`, url };
+    }
+    return null;
+  }
+
+  // Jable: `var hlsUrl = 'https://<cdn>/hls/<id>/video.m3u8';` names an
+  // AES-128 media playlist; the engine fetches its key through the same
+  // pinned client and decrypts locally.
+  function extractJablePlaylist(text) {
+    const source = typeof text === "string" ? text : "";
+    if (!source || source.length > MAX_TEXT_LENGTH) return null;
+    const match = /\bhlsUrl\s*=\s*(["'])(https?:\/\/[^"'\s]+?\.m3u8[^"'\s]*)\1/i.exec(source);
+    const url = match ? playlistUrl(match[2]) : null;
+    if (!url) return null;
+    return { key: `jable:${new URL(url).pathname}`, url };
+  }
+
+  // One shape for every ladder site: renditions carry the height the page
+  // declared (a lone playlist has none; the engine reads its ladder later).
+  function extractSiteLadder(site, text) {
+    if (site === "pornhub") return extractPornhubLadder(text);
+    if (site === "missav") {
+      const playlist = extractMissavPlaylist(text);
+      return playlist ? { key: playlist.key, title: "", duration: null, thumbnailUrl: "", renditions: [{ url: playlist.url, height: null, width: null }] } : null;
+    }
+    if (site === "jable") {
+      const playlist = extractJablePlaylist(text);
+      return playlist ? { key: playlist.key, title: "", duration: null, thumbnailUrl: "", renditions: [{ url: playlist.url, height: null, width: null }] } : null;
+    }
+    return null;
+  }
+
+  // Cheap prefilter before a script body is parsed at all.
+  function scriptMayCarryLadder(site, text) {
+    if (site === "pornhub") return /flashvars_\d+/.test(text);
+    if (site === "missav") return text.includes("m3u8") && (/\bsource\s*=\s*'/.test(text) || text.includes("}('"));
+    if (site === "jable") return /\bhlsUrl\s*=/.test(text);
+    return false;
   }
 
   function positive(value) {
@@ -280,7 +456,19 @@
     return results;
   }
 
-  const api = { extractInstagramVideos, extractTwitterVideos, payloadSiteForPage, twitterStatusId };
+  const api = {
+    extractInstagramVideos,
+    extractTwitterVideos,
+    payloadSiteForPage,
+    twitterStatusId,
+    LADDER_SITES,
+    extractPornhubLadder,
+    extractMissavPlaylist,
+    extractJablePlaylist,
+    extractSiteLadder,
+    scriptMayCarryLadder,
+    unpackPackedScripts
+  };
   globalThis.__fluxcatchSiteExtract = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })();

@@ -109,6 +109,17 @@ const SAMPLES = [
   ["Network request failed for https://example.tv/…: Tunnel connection failed: 407 Proxy Authentication Required", "network_proxy_failed",
     { host: "example.tv", status: 407 }],
   ["Could not resolve network target media.example.tv", "dns_failed", { host: "media.example.tv" }],
+  // yt-dlp behind the engine's broker (host.py youtube_download / youtube_inspect).
+  ["yt-dlp is not installed; YouTube downloads need it", "youtube_tool_missing", {}],
+  ["本地引擎未找到 yt-dlp，无法下载 YouTube 视频", "youtube_tool_missing", {}],
+  ["yt-dlp failed (1): ERROR: [youtube] dQw4w9WgXcQ: Private video. Sign in if you've been granted access to this video", "http_forbidden", {}],
+  ["yt-dlp failed (1): ERROR: [youtube] dQw4w9WgXcQ: Video unavailable", "http_not_found", {}],
+  ["yt-dlp failed (1): ERROR: [youtube] dQw4w9WgXcQ: Requested format is not available. Use --list-formats for a list of available formats", "quality_unavailable", {}],
+  ["yt-dlp failed (1): ERROR: unable to download video data: HTTP Error 403: Forbidden [network policy: Network target 10.0.0.5 is private; enable private-network media explicitly to continue]", "download_not_allowed", {}],
+  ["yt-dlp failed (120): ERROR: [youtube] dQw4w9WgXcQ: Unable to extract player version", "external_tool_failed", { exit_code: 120 }],
+  ["yt-dlp produced no output", "external_tool_failed", {}],
+  ["yt-dlp exceeded the processing time limit", "processing_timeout", { hours: 6 }],
+  ["yt-dlp did not answer within the inspection time limit", "engine_not_responding", {}],
   ["Network target example.tv resolved to no addresses", "dns_failed", { host: "example.tv" }],
   ["获取播放列表超时(20s): example.tv", "playlist_timeout", { seconds: 20, host: "example.tv" }],
   ["获取播放列表超时(20s): unknown", "playlist_timeout", { seconds: 20 }],
@@ -318,7 +329,7 @@ test("nativeCode and browserReason win over text", () => {
 });
 
 const CJK = /[⺀-〿㐀-䶿一-鿿豈-﫿＀-￯]/;
-const ZH_LATIN_ALLOWED = new Set(["FluxCatch", "Chrome", "Mac", "HTTP", "MP3", "MP4", "Finder", "macOS", "http", "https"]);
+const ZH_LATIN_ALLOWED = new Set(["FluxCatch", "Chrome", "Mac", "HTTP", "MP3", "MP4", "Finder", "macOS", "http", "https", "YouTube", "yt-dlp"]);
 const JARGON = /FFmpeg|\bHLS\b|\bDASH\b|\brange\b|manifest|native host|\bsegments?\b|protocol|Errno|https?:|undefined|NaN|\bnull\b|[{}<>]|\(s\)/i;
 
 function checkRendered(text, lang, params, context) {
@@ -638,6 +649,12 @@ const UNREACHABLE_TEMPLATES = new Map([
   // answers with a file_action_result.
   ["Host message exceeded 1 MiB", "type \"error\" reply; no job"],
   ["Unknown request type", "type \"error\" reply; no job"],
+  // ExternalToolBroker._dial: the broker answers the tool's CONNECT with a
+  // 502; the job sees yt-dlp's own text, never these.
+  ["Unsupported system proxy", "broker CONNECT reply only"],
+  ["System proxy closed the CONNECT", "broker CONNECT reply only"],
+  ["System proxy refused the CONNECT", "broker CONNECT reply only"],
+  ["Could not connect to authorized network target {host}", "broker CONNECT reply only"],
   ["Duplicate job ID", "type \"error\" reply; no job"],
   ["cancelled", "folder picker reply only"]
 ]);
@@ -1031,6 +1048,7 @@ test("every Chinese error text the worker, the engine and lib/ emit classifies t
     "选择 FluxCatch 的保存位置",
     "视频轨", "音频轨", "文本大小", "行数", "引用 URL 总长度", "媒体轨道数量", "密钥引用数量", "变体数量", "分片数量",
     "正在下载20", "视频轨启动", "音频轨启动", " · 已处理 20", "任务开始",
+    "正在启动 YouTube 引擎", "正在通过 YouTube 引擎下载", "20 · 分片 20/20",
     "此媒体结构需要后续 pinned broker 支持"
   ]);
   const left = [];

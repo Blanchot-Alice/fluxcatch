@@ -9,12 +9,12 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { extensionDir, sourceCommit } from "../scripts/lib/build-identity.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
-const EXTENSION_DIR = process.env.FLUXCATCH_EXTENSION_DIR
-  ? path.resolve(process.env.FLUXCATCH_EXTENSION_DIR)
-  : path.join(ROOT, "extension");
+// The same extension directory and commit stamp as the design audit (v3 §3.7).
+const EXTENSION_DIR = extensionDir(ROOT);
 const MANIFEST_PATH = path.join(EXTENSION_DIR, "manifest.json");
 const { publicDisplayUrl } = await import(pathToFileURL(path.join(EXTENSION_DIR, "lib/candidate-public.js")).href);
 const importExtensionModule = (relative) => import(pathToFileURL(path.join(EXTENSION_DIR, relative)).href);
@@ -85,12 +85,51 @@ const HLS_RENDITIONS = [
   { slug: "q1440-58445f5c11d2ba86867435dab9257ee49ef3f3ec", bandwidth: 5600000, width: 2560, height: 1440, codecs: "avc1.640032,mp4a.40.2" }
 ];
 
+// Site-adapter fixtures (background.js SITE_ADAPTERS, content/content.js
+// ladder scan): each adapter page and its CDN get a real-looking hostname that
+// Chrome resolves to the loopback fixture server.
+const SITE_FIXTURE_HOSTS = Object.freeze({
+  pornhub: "www.pornhub.com",
+  pornhubCdn: "hv-h.phncdn.com",
+  missav: "missav.ws",
+  missavCdn: "surrit.com",
+  jable: "jable.tv",
+  jableCdn: "cdn.jable-fixture.test",
+  youtube: "www.youtube.com",
+  economist: "www.economist.com",
+  economistManifests: "manifest.prod.boltdns.net",
+  economistMedia: "fastly-signed-eu-west-1-prod.brightcovecdn.com"
+});
+const ECONOMIST_SLUG = "an-interview-with-fixture";
+const ECONOMIST_DISPLAY_TITLE = "An interview with Fixture";
+const ECONOMIST_SESSION_COOKIE = "insider_session=fixture";
+const SITE_FIXTURE_HOST_RULES = Object.values(SITE_FIXTURE_HOSTS).map((host) => `MAP ${host} 127.0.0.1`).join(", ");
+const PORNHUB_DISPLAY_TITLE = "Fixture Clip: A Walk Through The Studio";
+const PORNHUB_RENDITIONS = [
+  { height: 1080, width: 1920, rate: "4000K" },
+  { height: 720, width: 1280, rate: "4000K" },
+  { height: 480, width: 854, rate: "2000K" },
+  { height: 240, width: 426, rate: "1000K" }
+];
+const MISSAV_DISPLAY_TITLE = "KAWD-646 Fixture Club Manager";
+const MISSAV_ASSET = "2a0c794a-af0d-4834-80cc-efd9dc586df2";
+const MISSAV_RENDITIONS = [
+  { height: 360, width: 640, bandwidth: 1281515 },
+  { height: 480, width: 854, bandwidth: 2238515 },
+  { height: 720, width: 1280, bandwidth: 4471515 },
+  { height: 1080, width: 1920, bandwidth: 7980515 }
+];
+const JABLE_DISPLAY_TITLE = "FIX-001 Fixture Afternoon Scene";
+const JABLE_PLAYLIST_PATH = "/hls/0f3a2c1d/aa11bb22/fix-001/video.m3u8";
+const YOUTUBE_FIXTURE_ID = "fixtureVid01";
+const YOUTUBE_DISPLAY_TITLE = "Fixture Clip";
+
 const manifest = JSON.parse(fs.readFileSync(MANIFEST_PATH, "utf8"));
 const defaultMessages = JSON.parse(fs.readFileSync(
   path.join(EXTENSION_DIR, "_locales", manifest.default_locale, "messages.json"), "utf8"));
 const EXPECTED_MANIFEST_NAME = resolveManifestMessage(manifest.name, defaultMessages);
 const EXPECTED_EXTENSION_ID = extensionIdFromManifestKey(manifest.key);
-const E2E_SOURCE_COMMIT = resolveE2eSourceCommit();
+const E2E_SOURCE_COMMIT = sourceCommit(ROOT);
 const EXPECTED_RUNTIME_COMMIT = process.env.FLUXCATCH_EXPECTED_BUILD_COMMIT || "development";
 const PACKAGED_EXTENSION_RUN = EXPECTED_RUNTIME_COMMIT !== "development";
 const E2E_WINDOW_SIZE = parseE2eWindowSize(process.env.FLUXCATCH_E2E_WINDOW_SIZE || "1280x900");
@@ -104,7 +143,9 @@ const report = {
   chrome: {},
   extension: {
     expectedId: EXPECTED_EXTENSION_ID,
-    expectedManifest: { name: EXPECTED_MANIFEST_NAME, version: manifest.version }
+    expectedManifest: { name: EXPECTED_MANIFEST_NAME, version: manifest.version },
+    extensionDir: path.relative(ROOT, EXTENSION_DIR) || ".",
+    packaged: Boolean(process.env.FLUXCATCH_EXTENSION_DIR)
   },
   cases: [],
   ui: [],
@@ -195,7 +236,7 @@ try {
     assert.equal(buildInfo.diagnostics?.extension?.buildTimestamp, null,
       "unpacked source must not claim a packaged source timestamp");
   }
-  assert.equal(buildInfo.diagnostics?.capabilities?.externalToolNetwork, false, "stable external-tool gate must stay closed");
+  assert.equal(buildInfo.diagnostics?.capabilities?.externalToolNetwork, true, "the GitHub build carries the brokered yt-dlp adapter");
   // The worker still records page-referenced poster metadata on candidates
   // (runCase checks thumbnailUrl); the v2 popup and side panel never fetch or
   // show it (rows.js rowLead with poster: false), which the UI audits assert.
@@ -337,6 +378,63 @@ try {
       expectedKind: "dash",
       mediaPath: `/dash/stream.mpd?run=${encodeURIComponent(runId)}`,
       thumbnailPath: `/media/poster.png?run=${encodeURIComponent(runId)}`
+    },
+    // Site adapters (content/content.js ladder scan + background.js ladder
+    // grouping): the page's own scripts name the playlists; no engine runs here.
+    {
+      name: "pornhub-ladder",
+      pageUrl: siteFixtureUrls(runId).pornhub.page,
+      expectedKind: "hls",
+      mediaUrl: siteFixtureUrls(runId).pornhub.renditions[0],
+      thumbnailUrl: siteFixtureUrls(runId).pornhub.poster,
+      thumbnailSource: "poster",
+      expectedLadder: PORNHUB_RENDITIONS.map((rendition) => rendition.height),
+      expectedTitle: PORNHUB_DISPLAY_TITLE,
+      site: "pornhub"
+    },
+    {
+      name: "missav-packed-playlist",
+      pageUrl: siteFixtureUrls(runId).missav.page,
+      expectedKind: "hls",
+      mediaUrl: siteFixtureUrls(runId).missav.master,
+      thumbnailUrl: siteFixtureUrls(runId).missav.poster,
+      thumbnailSource: "og:image",
+      redacted: false,
+      expectedProbeHeights: MISSAV_RENDITIONS.map((rendition) => rendition.height).sort((a, b) => b - a),
+      expectedTitle: MISSAV_DISPLAY_TITLE,
+      site: "missav"
+    },
+    {
+      name: "jable-aes-playlist",
+      pageUrl: siteFixtureUrls(runId).jable.page,
+      expectedKind: "hls",
+      mediaUrl: siteFixtureUrls(runId).jable.playlist,
+      thumbnailUrl: siteFixtureUrls(runId).jable.poster,
+      thumbnailSource: "og:image",
+      redacted: false,
+      expectEncrypted: true,
+      expectedTitle: JABLE_DISPLAY_TITLE,
+      site: "jable"
+    },
+    {
+      name: "economist-insider",
+      pageUrl: siteFixtureUrls(runId).economist.page,
+      expectedKind: "hls",
+      mediaUrl: siteFixtureUrls(runId).economist.master,
+      expectedProbeHeights: [1080, 540],
+      expectAudioTracks: true,
+      expectedTitle: ECONOMIST_DISPLAY_TITLE,
+      site: "economist"
+    },
+    {
+      name: "youtube-watch",
+      pageUrl: siteFixtureUrls(runId).youtube.page,
+      expectedKind: "youtube",
+      mediaUrl: `https://www.youtube.com/watch?v=${YOUTUBE_FIXTURE_ID}`,
+      redacted: false,
+      expectedTitle: YOUTUBE_DISPLAY_TITLE,
+      site: "youtube",
+      expectEngineGate: true
     }
   ];
 
@@ -395,10 +493,12 @@ if (report.status !== "passed") {
 
 async function runCase(definition, devtoolsOrigin) {
   const startedAt = Date.now();
-  const pageUrl = `${serverOrigin}${definition.pagePath}`;
+  const pageUrl = definition.pageUrl || `${serverOrigin}${definition.pagePath}`;
   const expectedUrl = definition.mediaUrl || `${serverOrigin}${definition.mediaPath}`;
-  const expectedPublicUrl = publicDisplayUrl(expectedUrl);
-  const expectedThumbnailUrl = publicDisplayUrl(`${serverOrigin}${definition.thumbnailPath}`);
+  const expectedPublicUrl = publicDisplayUrl(expectedUrl, { kind: definition.expectedKind, site: definition.site });
+  const expectedThumbnailUrl = definition.thumbnailUrl
+    ? publicDisplayUrl(definition.thumbnailUrl)
+    : definition.thumbnailPath ? publicDisplayUrl(`${serverOrigin}${definition.thumbnailPath}`) : null;
   const item = {
     name: definition.name,
     pageUrl,
@@ -453,16 +553,31 @@ async function runCase(definition, devtoolsOrigin) {
     // This check deliberately precedes the first post-navigation
     // GET_TAB_MEDIA call. Reading extension UI state must not be what causes
     // the toolbar badge to appear.
-    const badgeBeforeRead = await poll(async () => {
-      const value = await control(`async () => {
-        const [text, title] = await Promise.all([
-          chrome.action.getBadgeText({ tabId: ${JSON.stringify(tabId)} }),
-          chrome.action.getTitle({ tabId: ${JSON.stringify(tabId)} })
-        ]);
-        return { text, title };
-      }`);
-      return value?.text === "1" ? value : null;
-    }, BADGE_APPEAR_TIMEOUT_MS, `${definition.name} automatic toolbar badge before media UI read`);
+    const badgeSamples = [];
+    let badgeBeforeRead;
+    try {
+      badgeBeforeRead = await poll(async () => {
+        const value = await control(`async () => {
+          const [text, title] = await Promise.all([
+            chrome.action.getBadgeText({ tabId: ${JSON.stringify(tabId)} }),
+            chrome.action.getTitle({ tabId: ${JSON.stringify(tabId)} })
+          ]);
+          return { text, title };
+        }`);
+        badgeSamples.push({ at: Date.now() - startedAt, text: value?.text ?? null });
+        return value?.text === "1" ? value : null;
+      }, BADGE_APPEAR_TIMEOUT_MS, `${definition.name} automatic toolbar badge before media UI read`);
+    } catch (error) {
+      // Keep what the worker had when the budget ran out: the badge values
+      // seen and the tab's candidate list, so a slow machine and a missing
+      // candidate read differently in the artifact.
+      const snapshot = await control(`async () => {
+        const response = await chrome.runtime.sendMessage({ type: "GET_TAB_MEDIA", tabId: ${JSON.stringify(tabId)} });
+        return (response?.items || []).map((entry) => ({ kind: entry.kind, displayUrl: entry.displayUrl, sources: entry.sources, variants: (entry.variants || []).length }));
+      }`).catch((reason) => ({ error: String(reason) }));
+      item.badgeDiagnostics = { samples: badgeSamples, candidatesAtTimeout: snapshot };
+      throw error;
+    }
     assert.equal(badgeBeforeRead.text, "1", `${definition.name} toolbar badge count mismatch`);
     // background.js updateBadge: workerText("worker.action.found", { count }) from ui/v2/messages/worker.js.
     assert.equal(badgeBeforeRead.title, workerCopy["worker.action.found"]({ count: 1 }),
@@ -485,11 +600,15 @@ async function runCase(definition, devtoolsOrigin) {
     assert.equal(Object.hasOwn(detection.candidate, "url"), false, "PublicCandidate exposed an executable URL field");
     assert.match(detection.candidate.generation || "", /^[a-f0-9-]{36}$/, "candidate generation is not opaque");
     assert.equal(detection.candidate.copyable, false, "signed fixture URLs must not be copyable");
-    assert.equal(detection.candidate.urlIsRedacted, true, "signed fixture URLs must be marked as redacted");
-    assert.doesNotMatch(JSON.stringify(detection.candidate), /token=(?:direct|fast|manifest|observed|caption|dash)/,
+    assert.equal(detection.candidate.urlIsRedacted, definition.redacted !== false,
+      definition.redacted !== false ? "signed fixture URLs must be marked as redacted" : "an unsigned address shows as itself");
+    assert.doesNotMatch(JSON.stringify(detection.candidate), /token=(?:direct|fast|manifest|observed|caption|dash)|h=sig-/,
       "signed media values crossed the PublicCandidate boundary");
-    assert.equal(detection.candidate.thumbnailUrl, expectedThumbnailUrl, "candidate thumbnail URL mismatch");
-    assert.equal(detection.candidate.thumbnailSource, "poster", "video poster must outrank page metadata");
+    if (expectedThumbnailUrl) {
+      assert.equal(detection.candidate.thumbnailUrl, expectedThumbnailUrl, "candidate thumbnail URL mismatch");
+      assert.equal(detection.candidate.thumbnailSource, definition.thumbnailSource || "poster",
+        definition.thumbnailSource ? "page metadata names the preview" : "video poster must outrank page metadata");
+    }
     item.candidate = {
       id: detection.candidate.id,
       generation: detection.candidate.generation,
@@ -568,6 +687,8 @@ async function runCase(definition, devtoolsOrigin) {
       await auditHlsDownloadDialog(tabId, expectedPublicUrl, definition.expectedTitle, grouped.representative.id || detection.candidate.id);
     }
 
+    await auditSiteAdapterCase(definition, tabId, detection.candidate, expectedPublicUrl, item);
+
     item.status = "passed";
   } catch (error) {
     item.status = "failed";
@@ -581,6 +702,244 @@ async function runCase(definition, devtoolsOrigin) {
     item.finishedAt = new Date().toISOString();
     item.durationMs = Date.now() - startedAt;
   }
+}
+
+/** Site-adapter expectations: the page-declared ladder, the probe's answer,
+ *  AES-128 metadata, and the engine gate a YouTube row fails closed on. */
+async function auditSiteAdapterCase(definition, tabId, candidate, expectedPublicUrl, item) {
+  if (!definition.site) return;
+  const reference = JSON.stringify({ id: candidate.id, kind: candidate.kind, generation: candidate.generation });
+  if (definition.expectedLadder) {
+    const ladder = await poll(async () => {
+      const response = await control(`async () => chrome.runtime.sendMessage({ type: "GET_TAB_MEDIA", tabId: ${JSON.stringify(tabId)} })`);
+      if (!response?.ok) throw new Error(response?.error || "GET_TAB_MEDIA failed while waiting for the adapter ladder");
+      const visible = (response.items || []).filter((entry) => entry.kind !== "segment");
+      const card = visible.find((entry) => entry.displayUrl === expectedPublicUrl);
+      const heights = (card?.variants || []).map((variant) => variant.height);
+      return visible.length === 1 && card && heights.join(",") === definition.expectedLadder.join(",") ? { visible, card } : null;
+    }, CASE_TIMEOUT_MS, `${definition.name} adapter ladder`);
+    assert.equal(ladder.card.site, definition.site, "the card names its adapter");
+    assert.equal(ladder.card.title, definition.expectedTitle, "the card is named after the page's readable title");
+    assert.ok(ladder.card.variants.every((variant) => /^https:\/\/fluxcatch\.invalid\/manifest\/[a-f0-9-]{36}\/[a-f0-9-]{36}$/.test(variant.url)),
+      "ladder qualities are opaque selectors");
+    item.ladder = { visibleCandidates: ladder.visible.length, heights: definition.expectedLadder, site: ladder.card.site };
+  } else if (definition.expectedTitle) {
+    assert.equal(candidate.title, definition.expectedTitle, `${definition.name}: the row is named after the page's readable title`);
+    assert.equal(candidate.site, definition.site, `${definition.name}: the row names its adapter`);
+  }
+  const probe = await control(`async () => chrome.runtime.sendMessage({ type: "PROBE_MANIFEST", tabId: ${JSON.stringify(tabId)}, candidate: ${reference} })`);
+  assert.equal(probe?.ok, true, `${definition.name} probe failed: ${probe?.error || "unknown error"}`);
+  const heights = (probe.probe?.variants || []).map((variant) => variant.height);
+  if (definition.expectedLadder) {
+    assert.deepEqual(heights, definition.expectedLadder, "the dialog's ladder is the page's, not the one variant of the probed master");
+  }
+  if (definition.expectedProbeHeights) {
+    assert.deepEqual(heights, definition.expectedProbeHeights, "the decoded master playlist lists every rendition");
+  }
+  if (definition.expectAudioTracks) {
+    assert.ok(probe.probe.audioTrackCount >= 1, "the master's separate audio rendition is known to the probe");
+  }
+  if (definition.expectEncrypted) {
+    assert.equal(probe.probe.encrypted, true, "the AES-128 playlist reads as encrypted");
+    assert.equal(probe.probe.protection, "aes128", "ordinary transport encryption, not DRM");
+    assert.equal(probe.probe.live, false);
+    assert.equal(probe.probe.discontinuity, false);
+  }
+  if (definition.expectedKind === "youtube") {
+    assert.equal(probe.probe.kind, "youtube");
+    assert.deepEqual(probe.probe.variants, [], "without an engine the YouTube ladder is empty: the dialog offers the automatic best quality");
+  }
+  assert.doesNotMatch(JSON.stringify(probe), /h=sig-|surrit\.com\/[0-9a-f-]{36}\/\d+p|key\.bin/, "probe answers never carry media addresses");
+  item.probe = { kind: probe.probe?.kind, heights, encrypted: Boolean(probe.probe?.encrypted), protection: probe.probe?.protection || "" };
+  if (definition.expectEngineGate) {
+    const gate = await control(`async () => {
+      const before = await chrome.runtime.sendMessage({ type: "GET_JOBS" });
+      const response = await chrome.runtime.sendMessage({ type: "DOWNLOAD", tabId: ${JSON.stringify(tabId)}, candidate: ${reference}, options: { outputContainer: "mp4", outputFormat: "mp4", convert: false, extractAudio: false } });
+      const after = await chrome.runtime.sendMessage({ type: "GET_JOBS" });
+      return { before, response, after };
+    }`);
+    assert.equal(gate.response?.ok, false, "a YouTube download without the engine did not fail closed");
+    assert.equal(gate.response?.code, "engine_not_set_up", "the YouTube engine gate lost its v2 failure code");
+    assert.deepEqual(gate.after?.jobs, gate.before?.jobs, "a refused YouTube download mutated the task list");
+    item.engineGate = { code: gate.response.code, jobsUnchanged: true };
+  }
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[character]);
+}
+
+/** Dean Edwards' packer, forward direction, for the MissAV fixture: the
+ *  content adapter must decode exactly this shape without eval. */
+function packScript(code) {
+  const words = [];
+  const index = new Map();
+  const packed = code.replace(/\b\w+\b/g, (word) => {
+    if (!index.has(word)) {
+      index.set(word, words.length);
+      words.push(word);
+    }
+    return index.get(word).toString(36);
+  }).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+  const prologue = "function(p,a,c,k,e,d){e=function(c){return c.toString(36)};if(!''.replace(/^/,String)){while(c--){d[c.toString(a)]=k[c]||c.toString(a)}k=[function(e){return d[e]}];e=function(){return'\\\\w+'};c=1};while(c--){if(k[c]){p=p.replace(new RegExp('\\\\b'+e(c)+'\\\\b','g'),k[c])}}return p}";
+  return `eval(${prologue}('${packed}',36,${words.length},'${words.join("|")}'.split('|'),0,{}))`;
+}
+
+function siteFixtureUrls(id) {
+  assert.ok(serverOrigin, "fixture server origin is required before building site fixture URLs");
+  const port = new URL(serverOrigin).port;
+  const origin = (host) => `http://${host}:${port}`;
+  const run = encodeURIComponent(id);
+  const poster = (host) => `${origin(host)}/media/poster.png?run=${run}`;
+  return {
+    pornhub: {
+      page: `${origin(SITE_FIXTURE_HOSTS.pornhub)}/view_video.php?viewkey=645ab8c01b680&run=${run}`,
+      renditions: PORNHUB_RENDITIONS.map((rendition) =>
+        `${origin(SITE_FIXTURE_HOSTS.pornhubCdn)}/hls/videos/202305/10/431238401/${rendition.height}P_${rendition.rate}_431238401.mp4/master.m3u8?h=sig-${rendition.height}&e=1792658400&f=1&run=${run}`),
+      poster: poster(SITE_FIXTURE_HOSTS.pornhub)
+    },
+    missav: {
+      page: `${origin(SITE_FIXTURE_HOSTS.missav)}/dm29/en/kawd-646?run=${run}`,
+      master: `${origin(SITE_FIXTURE_HOSTS.missavCdn)}/${MISSAV_ASSET}/playlist.m3u8`,
+      poster: poster(SITE_FIXTURE_HOSTS.missav)
+    },
+    jable: {
+      page: `${origin(SITE_FIXTURE_HOSTS.jable)}/videos/fix-001/?run=${run}`,
+      playlist: `${origin(SITE_FIXTURE_HOSTS.jableCdn)}${JABLE_PLAYLIST_PATH}`,
+      poster: poster(SITE_FIXTURE_HOSTS.jable)
+    },
+    youtube: {
+      page: `${origin(SITE_FIXTURE_HOSTS.youtube)}/watch?v=${YOUTUBE_FIXTURE_ID}&run=${run}`
+    },
+    economist: {
+      page: `${origin(SITE_FIXTURE_HOSTS.economist)}/insider/the-insider/${ECONOMIST_SLUG}?run=${run}`,
+      api: `${origin(SITE_FIXTURE_HOSTS.economist)}/video-api/events/${ECONOMIST_SLUG}`,
+      master: `${origin(SITE_FIXTURE_HOSTS.economist)}/video-api/playback/hls.m3u8?u=fixture-master-token`,
+      media: (height) => `${origin(SITE_FIXTURE_HOSTS.economist)}/video-api/playback/hls.m3u8?u=fixture-${height}-token&t=m`,
+      audio: `${origin(SITE_FIXTURE_HOSTS.economistManifests)}/manifest/v2/hls/v7/fmp4/clear/6415803283001/asset/audio/6s/rendition.m3u8?fastly_token=fixture-audio-token`,
+      segment: (label) => `${origin(SITE_FIXTURE_HOSTS.economistMedia)}/media/v1/hls/v7/clear/6415803283001/asset/${label}/segment1.m4f?fastly_token=fixture-segment-token`
+    }
+  };
+}
+
+function economistFixturePage(id) {
+  const fixture = siteFixtureUrls(id).economist;
+  return siteFixturePage({
+    title: `${ECONOMIST_DISPLAY_TITLE} | The Economist Insider`,
+    metaProperty: "og:title",
+    metaTitle: `${ECONOMIST_DISPLAY_TITLE} | The Economist Insider`,
+    body: `<h1>${escapeHtml(ECONOMIST_DISPLAY_TITLE)}</h1>
+<div class="VideoPlayerWrapper_videoPlayer__fixture"></div>`,
+    resultUrl: fixture.master
+  });
+}
+
+function siteFixturePage({ title, metaName, metaProperty, metaTitle, poster, body, fetchUrl, resultUrl }) {
+  const resultKey = JSON.stringify(FIXTURE_RESULT_KEY);
+  const meta = metaTitle ? `<meta ${metaName ? `name="${metaName}"` : `property="${metaProperty}"`} content="${escapeHtml(metaTitle)}">` : "";
+  return `<!doctype html>
+<meta charset="utf-8">
+<title>${escapeHtml(title)}</title>
+${meta}
+${poster ? `<meta property="og:image" content="${poster}">` : ""}
+${body}
+<script>
+(async () => {
+  const requested = ${JSON.stringify(fetchUrl || "")};
+  if (!requested) {
+    globalThis[${resultKey}] = { done: true, ok: true, status: 200, url: ${JSON.stringify(resultUrl || "")}, bodySize: 0 };
+    return;
+  }
+  try {
+    const response = await fetch(requested, { cache: "no-store" });
+    if (!response.ok) throw new Error("HTTP " + response.status + " for " + requested);
+    const text = await response.text();
+    globalThis[${resultKey}] = { done: true, ok: true, status: response.status, url: response.url, bodySize: text.length };
+  } catch (error) {
+    globalThis[${resultKey}] = { done: true, ok: false, url: requested, error: String(error && error.message || error) };
+  }
+})();
+</script>`;
+}
+
+function pornhubFixturePage(id) {
+  const fixture = siteFixtureUrls(id).pornhub;
+  const flashvars = {
+    isVR: 0,
+    autoplay: "true",
+    video_duration: 4352,
+    link_url: "https://www.pornhub.com/view_video.php?viewkey=645ab8c01b680",
+    video_title: "Fixture Clip  A Walk Through The Studio",
+    image_url: fixture.poster,
+    mediaPriority: "hls",
+    mediaDefinitions: [
+      ...PORNHUB_RENDITIONS.map((rendition, index) => ({
+        group: 1, height: rendition.height, width: rendition.width, defaultQuality: index === 1,
+        format: "hls", videoUrl: fixture.renditions[index], quality: String(rendition.height),
+        segmentFormats: { audio: "ts_aac", video: "mpeg2_ts" }
+      })),
+      { group: 1, height: 1080, width: 1920, defaultQuality: false, format: "mp4", videoUrl: "https://www.pornhub.com/video/get_media?s=REMOTE&v=645ab8c01b680&e=0&t=p", quality: [], remote: true }
+    ]
+  };
+  return siteFixturePage({
+    title: `${PORNHUB_DISPLAY_TITLE} - Pornhub.com`,
+    metaName: "twitter:title",
+    metaTitle: PORNHUB_DISPLAY_TITLE,
+    poster: fixture.poster,
+    body: `<h1 class="title">${escapeHtml(PORNHUB_DISPLAY_TITLE)}</h1>
+<script>window.unrelated = { "video_versions": "decoy" };</script>
+<script>
+var flashvars_431238401 = ${JSON.stringify(flashvars)};
+var player_mp4_seek = "ms";
+</script>`,
+    fetchUrl: fixture.renditions[0]
+  });
+}
+
+function missavFixturePage(id) {
+  const fixture = siteFixtureUrls(id).missav;
+  const base = fixture.master.replace(/\/playlist\.m3u8$/, "");
+  const packed = packScript(`source='${fixture.master}';source842='${base}/720p/video.m3u8';source1280='${base}/1080p/video.m3u8';`);
+  return siteFixturePage({
+    title: MISSAV_DISPLAY_TITLE,
+    metaProperty: "og:title",
+    metaTitle: MISSAV_DISPLAY_TITLE,
+    poster: fixture.poster,
+    body: `<h1 class="text-base">${escapeHtml(MISSAV_DISPLAY_TITLE)}</h1>
+<video class="player" playsinline></video>
+<script>
+        window.isPublished = true
+        document.addEventListener('DOMContentLoaded', () => {
+            let source
+            ${packed}
+        })
+</script>`,
+    fetchUrl: fixture.master
+  });
+}
+
+function jableFixturePage(id) {
+  const fixture = siteFixtureUrls(id).jable;
+  return siteFixturePage({
+    title: `${JABLE_DISPLAY_TITLE} - Jable.TV`,
+    metaProperty: "og:title",
+    metaTitle: JABLE_DISPLAY_TITLE,
+    poster: fixture.poster,
+    body: `<h4 class="title">${escapeHtml(JABLE_DISPLAY_TITLE)}</h4>
+<script>
+  var hlsUrl = '${fixture.playlist}';
+  var player = { source: hlsUrl };
+</script>`,
+    fetchUrl: fixture.playlist
+  });
+}
+
+function youtubeFixturePage() {
+  return siteFixturePage({
+    title: `${YOUTUBE_DISPLAY_TITLE} - YouTube`,
+    body: `<div id="player"></div>`,
+    resultUrl: `https://www.youtube.com/watch?v=${YOUTUBE_FIXTURE_ID}`
+  });
 }
 
 // Settings sections in page order (options/options.js SECTIONS); ids are the
@@ -614,18 +973,21 @@ const STABLE_CAPABILITIES = Object.freeze([
   ["settings.cap.encrypted", true, true],
   ["settings.cap.protected", false, true],
   ["settings.cap.separateAudio", true, true],
-  ["YouTube", false, true],
+  ["YouTube", true, true, "ytdlp"],
   ["settings.cap.thumbnails", true, false]
 ]);
 /** The capability rows Settings must show (options.js renderEngine mirror):
  *  "Not yet" (cancelled) is only for what the build lacks; a row the engine
  *  saves shows the engine row's own word and tone until the engine is Ready
- *  (`engine` null), then "Yes"; thumbnails need no engine and read "Yes". */
-function expectedCapabilityRows(engine) {
-  return STABLE_CAPABILITIES.map(([key, built, needsEngine]) => {
+ *  (`engine` null), then "Yes"; thumbnails need no engine and read "Yes".
+ *  YouTube also needs the Ready engine to report yt-dlp: without it the row
+ *  reads "Needs an extra component" (settings.cap.toolMissing, v3 §3.8). */
+function expectedCapabilityRows(engine, { ytdlp = false } = {}) {
+  return STABLE_CAPABILITIES.map(([key, built, needsEngine, tool]) => {
     const name = key.startsWith("settings.") ? T(key) : key;
     if (!built) return { name, status: T("settings.notYet"), tone: "cancelled" };
     if (needsEngine && engine) return { name, status: engine.label, tone: engine.tone };
+    if (tool === "ytdlp" && !ytdlp) return { name, status: T("settings.cap.toolMissing"), tone: "cancelled" };
     return { name, status: T("settings.yes"), tone: "complete" };
   });
 }
@@ -644,7 +1006,7 @@ const ENGINE_FIXTURES = Object.freeze({
     ffmpeg: true,
     capabilities: {
       ffmpeg: { available: true, encoders: { libmp3lame: true } },
-      ytdlp: { installed: true, available: false, networkDisabled: true }
+      ytdlp: { installed: true, available: true, networkDisabled: false, version: "2026.08.19" }
     }
   }
 });
@@ -679,7 +1041,11 @@ async function auditPhaseBOptionsMatrix(devtoolsOrigin) {
     await setViewport(client, 980, 900);
     await setEmulatedPreferences(client, { colorScheme: "light", reducedMotion: "no-preference" });
     await waitForOptionsReady(client);
-    await client.send("Page.bringToFront");
+    // Not brought to front: focus emulation (openExtensionTarget) already gives
+    // the page focus semantics, and once a headless window is key, Chrome on
+    // macOS replays every keydown the page leaves unhandled (pressEnterKey on
+    // a chip or a confirm button) through the system key path without end,
+    // which hangs the page's main thread.
 
     // v1 asserted six fieldsets with legends, a disabled Save, "所有更改均已保存"
     // and 40px targets. v2 (§6.13): ten labelled sections of setting rows,
@@ -1130,8 +1496,8 @@ async function auditPhaseBOptionsMatrix(devtoolsOrigin) {
     for (const [field, issue] of Object.entries(expectedIssues)) {
       assert.equal(validation.errors[field], T(`settings.error.${issue.code}`, issue.params), `${field} row does not show its validation reason`);
       assert.ok(validation.invalidIds.includes(`field-${field}`), `${field} validation did not mark its field invalid`);
-      // controls.js setSettingError: a soft 3px vermilion halo on the field at rest.
-      assert.match(validation.halos[field], /0px 0px 0px 3px/, `${field} invalid field has no halo: ${validation.halos[field]}`);
+      // v3 §3.9: the focus ring's construction in vermilion, 2px inside a 6px soft halo.
+      assert.match(validation.halos[field], /0px 0px 0px 2px.*0px 0px 0px 6px/, `${field} invalid field has no ring and halo: ${validation.halos[field]}`);
     }
     assert.deepEqual([...validation.unsaved].sort(), Object.keys(invalidInput).sort(), "invalid fields were not kept as unsaved");
     const afterValidation = await control(`async () => chrome.runtime.sendMessage({ type: "GET_SETTINGS" })`);
@@ -1289,15 +1655,14 @@ async function auditPhaseBOptionsMatrix(devtoolsOrigin) {
     assert.equal(readyMatrix.actionHidden, true, "a ready engine still offers Retry");
     assert.equal(readyMatrix.installHidden, true, "a ready engine still shows the install steps");
     assert.deepEqual([readyMatrix.merge, readyMatrix.mergeTone], [T("settings.yes"), "complete"], "a ready engine with FFmpeg did not enable merging");
-    assert.deepEqual(readyMatrix.capabilities, expectedCapabilityRows(null), "a ready engine did not turn the engine's capability rows to Yes");
-    // v1: "yt-dlp 已安装 · 未开放" and external network "未启用". v2 shows no
-    // yt-dlp row; an installed yt-dlp must still leave YouTube unsupported.
-    assert.equal(readyMatrix.youtube, T("settings.notYet"), "an installed yt-dlp made YouTube read as supported in the stable build");
+    assert.deepEqual(readyMatrix.capabilities, expectedCapabilityRows(null, { ytdlp: true }), "a ready engine did not turn the engine's capability rows to Yes");
+    // The YouTube row turns to Yes only because this Ready engine reports a
+    // usable yt-dlp (capabilities.ytdlp.available, networkDisabled false).
+    assert.equal(readyMatrix.youtube, T("settings.yes"), "a Ready engine that reports yt-dlp did not turn YouTube to Yes");
     assert.equal(readyMatrix.network, T("settings.off"), "the Status section does not report the home network as off");
-    // Whether a capability exists is static (options.js buildCapabilities reads
-    // BUILD_PROFILE; only the engine's state is mirrored), so also prove the
-    // host's yt-dlp report reaches no Settings copy at all (no v2 message names yt-dlp).
-    assert.doesNotMatch(readyMatrix.bodyText, /yt-?dlp/i, "stable Settings surfaced the host's yt-dlp report");
+    // With the tool present the page names it nowhere: the row is a plain Yes
+    // and the host's raw report (path, version, probe text) reaches no copy.
+    assert.doesNotMatch(readyMatrix.bodyText, /yt-?dlp/i, "Settings surfaced the host's raw yt-dlp report");
     assert.equal(readyMatrix.engineVisible, true, "ready-host engine row is outside its evidence screenshot");
     await captureMatrixState(client, "options-native-host-ready", 980, 900, {
       fixture: "deterministic host DTO rendered by production renderEngine via Retry",
@@ -1600,8 +1965,9 @@ async function reloadExtensionPage(client) {
   await poll(async () => await evaluate(client, `document.readyState === "complete"`), CASE_TIMEOUT_MS, "extension page reload");
 }
 
+// DPR 2, as the design audit captures (v3 §3.7): one pixel density for both pipelines.
 async function setViewport(client, width, height) {
-  await client.send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false });
+  await client.send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 2, mobile: false });
 }
 
 async function setEmulatedPreferences(client, { colorScheme = "light", reducedMotion = "no-preference" } = {}) {
@@ -1879,6 +2245,8 @@ async function captureMatrixState(client, name, width, height, evidence = {}) {
     assert.equal(dimensions.height, height, `${name} CSS viewport height mismatch`);
     assert.ok(dimensions.overflow <= 1, `${name} has ${dimensions.overflow}px horizontal overflow`);
     if (evidence.origin === "top") assert.ok(Math.abs(dimensions.scrollY) <= 1, `${name} did not capture from the page origin: scrollY=${dimensions.scrollY}`);
+    // A settled pond layer, as the design audit waits for before its captures.
+    await poll(() => evaluate(client, "(() => { const p = document.querySelector('[data-pond]'); return !p || p.dataset.pondState === 'ready'; })()"), CASE_TIMEOUT_MS, `${name} pond layer`).catch(() => {});
     const screenshot = await client.send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false }, CASE_TIMEOUT_MS * 2);
     const screenshotPath = path.join(PHASE_B_ARTIFACT_DIR, `${name}.png`);
     fs.writeFileSync(screenshotPath, Buffer.from(screenshot.data, "base64"));
@@ -2941,6 +3309,103 @@ function startFixtureServer() {
         return send(response, 200, "application/vnd.apple.mpegurl", captionPlaylist, common);
       }
       if (url.pathname === "/dash/stream.mpd") return send(response, 200, "application/dash+xml", dashManifest, common);
+      // Site-adapter pages and their CDNs (Chrome maps the hostnames here).
+      const run = url.searchParams.get("run") || "fixture";
+      if (url.pathname === "/view_video.php") return send(response, 200, "text/html; charset=utf-8", pornhubFixturePage(run), common);
+      if (/^\/hls\/videos\/[^?]+\/master\.m3u8$/i.test(url.pathname)) {
+        const height = Number((url.pathname.match(/\/(\d+)P_/) || [])[1]) || 720;
+        const rendition = PORNHUB_RENDITIONS.find((entry) => entry.height === height) || PORNHUB_RENDITIONS[1];
+        return send(response, 200, "application/vnd.apple.mpegurl", [
+          "#EXTM3U",
+          `#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=${rendition.height * 1800},RESOLUTION=${rendition.width}x${rendition.height},FRAME-RATE=29.970,CODECS="avc1.640032,mp4a.40.2",VIDEO-RANGE=SDR`,
+          `index-v1-a1.m3u8${url.search}`,
+          ""
+        ].join("\n"), common);
+      }
+      if (/^\/hls\/videos\/[^?]+\/index-v1-a1\.m3u8$/i.test(url.pathname)) {
+        return send(response, 200, "application/vnd.apple.mpegurl", [
+          "#EXTM3U", "#EXT-X-TARGETDURATION:4", "#EXT-X-PLAYLIST-TYPE:VOD", "#EXT-X-VERSION:6", "#EXT-X-MEDIA-SEQUENCE:1",
+          `#EXT-X-MAP:URI="init-v1-a1.mp4${url.search}"`,
+          "#EXTINF:3.003,", `seg-1-v1-a1.m4s${url.search}`, "#EXTINF:3.003,", `seg-2-v1-a1.m4s${url.search}`, "#EXT-X-ENDLIST", ""
+        ].join("\n"), common);
+      }
+      if (url.pathname === "/dm29/en/kawd-646") return send(response, 200, "text/html; charset=utf-8", missavFixturePage(run), common);
+      if (url.pathname === `/${MISSAV_ASSET}/playlist.m3u8`) {
+        const master = ["#EXTM3U", "#EXT-X-VERSION:3", "#EXT-X-TOKEN=fixture-token", ""];
+        for (const rendition of MISSAV_RENDITIONS) {
+          master.push(`#EXT-X-STREAM-INF:BANDWIDTH=${rendition.bandwidth},CODECS="avc1.4d401f,mp4a.40.2",RESOLUTION=${rendition.width}x${rendition.height}`);
+          master.push(`${rendition.height}p/video.m3u8`);
+        }
+        master.push("");
+        return send(response, 200, "application/vnd.apple.mpegurl", master.join("\n"), common);
+      }
+      if (new RegExp(`^/${MISSAV_ASSET}/\\d+p/video\\.m3u8$`).test(url.pathname)) {
+        return send(response, 200, "application/vnd.apple.mpegurl", [
+          "#EXTM3U", "#EXT-X-VERSION:3", "#EXT-X-TARGETDURATION:4", "#EXT-X-MEDIA-SEQUENCE:0", "#EXT-X-PLAYLIST-TYPE:VOD", "#EXT-X-TOKEN=fixture-token",
+          "#EXTINF:4.000000,", "video0.jpeg", "#EXTINF:4.000000,", "video1.jpeg", "#EXT-X-ENDLIST", ""
+        ].join("\n"), common);
+      }
+      if (/^\/videos\/fix-001\/?$/.test(url.pathname)) return send(response, 200, "text/html; charset=utf-8", jableFixturePage(run), common);
+      if (url.pathname === JABLE_PLAYLIST_PATH) {
+        return send(response, 200, "application/vnd.apple.mpegurl", [
+          "#EXTM3U", "#EXT-X-VERSION:3", "#EXT-X-TARGETDURATION:10", "#EXT-X-MEDIA-SEQUENCE:0", "#EXT-X-PLAYLIST-TYPE:VOD",
+          '#EXT-X-KEY:METHOD=AES-128,URI="key.bin",IV=0x00000000000000000000000000000001',
+          "#EXTINF:10.000,", "video0.ts", "#EXTINF:10.000,", "video1.ts", "#EXT-X-ENDLIST", ""
+        ].join("\n"), common);
+      }
+      if (url.pathname === JABLE_PLAYLIST_PATH.replace(/video\.m3u8$/, "key.bin")) {
+        return send(response, 200, "application/octet-stream", Buffer.alloc(16, 7), common);
+      }
+      if (url.pathname === "/watch") return send(response, 200, "text/html; charset=utf-8", youtubeFixturePage(), common);
+      // The Economist Insider: the page sets the session cookie the API and
+      // the proxied playlists require; Brightcove-shaped renditions and
+      // segments carry their own tokens and need no cookie.
+      if (url.pathname === `/insider/the-insider/${ECONOMIST_SLUG}`) {
+        return send(response, 200, "text/html; charset=utf-8", economistFixturePage(run), { ...common, "set-cookie": `${ECONOMIST_SESSION_COOKIE}; Path=/; SameSite=Lax` });
+      }
+      const insiderSession = String(request.headers.cookie || "").includes(ECONOMIST_SESSION_COOKIE);
+      if (url.pathname === `/video-api/events/${ECONOMIST_SLUG}`) {
+        if (!insiderSession) return send(response, 401, "application/json; charset=utf-8", JSON.stringify({ errors: [{ code: "TEG-VA-103", message: "Customer is not logged in" }] }), common);
+        const fixture = siteFixtureUrls(run).economist;
+        return send(response, 200, "application/json; charset=utf-8", JSON.stringify({
+          data: {
+            id: 3271, slug: ECONOMIST_SLUG, title: ECONOMIST_DISPLAY_TITLE, duration: "85 min",
+            show: { id: 121, name: "The Insider", slug: "the-insider" },
+            video: {
+              id: 6401945528112, duration: 5091734, is_live: false, manifest_url_ttl: 3453,
+              sources: [
+                { src: fixture.master.replace("fixture-master-token", "fixture-v4-token"), type: "application/x-mpegURL", ext_x_version: 4 },
+                { src: fixture.master, type: "application/x-mpegURL", ext_x_version: 7, codecs: "avc1,mp4a" }
+              ]
+            }
+          }
+        }), common);
+      }
+      if (url.pathname === "/video-api/playback/hls.m3u8") {
+        if (!insiderSession) return send(response, 401, "application/json; charset=utf-8", JSON.stringify({ errors: [{ code: "TEG-VA-103", message: "Customer is not logged in" }] }), common);
+        const fixture = siteFixtureUrls(run).economist;
+        if (url.searchParams.get("t") === "m") {
+          const label = (url.searchParams.get("u") || "").replace(/^fixture-|-token$/g, "");
+          return send(response, 200, "application/x-mpegURL", [
+            "#EXTM3U", "#EXT-X-VERSION:7", "#EXT-X-TARGETDURATION:6", "#EXT-X-PLAYLIST-TYPE:VOD",
+            `#EXT-X-MAP:URI="${fixture.segment(label).replace("segment1.m4f", "init.m4f")}"`,
+            "#EXTINF:6.0,", fixture.segment(label), "#EXT-X-ENDLIST", ""
+          ].join("\n"), common);
+        }
+        return send(response, 200, "application/x-mpegURL", [
+          "#EXTM3U", "#EXT-X-VERSION:7",
+          `#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio-0",NAME="en-GB (Main)",DEFAULT=YES,AUTOSELECT=YES,LANGUAGE="en-GB",CHANNELS="2",URI="${fixture.audio}"`,
+          '#EXT-X-STREAM-INF:PROGRAM-ID=0,BANDWIDTH=4055700,CODECS="mp4a.40.2,avc1.640028",RESOLUTION=1920x1080,AUDIO="audio-0"', fixture.media(1080),
+          '#EXT-X-STREAM-INF:PROGRAM-ID=0,BANDWIDTH=1527900,CODECS="mp4a.40.2,avc1.4d001f",RESOLUTION=960x540,AUDIO="audio-0"', fixture.media(540),
+          ""
+        ].join("\n"), common);
+      }
+      if (/^\/manifest\/v2\/hls\/v7\/fmp4\/clear\/.+\/rendition\.m3u8$/.test(url.pathname)) {
+        return send(response, 200, "application/x-mpegURL", [
+          "#EXTM3U", "#EXT-X-VERSION:7", "#EXT-X-TARGETDURATION:6", "#EXT-X-PLAYLIST-TYPE:VOD",
+          "#EXTINF:6.0,", siteFixtureUrls(run).economist.segment("audio"), "#EXT-X-ENDLIST", ""
+        ].join("\n"), common);
+      }
       return send(response, 404, "text/plain; charset=utf-8", "not found", common);
     } catch (error) {
       return send(response, 500, "text/plain; charset=utf-8", error.message, {});
@@ -3134,6 +3599,9 @@ function launchChrome(executable, profile) {
     `--user-data-dir=${profile}`,
     `--disable-extensions-except=${EXTENSION_DIR}`,
     `--load-extension=${EXTENSION_DIR}`,
+    // The site adapters are gated by page hostname; the fixture server answers
+    // for these names on loopback (ports stay explicit in every fixture URL).
+    `--host-resolver-rules=${SITE_FIXTURE_HOST_RULES}`,
     "--no-first-run",
     "--no-default-browser-check",
     "--disable-background-networking",
@@ -3282,35 +3750,6 @@ class CdpClient {
     this.rejectPending(new Error("CDP client closed"));
     try { this.socket?.close(); } catch { /* Already closed. */ }
   }
-}
-
-function resolveE2eSourceCommit() {
-  const probe = spawnSync("git", ["-C", ROOT, "rev-parse", "--is-inside-work-tree"], { encoding: "utf8" });
-  if (probe.error) throw new Error(`git is required to identify E2E evidence: ${probe.error.message}`);
-  if (probe.status !== 0) {
-    const details = `${probe.stderr || ""}${probe.stdout || ""}`.trim();
-    if (probe.status === 128 && !fs.existsSync(path.join(ROOT, ".git"))) {
-      return "not-a-git-repository";
-    }
-    throw new Error(`failed to identify the E2E Git worktree: ${details || `exit ${probe.status}`}`);
-  }
-
-  const status = spawnSync(
-    "git",
-    ["-C", ROOT, "status", "--porcelain", "--untracked-files=all"],
-    { encoding: "utf8" }
-  );
-  if (status.error) throw new Error(`failed to read E2E worktree status: ${status.error.message}`);
-  if (status.status !== 0) throw new Error(`failed to read E2E worktree status: ${(status.stderr || "").trim() || `exit ${status.status}`}`);
-  if (status.stdout.trim()) return "uncommitted";
-
-  const revision = spawnSync("git", ["-C", ROOT, "rev-parse", "--short=12", "HEAD"], { encoding: "utf8" });
-  if (revision.error) throw new Error(`failed to identify the E2E commit: ${revision.error.message}`);
-  const commit = revision.stdout.trim();
-  if (revision.status !== 0 || !/^[a-f0-9]{12}$/i.test(commit)) {
-    throw new Error(`failed to identify the E2E commit: ${(revision.stderr || "").trim() || commit || `exit ${revision.status}`}`);
-  }
-  return commit;
 }
 
 function resolveManifestMessage(value, messages) {

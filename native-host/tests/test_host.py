@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import http.server
 import importlib.util
 import ipaddress
@@ -977,13 +978,20 @@ class HostTests(unittest.TestCase):
                 self.assertTrue(message["capabilities"]["ffmpeg"]["localProcessing"])
                 self.assertFalse(message["capabilities"]["ffmpeg"]["networkInput"])
                 self.assertTrue(message["capabilities"]["ffmpeg"]["networkDisabled"])
-                self.assertFalse(message["capabilities"]["ytdlp"]["available"])
+                self.assertTrue(message["capabilities"]["ytdlp"]["available"])
                 self.assertTrue(message["capabilities"]["ytdlp"]["installed"])
-                self.assertTrue(message["capabilities"]["ytdlp"]["networkDisabled"])
-                self.assertIsNone(native.ytdlp)
+                self.assertFalse(message["capabilities"]["ytdlp"]["networkDisabled"])
+                self.assertEqual(message["capabilities"]["ytdlp"]["broker"], host.EXTERNAL_TOOL_BROKER_CAPABILITY)
+                self.assertEqual(native.ytdlp, "/fixture/yt-dlp")
                 self.assertEqual(message["capabilities"]["dashPlanner"], "static-v1")
                 self.assertEqual(message["capabilities"]["dashPair"], "direct-v1")
-                self.assertEqual(message["capabilities"]["externalNetworkProcesses"], "disabled")
+                self.assertEqual(message["capabilities"]["externalNetworkProcesses"], host.EXTERNAL_TOOL_BROKER_CAPABILITY)
+                # A probe that found no usable yt-dlp keeps the adapter closed.
+                missing = host.YtDlpCapabilities(probe_error="yt-dlp was not found")
+                self.assertFalse(missing.available)
+                self.assertTrue(missing.as_dict()["networkDisabled"])
+                broken = host.YtDlpCapabilities(path="/fixture/yt-dlp", probe_error="version probe exited 1")
+                self.assertFalse(broken.available)
                 self.assertEqual(message["protocolVersion"], host.NATIVE_PROTOCOL_VERSION)
                 self.assertEqual(message["capabilityProfileVersion"], host.CAPABILITY_PROFILE_VERSION)
             finally:
@@ -2463,7 +2471,9 @@ class HostTests(unittest.TestCase):
                     progress,
                     "/fixture/ffmpeg",
                 )
-            with self.assertRaisesRegex(host.DownloadError, "yt-dlp 直接联网.*pinned broker"):
+            # yt-dlp is brokered rather than blocked, but without an installed
+            # executable the job still fails before any process starts.
+            with self.assertRaisesRegex(host.DownloadError, "yt-dlp is not installed"):
                 host.youtube_download(
                     "https://video.example/watch?v=fixture",
                     target,
@@ -2471,7 +2481,7 @@ class HostTests(unittest.TestCase):
                     False,
                     threading.Event(),
                     progress,
-                    "/fixture/yt-dlp",
+                    None,
                 )
         spawn.assert_not_called()
 
@@ -3153,3 +3163,360 @@ class OutputAndFileActionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PreloadedManifestTests(unittest.TestCase):
+    """Playlists the extension fetched with the browser session (The Economist Insider)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.server = LoopbackServer(("127.0.0.1", 0), FixtureHandler)
+        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
+        cls.thread.start()
+        cls.base = f"http://127.0.0.1:{cls.server.server_port}"
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.server.server_close()
+
+    def setUp(self):
+        FixtureHandler.reset()
+        self.network_token = host.set_current_network_policy(host.NetworkPolicy(allow_private_network_media=True))
+        self.addCleanup(host.reset_current_network_policy, self.network_token)
+
+    def test_preloaded_playlists_replace_only_their_own_fetch(self):
+        master_url = f"{self.base}/video-api/playback/hls.m3u8?u=master-token"
+        media_url = f"{self.base}/video-api/playback/hls.m3u8?u=media-token&t=m"
+        audio_url = f"{self.base}/aes/../hls/audio.m3u8"
+        with self.assertRaisesRegex(host.DownloadError, "not on the media origin"):
+            host.preloaded_manifests({"https://other.example/x.m3u8": "#EXTM3U\n"}, master_url)
+        with self.assertRaisesRegex(host.DownloadError, "not an HLS playlist"):
+            host.preloaded_manifests({master_url: "<html>"}, master_url)
+        with self.assertRaisesRegex(host.DownloadError, "Too many"):
+            host.preloaded_manifests({f"{self.base}/{index}.m3u8": "#EXTM3U" for index in range(5)}, master_url)
+        self.assertEqual(host.preloaded_manifests(None, master_url), {})
+        preloaded = host.preloaded_manifests({master_url: "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\n" + media_url + "\n", media_url: "#EXTM3U\n#EXTINF:4,\nseg.ts\n#EXT-X-ENDLIST\n"}, master_url)
+        self.assertEqual(sorted(preloaded), sorted([master_url, media_url]))
+        token = host._PRELOADED_MANIFESTS.set(preloaded)
+        try:
+            fetched = host.fetch_manifest(master_url, {"Referer": f"{self.base}/watch"}, threading.Event())
+            self.assertIn("#EXT-X-STREAM-INF", fetched.text)
+            self.assertEqual(fetched.final_url, master_url)
+            self.assertEqual(fetched.request_headers["referer"], f"{self.base}/watch")
+            self.assertEqual([path for path, _range in FixtureHandler.request_log if "playback" in path], [], "a preloaded address is never fetched")
+            playlist, text, master, selected = host.select_hls_media(master_url, {}, media_url, threading.Event())
+            self.assertIsNotNone(master)
+            self.assertEqual(selected["url"], media_url)
+            self.assertEqual([segment.url for segment in playlist.segments], [f"{self.base}/video-api/playback/seg.ts"])
+            with mock.patch.object(host, "_manifest_fetch_bounded", side_effect=AssertionError("network fetch for a preloaded address")):
+                again = host.fetch_manifest(media_url, {}, threading.Event())
+                self.assertIn("#EXTINF", again.text)
+            # Anything the text names outside the preloaded set still goes to the network.
+            live = host.fetch_manifest(f"{self.base}/aes/index.m3u8", {}, threading.Event())
+            self.assertIn("#EXT-X-KEY", live.text)
+        finally:
+            host._PRELOADED_MANIFESTS.reset(token)
+        self.assertEqual(host._PRELOADED_MANIFESTS.get(), {}, "the preload is scoped to the job")
+        # The policy gate still applies to a preloaded address.
+        public_only = host.set_current_network_policy(host.NetworkPolicy(allow_private_network_media=False))
+        try:
+            token = host._PRELOADED_MANIFESTS.set(preloaded)
+            try:
+                with self.assertRaises(host.NetworkPolicyError):
+                    host.fetch_manifest(master_url, {}, threading.Event())
+            finally:
+                host._PRELOADED_MANIFESTS.reset(token)
+        finally:
+            host.reset_current_network_policy(public_only)
+
+
+FAKE_YTDLP = r"""#!/usr/bin/env python3
+import base64, json, os, socket, sys, time, urllib.parse
+argv = sys.argv[1:]
+log = os.environ.get("FAKE_YTDLP_LOG") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "argv.json")
+with open(log, "w", encoding="utf-8") as handle:
+    json.dump({"argv": argv, "env": dict(os.environ), "cwd": os.getcwd()}, handle)
+if argv == ["--version"]:
+    print("2026.08.19")
+    sys.exit(0)
+mode = os.environ.get("FAKE_YTDLP_MODE") or os.path.basename(os.path.dirname(os.path.abspath(__file__))).split("-")[-1]
+url = argv[-1]
+proxy = urllib.parse.urlsplit(argv[argv.index("--proxy") + 1])
+
+def through_broker(path):
+    target = urllib.parse.urlsplit(url)
+    sock = socket.create_connection((proxy.hostname, proxy.port), 10)
+    credential = base64.b64encode(f"{proxy.username}:{proxy.password}".encode()).decode()
+    sock.sendall(f"CONNECT {target.hostname}:{target.port} HTTP/1.1\r\nHost: {target.hostname}:{target.port}\r\nProxy-Authorization: Basic {credential}\r\n\r\n".encode())
+    head = b""
+    while b"\r\n\r\n" not in head:
+        chunk = sock.recv(4096)
+        if not chunk:
+            raise SystemExit("broker closed the CONNECT")
+        head += chunk
+    status = head.split(b"\r\n", 1)[0]
+    if b" 200 " not in status:
+        sys.stderr.write("broker refused: " + status.decode() + "\n")
+        sys.exit(7)
+    sock.sendall(f"GET {path} HTTP/1.1\r\nHost: {target.hostname}:{target.port}\r\nConnection: close\r\n\r\n".encode())
+    body = b""
+    while True:
+        chunk = sock.recv(65536)
+        if not chunk:
+            break
+        body += chunk
+    sock.close()
+    header, _, payload = body.partition(b"\r\n\r\n")
+    return payload
+
+if "-J" in argv:
+    through_broker(urllib.parse.urlsplit(url).path)
+    print(json.dumps({
+        "title": "Fixture Clip",
+        "duration": 95.4,
+        "is_live": False,
+        "formats": [
+            {"format_id": "140", "ext": "m4a", "vcodec": "none", "acodec": "mp4a.40.2", "tbr": 129},
+            {"format_id": "134", "ext": "mp4", "height": 360, "width": 640, "vcodec": "avc1.4d401e", "acodec": "none", "tbr": 400},
+            {"format_id": "136", "ext": "mp4", "height": 720, "width": 1280, "vcodec": "avc1.4d401f", "acodec": "none", "tbr": 1500},
+            {"format_id": "247", "ext": "webm", "height": 720, "width": 1280, "vcodec": "vp9", "acodec": "none", "tbr": 1200},
+            {"format_id": "137", "ext": "mp4", "height": 1080, "width": 1920, "vcodec": "avc1.640028", "acodec": "none", "tbr": 2800},
+            {"format_id": "22", "ext": "mp4", "height": 720, "width": 1280, "vcodec": "avc1.64001F", "acodec": "mp4a.40.2", "tbr": 1600, "url": "https://rr1.googlevideo.com/videoplayback?sig=SECRET"}
+        ]
+    }))
+    sys.exit(0)
+if mode == "fail":
+    sys.stderr.write("ERROR: [youtube] fixture: Video unavailable. This video is private\n")
+    sys.exit(1)
+if mode == "hang":
+    time.sleep(30)
+    sys.exit(0)
+payload = through_broker(urllib.parse.urlsplit(url).path)
+template = argv[argv.index("-o") + 1]
+print("FLUXCATCH\tdownloading\t512\t%d\tNA\t2048\tNA\tNA" % len(payload), flush=True)
+time.sleep(0.35)
+print("FLUXCATCH\tdownloading\t%d\t%d\tNA\t4096\t3\t8" % (len(payload) - 1, len(payload)), flush=True)
+print("FLUXCATCH\tfinished\t%d\t%d\tNA\tNA\tNA\tNA" % (len(payload), len(payload)), flush=True)
+print("FLUXCATCH_PP\tstarted\tMerger", flush=True)
+ext = "mp3" if "-x" in argv else argv[argv.index("--merge-output-format") + 1]
+with open(template.replace("%(ext)s", ext), "wb") as handle:
+    handle.write(payload)
+print("FLUXCATCH_PP\tfinished\tMerger", flush=True)
+"""
+
+
+class ExternalToolTests(unittest.TestCase):
+    """The loopback broker and the yt-dlp adapter built on it."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.server = LoopbackServer(("127.0.0.1", 0), FixtureHandler)
+        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
+        cls.thread.start()
+        cls.port = cls.server.server_port
+        cls.base = f"http://127.0.0.1:{cls.port}"
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.server.server_close()
+
+    def setUp(self):
+        FixtureHandler.reset()
+        FixtureHandler.dynamic_routes = {"/clip.mp4": {"body": b"fixture clip bytes " * 2048, "mime": "video/mp4"}}
+        self.addCleanup(setattr, FixtureHandler, "dynamic_routes", {})
+        patcher = mock.patch.object(host, "EXTERNAL_TOOL_BROKER_PORTS", frozenset({80, 443, self.port}))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.policy = host.NetworkPolicy(allow_private_network_media=True)
+        self.network_token = host.set_current_network_policy(self.policy)
+        self.addCleanup(host.reset_current_network_policy, self.network_token)
+
+    def write_fake_ytdlp(self, root, mode="ok"):
+        directory = pathlib.Path(root) / f"fake-ytdlp-{mode}"
+        directory.mkdir()
+        script = directory / "yt-dlp"
+        script.write_text(FAKE_YTDLP, "utf-8")
+        script.chmod(0o700)
+        return script, directory / "argv.json"
+
+    @staticmethod
+    def connect(broker, target, *, auth=True, method="CONNECT"):
+        sock = socket.create_connection(("127.0.0.1", broker.port), 5)
+        credential = base64.b64encode(f"{broker.username}:{broker.token}".encode()).decode()
+        request = f"{method} {target} HTTP/1.1\r\nHost: {target}\r\n"
+        if auth:
+            request += f"Proxy-Authorization: Basic {credential}\r\n"
+        sock.sendall((request + "\r\n").encode())
+        head = b""
+        while b"\r\n\r\n" not in head:
+            chunk = sock.recv(4096)
+            if not chunk:
+                break
+            head += chunk
+        return sock, head.split(b"\r\n", 1)[0].decode()
+
+    def test_broker_requires_credentials_policy_and_connect(self):
+        broker = host.ExternalToolBroker(self.policy)
+        self.addCleanup(broker.close)
+        self.assertRegex(broker.proxy_url, rf"^http://fluxcatch:[A-Za-z0-9_-]+@127\.0\.0\.1:{broker.port}$")
+        sock, status = self.connect(broker, f"127.0.0.1:{self.port}", auth=False)
+        sock.close()
+        self.assertIn("407", status)
+        sock, status = self.connect(broker, f"127.0.0.1:{self.port}", method="GET")
+        sock.close()
+        self.assertIn("405", status)
+        sock, status = self.connect(broker, "127.0.0.1:9")
+        sock.close()
+        self.assertIn("403", status, "a port outside the allowlist is refused")
+        sock, status = self.connect(broker, "169.254.169.254:443")
+        sock.close()
+        self.assertIn("403", status, "metadata addresses fail closed even with private media enabled")
+        self.assertTrue(broker.rejections and "169.254.169.254" in broker.rejections[-1])
+        public_only = host.ExternalToolBroker(host.NetworkPolicy(allow_private_network_media=False))
+        self.addCleanup(public_only.close)
+        sock, status = self.connect(public_only, f"127.0.0.1:{self.port}")
+        sock.close()
+        self.assertIn("403", status, "loopback stays blocked without the private-network opt-in")
+        sock, status = self.connect(broker, f"127.0.0.1:{self.port}")
+        self.assertIn("200", status)
+        sock.sendall(f"GET /clip.mp4 HTTP/1.1\r\nHost: 127.0.0.1:{self.port}\r\nConnection: close\r\n\r\n".encode())
+        body = b""
+        while True:
+            chunk = sock.recv(65536)
+            if not chunk:
+                break
+            body += chunk
+        sock.close()
+        self.assertIn(b"HTTP/1.1 200", body)
+        self.assertTrue(body.endswith(b"fixture clip bytes "), "bytes relay through the tunnel unchanged")
+        self.assertEqual(broker.tunnels, 1)
+        self.assertIn((" /clip.mp4", ""), [(" " + path, rng) for path, rng in FixtureHandler.request_log])
+        broker.close()
+        with self.assertRaises(OSError):
+            socket.create_connection(("127.0.0.1", broker.port), 1)
+
+    def test_youtube_download_runs_ytdlp_through_the_broker_and_publishes_the_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            script, log = self.write_fake_ytdlp(root)
+            target = root / "Fixture Clip.mp4"
+            events = []
+            progress = host.Progress(events.append, "job", target.name)
+            with mock.patch.dict(os.environ, {"https_proxy": "http://127.0.0.1:1", "FLUXCATCH_DISABLE_SYSTEM_PROXY": "1"}):
+                result = host.youtube_download(
+                    f"{self.base}/clip.mp4",
+                    target,
+                    "mp4",
+                    False,
+                    threading.Event(),
+                    progress,
+                    str(script),
+                    ffmpeg="/fixture/ffmpeg",
+                    max_height=720,
+                    concurrent_fragments=3,
+                    work_root=root,
+                )
+            self.assertEqual(result, target)
+            self.assertEqual(result.read_bytes(), b"fixture clip bytes " * 2048)
+            self.assertEqual(result.stat().st_mode & 0o777, 0o600)
+            self.assertEqual([entry.name for entry in root.iterdir() if entry.name.startswith(host.YTDLP_WORK_PREFIX)], [], "the work directory is removed")
+            recorded = json.loads(log.read_text("utf-8"))
+            argv = recorded["argv"]
+            self.assertEqual(argv[-1], f"{self.base}/clip.mp4")
+            self.assertEqual(argv[argv.index("--merge-output-format") + 1], "mp4")
+            self.assertEqual(argv[argv.index("-f") + 1], "bv*[height<=720]+ba/b[height<=720]")
+            self.assertEqual(argv[argv.index("--concurrent-fragments") + 1], "3")
+            self.assertEqual(argv[argv.index("--ffmpeg-location") + 1], "/fixture/ffmpeg")
+            self.assertIn("--ignore-config", argv)
+            self.assertIn("--no-playlist", argv)
+            self.assertNotIn("https_proxy", recorded["env"], "inherited proxy variables never reach the tool")
+            self.assertTrue(os.path.realpath(recorded["cwd"]).startswith(os.path.realpath(str(root))))
+            self.assertTrue(recorded["env"]["PATH"].startswith(str(script.parent.resolve())))
+            statuses = [event.get("status") for event in events]
+            self.assertIn("starting", statuses)
+            self.assertIn("downloading", statuses)
+            self.assertIn("remuxing", statuses)
+            downloading = [event for event in events if event.get("status") == "downloading"]
+            self.assertTrue(any("分片 3/8" in event.get("message", "") for event in downloading))
+            self.assertTrue(all(event["total"] == len(b"fixture clip bytes " * 2048) for event in downloading))
+            self.assertEqual(host.ytdlp_format_args("mp4", True), ["-f", "bestaudio/best", "-x", "--audio-format", "mp3", "--audio-quality", "2"])
+            self.assertEqual(host.ytdlp_format_args("webm", False)[1], "bv*+ba/b")
+            self.assertEqual(host.ytdlp_format_args("flv", False)[-3], "mp4", "unknown containers fall back to MP4")
+
+    def test_youtube_download_reports_tool_failures_and_cancellation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            script, _log = self.write_fake_ytdlp(root, "fail")
+            target = root / "broken.mp4"
+            progress = host.Progress(lambda _event: None, "job", target.name)
+            with self.assertRaisesRegex(host.DownloadError, r"yt-dlp failed \(1\): .*Video unavailable"):
+                host.youtube_download(f"{self.base}/clip.mp4", target, "mp4", False, threading.Event(), progress, str(script), work_root=root)
+            self.assertFalse(target.exists())
+            self.assertEqual([entry.name for entry in root.iterdir() if entry.name.startswith(host.YTDLP_WORK_PREFIX)], [])
+
+            script, _log = self.write_fake_ytdlp(root, "hang")
+            cancel = threading.Event()
+            timer = threading.Timer(0.6, cancel.set)
+            timer.start()
+            started = time.monotonic()
+            with self.assertRaises(host.Cancelled):
+                host.youtube_download(f"{self.base}/clip.mp4", root / "hung.mp4", "mp4", False, cancel, progress, str(script), work_root=root)
+            timer.cancel()
+            self.assertLess(time.monotonic() - started, 10, "cancellation terminates the tool's process group promptly")
+
+    def test_youtube_inspect_and_host_message_summarize_the_quality_ladder(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            script, log = self.write_fake_ytdlp(root)
+            summary = host.youtube_inspect(f"{self.base}/clip.mp4", str(script), "/fixture/ffmpeg")
+            self.assertEqual(summary["title"], "Fixture Clip")
+            self.assertEqual(summary["duration"], 95)
+            self.assertFalse(summary["live"])
+            self.assertFalse(summary["audioOnly"])
+            self.assertEqual([variant["height"] for variant in summary["variants"]], [1080, 720, 360])
+            self.assertEqual(summary["variants"][1]["bandwidth"], 1_600_000, "the best bitrate per height wins")
+            self.assertNotIn("url", json.dumps(summary))
+            self.assertNotIn("SECRET", json.dumps(summary))
+            argv = json.loads(log.read_text("utf-8"))["argv"]
+            self.assertIn("-J", argv)
+            self.assertIn("--skip-download", argv)
+
+            with self.assertRaisesRegex(host.DownloadError, "yt-dlp is not installed"):
+                host.youtube_inspect(f"{self.base}/clip.mp4", None)
+            self.assertEqual(host.summarize_ytdlp_info({"title": "Audio", "formats": [{"vcodec": "none", "acodec": "opus", "height": None}]})["audioOnly"], True)
+            with self.assertRaises(host.DownloadError):
+                host.summarize_ytdlp_info(None)
+
+            with mock.patch.dict(os.environ, {"FLUXCATCH_DOWNLOAD_DIR": str(root), "FLUXCATCH_YTDLP": str(script)}):
+                native = host.Host()
+                try:
+                    self.assertEqual(native.ytdlp, str(script.resolve()))
+                    self.assertTrue(native.ytdlp_capabilities.available)
+                    self.assertEqual(native.ytdlp_capabilities.version, "2026.08.19")
+                    done = threading.Event()
+                    replies = []
+
+                    def capture(message):
+                        replies.append(message)
+                        done.set()
+
+                    with mock.patch.object(native, "send", side_effect=capture):
+                        native.handle({"type": "inspect_youtube", "requestId": "yt-1", "url": f"{self.base}/clip.mp4", "options": {"allowPrivateNetworkMedia": True}})
+                        self.assertTrue(done.wait(20))
+                    reply = replies[-1]
+                    self.assertEqual(reply["type"], "inspect_youtube_result")
+                    self.assertEqual(reply["requestId"], "yt-1")
+                    self.assertTrue(reply["ok"])
+                    self.assertEqual(reply["title"], "Fixture Clip")
+                    self.assertEqual([variant["height"] for variant in reply["variants"]], [1080, 720, 360])
+
+                    done.clear()
+                    with mock.patch.object(native, "send", side_effect=capture):
+                        native.handle({"type": "inspect_youtube", "requestId": "yt-2", "url": f"{self.base}/clip.mp4"})
+                        self.assertTrue(done.wait(20))
+                    self.assertFalse(replies[-1]["ok"], "without the private-network opt-in the loopback fixture is refused")
+                    self.assertIn("yt-dlp failed (7)", replies[-1]["error"])
+                finally:
+                    native.close()

@@ -210,9 +210,9 @@ const GENERIC_STREAM_MAX_VIDEOS_PER_TAB = 8;
 const GENERIC_STREAM_PUBLISH_DELAY_MS = 300;
 const DASH_PAIR_SELECTOR_ORIGIN = "https://fluxcatch.invalid";
 const MANIFEST_SELECTOR_ORIGIN = "https://fluxcatch.invalid";
-// 0.2.5 has no pinned broker for external tools. Keep the adapter source for
-// the future GitHub build, but compile every setting/candidate/download gate
-// closed regardless of what an older or replacement native host reports.
+// External tools (yt-dlp) run only behind the engine's loopback broker, which
+// the host reports as capabilities.ytdlp.networkDisabled === false; the
+// download gate re-checks that answer on every dispatch (ytdlpNetworkAllowed).
 const SENSITIVE_REQUEST_HEADERS = new Set(["authorization", "cookie", "origin", "referer"]);
 const UI_PORT_NAMES = new Set(["fluxcatch-popup", "fluxcatch-sidepanel", "fluxcatch-downloads"]);
 const JOB_STATUSES = new Set(["queued", "starting", "downloading", "remuxing", "pausing", "paused", "completed", "failed", "cancelled"]);
@@ -236,9 +236,13 @@ const PAGE_PREVIEW_PRIORITIES = new Map([
 const POLICY_BLOCKED_DOMAINS = Object.freeze(["youtube.com", "youtu.be", "googlevideo.com"]);
 // Minimal site-adapter registry: page URL matchers give detected media their
 // site label, and tab completion fans out to per-site discovery. Bilibili
-// keeps its dedicated DASH machinery; YouTube is an experimental opt-in that
-// delegates the actual transfer to the local yt-dlp engine via the native
-// host; Instagram/X reuse the generic content-script + webRequest pipeline.
+// keeps its dedicated DASH machinery; YouTube publishes the watch page itself
+// as the candidate and delegates the transfer to yt-dlp behind the engine's
+// broker; Instagram/X reuse the generic content-script + webRequest pipeline;
+// the adult-site adapters (`ladder: true`) read the quality ladder or the
+// playlist address the page embeds in its own scripts (lib/site-extract.js)
+// and hand every transfer to the pinned native client. Optional ports only
+// matter to the loopback E2E fixtures, which map these hosts to 127.0.0.1.
 const SITE_ADAPTERS = Object.freeze([
   {
     id: "bilibili",
@@ -249,8 +253,7 @@ const SITE_ADAPTERS = Object.freeze([
   {
     id: "youtube",
     label: "YouTube",
-    experimental: true,
-    pagePattern: /^https?:\/\/(?:www\.|m\.|music\.)?youtube\.com\/watch\b/i
+    pagePattern: /^https?:\/\/(?:www\.|m\.|music\.)?youtube\.com(?::\d+)?\/watch\b/i
   },
   {
     id: "instagram",
@@ -265,6 +268,33 @@ const SITE_ADAPTERS = Object.freeze([
     pagePattern: /^https?:\/\/(?:www\.|mobile\.)?(?:twitter|x)\.com\/[^/?#]+\/status\/\d+/i,
     mediaHostPattern: /(?:^|\.)twimg\.com$/i,
     imageHostSuffixes: ["twimg.com"]
+  },
+  {
+    id: "pornhub",
+    label: "Pornhub",
+    ladder: true,
+    pagePattern: /^https?:\/\/(?:[a-z]{2,3}\.)?pornhub(?:premium)?\.(?:com|org|net)(?::\d+)?\/view_video\.php\?/i
+  },
+  {
+    id: "missav",
+    label: "MissAV",
+    ladder: true,
+    pagePattern: /^https?:\/\/(?:www\.)?(?:missav|thisav)\d*\.(?:ws|com|ai|live)(?::\d+)?\/(?:dm\d+\/)?(?:[a-z]{2}(?:-[a-z]{2})?\/)?[a-z0-9][a-z0-9-]{2,}(?:[?#]|$)/i
+  },
+  {
+    id: "jable",
+    label: "Jable",
+    ladder: true,
+    pagePattern: /^https?:\/\/(?:www\.)?jable\.tv(?::\d+)?\/videos\/[^/?#]+/i
+  },
+  {
+    // The Economist Insider: subscriber video. The site's own episode API
+    // (same-origin, session-authenticated) names a Brightcove HLS master that
+    // the site proxies; see discoverEconomistInsider.
+    id: "economist",
+    label: "The Economist",
+    api: true,
+    pagePattern: /^https?:\/\/(?:www\.)?economist\.com(?::\d+)?\/insider\/[^/?#]+\/[^/?#]+/i
   }
 ]);
 
@@ -346,7 +376,6 @@ const DEFAULT_SETTINGS = {
   useNativeForDirect: false,
   minimumBytes: 500 * 1024,
   liveDuration: 0,
-  youtubeEnabled: false,
   autoEnrichSiteQuality: true,
   allowPrivateNetworkMedia: false,
   blockedDomains: [],
@@ -645,14 +674,19 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   // away. The query is the same read-only, cookie-scoped playurl lookup the
   // playback path uses (rate-limited by its TTL/cooldowns), so members see
   // their full ladder — up to 4K — before the first segment request lands.
-  if (changeInfo.status === "complete") void triggerBilibiliPageCompleteDiscovery(tabId);
+  if (changeInfo.status === "complete") {
+    void triggerBilibiliPageCompleteDiscovery(tabId);
+    // The YouTube row is page identity, no network: publish it on completion
+    // so the badge lights before any surface reads the tab.
+    void maybeAddYouTubeCandidate(tabId);
+  }
 });
 
 async function triggerBilibiliPageCompleteDiscovery(tabId) {
   try {
     await sessionReady;
     const tab = await chrome.tabs.get(tabId);
-    if (!isBilibiliVideoPage(tab?.url)) return;
+    if (!isBilibiliVideoPage(tab?.url) && siteAdapterForPageUrl(tab?.url)?.api !== true) return;
     await triggerSiteDiscovery(tabId, { automatic: true, observedPlayback: false });
   } catch {
     // The tab may be gone already; discovery is best-effort.
@@ -674,7 +708,11 @@ function recoverableSiteForPage(url) {
   try {
     const page = new URL(url);
     const host = page.hostname.toLowerCase();
-    if (siteAdapterForPageUrl(page.href)?.id === "instagram") return "instagram";
+    const adapter = siteAdapterForPageUrl(page.href);
+    if (adapter?.id === "instagram") return "instagram";
+    // Ladder adapters keep their signed playlist addresses out of
+    // storage.session too; the still-open page re-supplies them.
+    if (adapter?.ladder === true) return adapter.id;
     if (page.protocol === "https:"
       && (host === "x.com" || host.endsWith(".x.com") || host === "twitter.com" || host.endsWith(".twitter.com"))) return "twitter";
   } catch { /* Non-web tabs have no site cache. */ }
@@ -695,7 +733,9 @@ async function refreshCachedSiteCandidates(tabId) {
     const current = [...(tabMedia.get(tabId)?.values() || [])];
     const alreadyRecovered = site === "instagram"
       ? current.some((item) => candidateHasSource(item, "instagram-api-response") && isTrustedInstagramBrowserDirectCandidate(item))
-      : current.some((item) => isTrustedXBrowserDirectCandidate(item));
+      : site === "twitter"
+        ? current.some((item) => isTrustedXBrowserDirectCandidate(item))
+        : current.some((item) => cleanText(item.ladderKey, 120).startsWith(`${site}:`));
     if (alreadyRecovered) return;
 
     let response;
@@ -805,7 +845,7 @@ async function handleMessage(message, sender) {
       const items = [...(tabMedia.get(tabId)?.values() || [])]
         .filter((item) => item.kind !== "segment" && !item.mergedInto && !item.variantGroupInto && !item.suppressedAs)
         .filter((item) => item.kind !== "dash_pair" || isFreshBilibiliCandidate(item))
-        .filter((item) => item.kind !== "youtube" || settings.youtubeEnabled)
+        .filter((item) => item.kind !== "youtube" || youtubeAdapterEnabled())
         .sort((a, b) => candidateScore(b) - candidateScore(a) || b.lastSeen - a.lastSeen)
         .map(withoutManifestText);
       return { items, hostStatus: hostStatusForUi(hostStatus), settings };
@@ -853,6 +893,7 @@ async function handleMessage(message, sender) {
       const tabId = validTabId(message.tabId);
       try { await chrome.tabs.sendMessage(tabId, { type: "REQUEST_SCAN" }); } catch { /* restricted page */ }
       await discoverBilibiliDash(tabId, true);
+      await discoverEconomistInsider(tabId, { force: true });
       await maybeAddYouTubeCandidate(tabId);
       return {};
     }
@@ -870,6 +911,7 @@ async function handleMessage(message, sender) {
       const tabId = validTabId(message.tabId);
       const candidate = requireTabCandidate(tabId, message.candidate);
       if (candidate.kind === "dash_pair") return { probe: dashPairProbeForUi(candidate) };
+      if (candidate.kind === "youtube") return { probe: await probeYoutubeCandidate(tabId, candidate) };
       const settings = await getSettings();
       let inspection = null;
       try {
@@ -1001,13 +1043,7 @@ async function handleMessage(message, sender) {
         })
       };
     case "SAVE_SETTINGS": {
-      const requested = normalizeSettings(message.settings);
-      const settings = {
-        ...requested,
-        // The 0.2.5 build gate is closed. A caller cannot persist the
-        // experimental switch by forging a capability response.
-        youtubeEnabled: requested.youtubeEnabled && ytdlpNetworkAllowed()
-      };
+      const settings = normalizeSettings(message.settings);
       await chrome.storage.local.set({ settings });
       return { settings };
     }
@@ -1225,6 +1261,7 @@ async function triggerSiteDiscovery(tabId, {
         expectedTabToken,
         observedMediaUrl: observedPlayback ? observedMediaUrl : null
       });
+      await discoverEconomistInsider(tabId, { automatic });
     }
     await maybeAddYouTubeCandidate(tabId);
   } catch {
@@ -1241,18 +1278,18 @@ async function refreshTabBadge(tabId) {
   }
 }
 
-// The experimental YouTube adapter publishes one page candidate per watch URL.
-// The candidate only exists while the user keeps the toggle enabled in
-// settings; turning it off withdraws the candidate everywhere.
+// The YouTube adapter publishes one page candidate per watch URL. The row is
+// visible whenever the build carries the adapter; whether the engine can act
+// on it (yt-dlp found, broker ready) is answered at probe and download time
+// through the job-failure codes, never by hiding the row.
 async function maybeAddYouTubeCandidate(tabId) {
   if (!Number.isInteger(tabId) || tabId < 0) return;
   const routeGeneration = currentTabGeneration(tabId);
   const commitGuard = () => tabGenerations.get(tabId) === routeGeneration;
   let tab;
   try { tab = await chrome.tabs.get(tabId); } catch { return; }
-  const settings = await getSettings();
   if (!commitGuard()) return;
-  const watchUrl = settings.youtubeEnabled && !ytdlpNetworkDisabled() ? youtubeWatchUrl(tab?.url) : null;
+  const watchUrl = youtubeAdapterEnabled() ? youtubeWatchUrl(tab?.url) : null;
   const map = tabMedia.get(tabId);
   if (!watchUrl) {
     if (map) await removeYouTubeCandidatesFromTab(tabId, map);
@@ -1264,7 +1301,7 @@ async function maybeAddYouTubeCandidate(tabId) {
     url: watchUrl,
     mime: "video/mp4",
     ext: "mp4",
-    title: cleanText(tab?.title, 240),
+    title: youtubeTitleFromTab(tab?.title),
     pageTitle: cleanText(tab?.title, 240),
     tabUrl: watchUrl,
     source: "site-adapter",
@@ -1298,12 +1335,12 @@ async function dropYouTubeCandidates() {
 // guest-tier 480p ceiling. Guests keep the anonymous tier because no cookie
 // is attached. Cookies only ever travel to the api.bilibili.com origin named
 // in the URL itself.
-async function fetchPublicJson(url, { credentials = "omit", timeoutMs = 3_000 } = {}) {
+async function fetchPublicJson(url, { credentials = "omit", timeoutMs = 3_000, networkScope = "public_only" } = {}) {
   const allowedUrl = requireNetworkRequest({
     url,
     purpose: "site_metadata",
     provenance: "fixed_site_api",
-    networkScope: "public_only"
+    networkScope
   });
   const controller = new AbortController();
   const timeout = Math.max(250, Math.min(3_000, Number(timeoutMs) || 3_000));
@@ -2131,7 +2168,7 @@ async function addCandidate(tabId, input, commitGuard = null) {
   const sourceFilenames = uniqueCleanTexts([
     input.suggestedFilename,
     ...(Array.isArray(old?.sourceFilenames) ? old.sourceFilenames : []),
-    old?.suggestedFilename
+    isTitleDerivedFilename(old?.suggestedFilename, old?.title) ? "" : old?.suggestedFilename
   ], 260, 20);
   const naming = candidateNaming({
     kind,
@@ -2139,6 +2176,7 @@ async function addCandidate(tabId, input, commitGuard = null) {
     url,
     inputTitle: input.title,
     previousTitle: old?.title,
+    previousTitleRank: titleRankOf(old),
     pageTitle,
     suggestedFilenames: sourceFilenames
   });
@@ -2159,6 +2197,17 @@ async function addCandidate(tabId, input, commitGuard = null) {
   if (kind === "dash_pair" && (!selectedVideo || !selectedAudio || !Number.isFinite(pairExpiresAt) || pairExpiresAt <= now)) {
     return false;
   }
+  // Adapter ladders (Pornhub, MissAV, Jable): the key groups one page's
+  // renditions; the headers are derived from the page origin, never from the
+  // page's own message.
+  // The key travels only on validated site-payload input (validateContentCandidate
+  // and the cached-site recovery), so the merged provenance may already be
+  // observed_response when the player fetched this rendition before the scan.
+  const ladderKey = kind === "hls" && input.source === "site-payload"
+    ? cleanText(input.ladderKey, 120) || old?.ladderKey || ""
+    : old?.ladderKey || "";
+  const candidateTabUrl = canonicalizeUrl(input.tabUrl) || old?.tabUrl || canonicalizeUrl(tab?.url) || "";
+  const adapterHeaders = ladderKey ? old?.adapterHeaders || adapterHeadersForPage(candidateTabUrl) : old?.adapterHeaders || null;
   const candidate = {
     id: old?.id || reusableOpaqueId(input.id),
     generation: old?.generation || routeGeneration || currentTabGeneration(tabId),
@@ -2180,6 +2229,7 @@ async function addCandidate(tabId, input, commitGuard = null) {
     duration: positive(input.duration) || old?.duration || null,
     codecs: cleanText(input.codecs, 180) || old?.codecs || "",
     title: naming.title,
+    titleRank: naming.titleRank,
     suggestedFilename: directSourceFilename || old?.suggestedFilename || naming.suggestedFilename,
     sourceFilenames,
     pageTitle,
@@ -2189,6 +2239,11 @@ async function addCandidate(tabId, input, commitGuard = null) {
     sources: [...sources],
     provenance,
     site: cleanText(input.site, 24) || old?.site || siteAdapterForMediaUrl(url)?.id || "",
+    ladderKey,
+    ladderRank: positive(input.ladderRank) || old?.ladderRank || 0,
+    adapterHeaders,
+    adapterExpiresAt: positive(input.adapterExpiresAt) || old?.adapterExpiresAt || 0,
+    youtubeInspection: old?.youtubeInspection || null,
     thumbnailUrl: preview?.thumbnailUrl || null,
     thumbnailSource: preview?.thumbnailSource || null,
     thumbnailFrameId: preview?.thumbnailFrameId ?? null,
@@ -2304,7 +2359,7 @@ function deriveCandidateProvenance(input, previous) {
   const source = cleanText(input?.source, 40);
   let next = CANDIDATE_PROVENANCES.includes(input?.provenance) ? input.provenance : "";
   if (source === "webRequest") next = "observed_response";
-  else if (["bilibili-api", "bilibili-dash"].includes(source) && next !== "observed_response") next = "fixed_site_api";
+  else if (["bilibili-api", "bilibili-dash", "economist-api"].includes(source) && next !== "observed_response") next = "fixed_site_api";
   else if (source === "site-adapter") next = "site_payload";
   else if (CONTENT_SOURCES.has(source)) next = provenanceForContentSource(source);
   if (!next) next = "user_supplied";
@@ -2363,6 +2418,13 @@ async function validateContentCandidate(data, sender) {
   const tab = sender.tab;
   const manifestText = typeof data.manifestText === "string" && data.manifestText.length <= 1_500_000 ? data.manifestText : null;
   const source = cleanText(data.source, 40);
+  // Ladder membership is claimed only by the top-frame payload scanner of a
+  // page an adapter owns, and the key must name that adapter.
+  const ladderAdapter = source === "site-payload" && sender?.frameId === 0 ? siteAdapterForPageUrl(tab?.url) : null;
+  const ladderSite = ladderAdapter?.ladder === true ? ladderAdapter.id : null;
+  const ladderKey = ladderSite && typeof data.ladderKey === "string" && data.ladderKey.startsWith(`${ladderSite}:`)
+    ? cleanText(data.ladderKey, 120)
+    : "";
   if (source === "x-api-response"
     && (!isTrustedXProgressiveCandidate(url, source, sender) || normalizeMime(data.mime) !== "video/mp4")) return null;
   if (source === "instagram-api-response"
@@ -2385,6 +2447,9 @@ async function validateContentCandidate(data, sender) {
     tabUrl: canonicalizeUrl(tab?.url) || canonicalizeUrl(sender.url) || "",
     source: CONTENT_SOURCES.has(source) ? source : "content",
     provenance: provenanceForContentSource(source),
+    site: ladderKey ? ladderSite : "",
+    ladderKey,
+    ladderRank: ladderKey ? positive(data.ladderRank) : null,
     manifestText,
     ...(preview || {})
   };
@@ -2550,21 +2615,56 @@ function readableTitle(value) {
   return title;
 }
 
-function candidateNaming({ kind, ext, url, inputTitle, previousTitle, pageTitle, suggestedFilenames = [] }) {
+// Where a candidate's title came from, best first. A later observation may
+// carry weaker naming (a webRequest response has no title at all); the title
+// it already has is kept unless the new input ranks at least as well.
+const TITLE_RANK_INPUT = 0;
+const TITLE_RANK_FILENAME = 1;
+const TITLE_RANK_PAGE = 2;
+const TITLE_RANK_URL = 3;
+const TITLE_RANK_NONE = 4;
+
+function titleRankOf(candidate, fallback = TITLE_RANK_NONE) {
+  const rank = Number(candidate?.titleRank);
+  return Number.isInteger(rank) && rank >= TITLE_RANK_INPUT && rank <= TITLE_RANK_NONE ? rank : fallback;
+}
+
+function candidateNaming({ kind, ext, url, inputTitle, previousTitle, previousTitleRank = TITLE_RANK_NONE, pageTitle, suggestedFilenames = [] }) {
   let urlName = "";
   try { urlName = new URL(url).pathname.split("/").filter(Boolean).pop() || ""; } catch { /* validated earlier */ }
-  const title = [
-    inputTitle,
-    ...suggestedFilenames,
-    pageTitle,
-    previousTitle,
-    urlName
-  ].map(readableTitle).find(Boolean) || workerText("worker.untitledMedia");
+  const kept = readableTitle(previousTitle);
+  const ranked = [
+    [TITLE_RANK_INPUT, [inputTitle]],
+    [TITLE_RANK_FILENAME, suggestedFilenames],
+    [TITLE_RANK_PAGE, [pageTitle]],
+    [TITLE_RANK_URL, [urlName]]
+  ];
+  let title = "";
+  let titleRank = TITLE_RANK_NONE;
+  for (const [rank, values] of ranked) {
+    // A title from a better source than this tier stays; at the same tier the
+    // newest value wins (a rescanned page title, a fresh Content-Disposition).
+    if (kept && previousTitleRank < rank) { title = kept; titleRank = previousTitleRank; break; }
+    const found = values.map(readableTitle).find(Boolean);
+    if (found) { title = found; titleRank = rank; break; }
+  }
+  if (!title && kept) { title = kept; titleRank = previousTitleRank; }
+  if (!title) title = workerText("worker.untitledMedia");
   const outputExt = ["hls", "dash", "dash_pair"].includes(kind) ? "mp4" : ext || (kind === "audio" ? "m4a" : "mp4");
   return {
     title,
+    titleRank,
     suggestedFilename: `${sanitizeFilename(title)}.${outputExt}`
   };
+}
+
+// A filename the worker itself derived from a title (sanitizeFilename(title)
+// plus the container suffix) carries no naming information of its own. Feeding
+// it back into candidateNaming on the next observation would re-derive the
+// title from the filesystem-safe copy: a colon becomes "_", then a space.
+function isTitleDerivedFilename(filename, title) {
+  const stem = cleanText(title, 240);
+  return Boolean(stem) && cleanText(filename, 260).startsWith(`${sanitizeFilename(stem)}.`);
 }
 
 function directSuggestedFilename(value, kind, ext) {
@@ -2731,16 +2831,21 @@ function regroupManifestCandidates(tabId) {
     representative.lastSeen = Math.max(...members.map((item) => Number(item.lastSeen || 0)));
     representative.width = Math.max(...members.map((item) => Number(item.width || 0))) || null;
     representative.height = Math.max(...members.map((item) => Number(item.height || 0))) || null;
+    const bestNamed = [...members]
+      .filter((item) => readableTitle(item.title))
+      .sort((a, b) => titleRankOf(a) - titleRankOf(b) || Number(a.firstSeen || 0) - Number(b.firstSeen || 0))[0];
     const naming = candidateNaming({
       kind: representative.kind,
       ext: representative.ext,
       url: representative.url,
-      inputTitle: members.map((item) => item.title).find(readableTitle),
-      previousTitle: representative.title,
+      inputTitle: "",
+      previousTitle: bestNamed?.title || representative.title,
+      previousTitleRank: titleRankOf(bestNamed || representative),
       pageTitle: representative.pageTitle || members.map((item) => item.pageTitle).find(Boolean),
       suggestedFilenames: representative.sourceFilenames
     });
     representative.title = naming.title;
+    representative.titleRank = naming.titleRank;
     representative.suggestedFilename = naming.suggestedFilename;
   }
 }
@@ -2915,8 +3020,64 @@ function regroupHlsVariantGroups(tabId) {
   if (!map) return;
   const candidates = [...map.values()].filter((item) => item.kind === "hls");
   clearVariantGroupFields(candidates);
+  // Adapter ladders come first: the page already said which playlists are
+  // one video's renditions, so naming heuristics never split or merge them.
+  const claimed = new Set();
+  const ladders = new Map();
+  for (const candidate of candidates) {
+    const key = cleanText(candidate.ladderKey, 120);
+    if (!key) continue;
+    const group = ladders.get(key) || [];
+    group.push(candidate);
+    ladders.set(key, group);
+  }
+  for (const members of ladders.values()) {
+    // The rendition the player is streaming arrives through webRequest with
+    // a fresher signature on the same path; it joins its ladder instead of
+    // becoming a twin row.
+    const paths = new Set(members.map((member) => urlWithoutQuery(member.url)));
+    for (const candidate of candidates) {
+      if (!candidate.ladderKey && !claimed.has(candidate) && paths.has(urlWithoutQuery(candidate.url))) members.push(candidate);
+    }
+    const ranked = members.slice().sort((a, b) =>
+      (positive(b.height) || Number(b.ladderRank || 0)) - (positive(a.height) || Number(a.ladderRank || 0))
+      || Number(b.bandwidth || 0) - Number(a.bandwidth || 0));
+    const seenPaths = new Set();
+    const unique = ranked.filter((member) => {
+      const path = urlWithoutQuery(member.url);
+      if (seenPaths.has(path)) return false;
+      seenPaths.add(path);
+      return true;
+    });
+    // A lone playlist (MissAV's master, Jable's media playlist) is no menu:
+    // its ladder, if any, is inside the playlist for the probe to read.
+    if (unique.length < 2) continue;
+    const representative = unique[0];
+    const variants = [];
+    for (const member of unique.slice(0, MAX_HLS_GROUP_VARIANTS)) {
+      const selector = variantGroupSelector(representative, member.url);
+      if (!selector) continue;
+      variants.push({
+        id: cleanText(member.id, 64),
+        url: canonicalizeUrl(member.url),
+        selector,
+        bandwidth: Number(member.bandwidth) > 0 ? Math.max(0, Math.round(Number(member.bandwidth))) : 0,
+        width: positive(member.width),
+        height: positive(member.height) || positive(member.ladderRank) || heightFromManifestFilename(member.url),
+        duration: positive(member.duration) || 0
+      });
+    }
+    if (variants.length < 2) continue;
+    representative.variants = variants;
+    representative.audioCandidates = [];
+    for (const member of members) {
+      claimed.add(member);
+      if (member !== representative) member.variantGroupInto = representative.id;
+    }
+  }
   const buckets = new Map();
   for (const candidate of candidates) {
+    if (claimed.has(candidate)) continue;
     const directory = hlsVariantDirectoryKey(candidate.url);
     if (!directory) continue;
     const parsedMedia = candidate.manifestProbeStatus === "parsed" && candidate.manifestType === "media";
@@ -3074,6 +3235,338 @@ async function inspectManifestCandidate(tabId, key) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// The Economist Insider: the site's episode API (same origin, session cookie)
+// names a Brightcove HLS master that economist.com proxies; the master's
+// rendition playlists are proxied too, so the engine alone cannot fetch them.
+// The worker fetches the playlists with the browser's own credentials and
+// hands the engine their text; audio renditions and segments carry their own
+// signed tokens on Brightcove's CDN and go through the pinned client as usual.
+// ---------------------------------------------------------------------------
+const ECONOMIST_API_ORIGIN = "https://www.economist.com";
+const ECONOMIST_DISCOVERY_TTL_MS = 10 * 60_000;
+const ECONOMIST_AUTOMATIC_RETRY_COOLDOWN_MS = 15_000;
+const ECONOMIST_MANIFEST_TTL_FALLBACK_SECONDS = 45 * 60;
+const economistDiscoveryAt = new Map();
+const economistDiscoveryInFlight = new Map();
+const economistAutomaticAttemptAt = new Map();
+
+function economistEpisodeIdentity(tabUrl) {
+  const adapter = siteAdapterForPageUrl(tabUrl);
+  if (adapter?.id !== "economist") return null;
+  try {
+    const page = new URL(tabUrl);
+    const [, show, slug] = page.pathname.match(/^\/insider\/([^/?#]+)\/([^/?#]+)\/?$/i) || [];
+    if (!show || !slug || !/^[a-z0-9][a-z0-9-]{1,200}$/i.test(slug)) return null;
+    // The API lives on the page's own origin (loopback fixtures keep their port).
+    return { show, slug, origin: page.origin, pageKey: `${show}/${slug}` };
+  } catch {
+    return null;
+  }
+}
+
+// The site's own playback proxy is the only playlist origin the adapter
+// accepts: an API answer cannot point the engine anywhere else.
+function economistPlaybackUrl(value, origin) {
+  const url = canonicalizeUrl(value);
+  if (!url) return null;
+  try {
+    const parsed = new URL(url);
+    return parsed.origin === origin && /^\/video-api\/playback\/[^?]*\.m3u8$/i.test(parsed.pathname) ? url : null;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchTextWithCredentials(url, { networkScope = "public_only", timeoutMs = MANIFEST_INSPECTION_TIMEOUT_MS } = {}) {
+  const allowedUrl = requireNetworkRequest({
+    url,
+    purpose: "manifest_probe",
+    provenance: "fixed_site_api",
+    networkScope,
+    userInitiated: true
+  });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Math.max(250, timeoutMs));
+  timer?.unref?.();
+  try {
+    const response = await fetch(allowedUrl, {
+      credentials: "include",
+      cache: "no-store",
+      redirect: "error",
+      signal: controller.signal
+    });
+    if (!response.ok) throw codedError(response.status === 401 || response.status === 403 ? "http_forbidden" : "http_unexpected_status", `Manifest HTTP ${response.status}`, { status: response.status });
+    if (response.url && response.url !== allowedUrl) throw codedError("stream_invalid", "播放列表地址发生了跳转");
+    const text = await readResponseTextLimited(response, MAX_MANIFEST_BYTES);
+    if (typeof text !== "string" || !text.startsWith("#EXTM3U")) throw codedError("stream_invalid", "本地引擎读取播放列表失败");
+    return text;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function discoverEconomistInsider(tabId, { automatic = false, force = false } = {}) {
+  if (!Number.isInteger(tabId) || tabId < 0) return false;
+  let tab;
+  try { tab = await chrome.tabs.get(tabId); } catch { return false; }
+  const episode = economistEpisodeIdentity(tab?.url);
+  if (!episode) return false;
+  const now = Date.now();
+  const previous = economistDiscoveryAt.get(tabId);
+  if (!force && previous?.pageKey === episode.pageKey && now - previous.at < ECONOMIST_DISCOVERY_TTL_MS) return true;
+  const inFlight = economistDiscoveryInFlight.get(tabId);
+  if (inFlight?.pageKey === episode.pageKey) return inFlight.promise;
+  const attempt = economistAutomaticAttemptAt.get(tabId);
+  if (automatic && !force && attempt?.pageKey === episode.pageKey && now - attempt.at < ECONOMIST_AUTOMATIC_RETRY_COOLDOWN_MS) return false;
+  if (automatic) economistAutomaticAttemptAt.set(tabId, { pageKey: episode.pageKey, at: now });
+  const routeGeneration = currentTabGeneration(tabId);
+  const commitGuard = () => tabGenerations.get(tabId) === routeGeneration;
+  const task = (async () => {
+    const settings = await getSettings();
+    const networkScope = networkScopeForSettings(settings);
+    const json = await fetchPublicJson(`${episode.origin}/video-api/events/${encodeURIComponent(episode.slug)}`, { credentials: "include", networkScope });
+    const data = json?.data && typeof json.data === "object" ? json.data : null;
+    const video = data?.video && typeof data.video === "object" ? data.video : null;
+    if (!video || video.is_live === true) return false;
+    const sources = Array.isArray(video.sources) ? video.sources.slice(0, 16) : [];
+    const hls = sources
+      .filter((source) => source && typeof source === "object" && /mpegurl/i.test(String(source.type || "")))
+      .map((source) => ({ url: economistPlaybackUrl(source.src, episode.origin), version: Number(source.ext_x_version) || 0 }))
+      .filter((source) => source.url)
+      .sort((a, b) => b.version - a.version);
+    if (!hls.length) return false;
+    const masterUrl = hls[0].url;
+    let manifestText;
+    try {
+      manifestText = await fetchTextWithCredentials(masterUrl, { networkScope });
+    } catch {
+      // Not entitled (or signed out): the page shows the site's own wall.
+      return false;
+    }
+    if (!commitGuard()) return false;
+    const ttlSeconds = positive(video.manifest_url_ttl) || ECONOMIST_MANIFEST_TTL_FALLBACK_SECONDS;
+    const title = cleanText(data.title, 240) || cleanText(video.name, 240);
+    const accepted = await addCandidate(tabId, {
+      kind: "hls",
+      url: masterUrl,
+      mime: "application/x-mpegurl",
+      ext: "m3u8",
+      title,
+      pageTitle: cleanText(tab?.title, 240),
+      tabUrl: canonicalizeUrl(tab?.url) || "",
+      source: "economist-api",
+      provenance: "fixed_site_api",
+      site: "economist",
+      confidence: 1,
+      duration: positive(video.duration) ? Math.round(Number(video.duration) / 1000) : null,
+      manifestText,
+      adapterExpiresAt: Date.now() + Math.min(ttlSeconds, 6 * 3600) * 1000,
+      routeGeneration
+    }, commitGuard);
+    if (accepted) economistDiscoveryAt.set(tabId, { pageKey: episode.pageKey, at: Date.now() });
+    return Boolean(accepted);
+  })().catch(() => false).finally(() => {
+    if (economistDiscoveryInFlight.get(tabId)?.promise === task) economistDiscoveryInFlight.delete(tabId);
+  });
+  economistDiscoveryInFlight.set(tabId, { pageKey: episode.pageKey, promise: task });
+  return task;
+}
+
+// Fetch the master and the chosen rendition playlist with the browser's
+// credentials for the engine. The master is re-read so a rotated token in its
+// rendition addresses is matched by resolution and bandwidth, never by text.
+async function preloadEconomistManifests(candidate, requestedVariantUrl, networkScope) {
+  const masterUrl = canonicalizeUrl(candidate.url);
+  const origin = urlOrigin(masterUrl);
+  let masterText;
+  try {
+    masterText = await fetchTextWithCredentials(masterUrl, { networkScope });
+  } catch (error) {
+    if (error?.code === "http_forbidden") throw codedError("link_expired", "签名链接已过期，请重新扫描页面");
+    throw error;
+  }
+  const master = parseHls(masterText, masterUrl);
+  const variants = Array.isArray(master.variants) ? master.variants : [];
+  let variantUrl = null;
+  if (requestedVariantUrl) {
+    let wanted = null;
+    if (typeof candidate.manifestText === "string") {
+      try { wanted = parseHls(candidate.manifestText, masterUrl).variants.find((item) => item.url === requestedVariantUrl) || null; } catch { wanted = null; }
+    }
+    const match = variants.find((item) => item.url === requestedVariantUrl)
+      || (wanted ? variants.find((item) => positive(item.height) === positive(wanted.height) && positive(item.bandwidth) === positive(wanted.bandwidth)) : null)
+      || (wanted ? variants.find((item) => positive(item.height) === positive(wanted.height)) : null);
+    if (!match) throw codedError("quality_unavailable", "所选清晰度已失效，请重新读取清晰度");
+    variantUrl = canonicalizeUrl(match.url);
+  } else {
+    const best = sortHlsVariants(variants)[0];
+    variantUrl = best ? canonicalizeUrl(best.url) : null;
+  }
+  const manifests = { [masterUrl]: masterText };
+  if (variantUrl && urlOrigin(variantUrl) === origin) {
+    manifests[variantUrl] = await fetchTextWithCredentials(variantUrl, { networkScope });
+  }
+  return { manifests, variantUrl };
+}
+
+// ---------------------------------------------------------------------------
+// YouTube: the watch page is the candidate; yt-dlp behind the engine's
+// loopback broker answers the quality ladder and performs the transfer.
+// ---------------------------------------------------------------------------
+const YOUTUBE_QUALITY_PREFIX = `${MANIFEST_SELECTOR_ORIGIN}/youtube-height/`;
+const YOUTUBE_INSPECTION_TTL_MS = 10 * 60_000;
+const YOUTUBE_INSPECT_TIMEOUT_MS = 100_000;
+const YOUTUBE_MAX_HEIGHT = 8640;
+
+function youtubeAdapterEnabled() {
+  return BUILD_PROFILE.features.externalToolNetwork === true;
+}
+
+// Tab titles carry the site's suffix; the file should not.
+function youtubeTitleFromTab(title) {
+  return cleanText(title, 240).replace(/\s*[-–|]\s*YouTube(?:\s+Music)?\s*$/i, "").trim();
+}
+
+function youtubeQualitySelector(candidate, height) {
+  const value = positive(height);
+  return value ? manifestVariantSelector(candidate, `${YOUTUBE_QUALITY_PREFIX}${value}`) : null;
+}
+
+function resolveYoutubeQualitySelector(candidate, value) {
+  if (typeof value !== "string" || !value.trim()) return 0;
+  const resolved = resolveManifestVariantSelector(candidate, value);
+  const height = resolved.startsWith(YOUTUBE_QUALITY_PREFIX) ? Number(resolved.slice(YOUTUBE_QUALITY_PREFIX.length)) : NaN;
+  if (!Number.isInteger(height) || height <= 0 || height > YOUTUBE_MAX_HEIGHT) {
+    throw codedError("quality_unavailable", "所选清晰度已失效，请重新读取清晰度");
+  }
+  return height;
+}
+
+// Same opaque-selector shape as an HLS ladder so the dialog needs no new path.
+function youtubeProbeForUi(candidate, inspection) {
+  const variants = (Array.isArray(inspection?.variants) ? inspection.variants : [])
+    .map((variant) => ({
+      url: youtubeQualitySelector(candidate, variant.height),
+      bandwidth: positive(variant.bandwidth) || 0,
+      width: positive(variant.width),
+      height: positive(variant.height)
+    }))
+    .filter((variant) => variant.url && variant.height);
+  return {
+    kind: "youtube",
+    type: "page",
+    variants,
+    duration: positive(inspection?.duration) || positive(candidate?.duration) || null,
+    live: Boolean(inspection?.live),
+    audioOnly: Boolean(inspection?.audioOnly),
+    encrypted: false,
+    protection: "",
+    protected: false,
+    discontinuity: false,
+    variantSource: inspection ? "engine" : "none"
+  };
+}
+
+async function probeYoutubeCandidate(tabId, candidate) {
+  if (!youtubeAdapterEnabled()) throw codedError("site_not_supported", "此版本不支持从此平台下载");
+  const cached = candidate.youtubeInspection;
+  if (cached && Date.now() - Number(cached.at || 0) < YOUTUBE_INSPECTION_TTL_MS) return youtubeProbeForUi(candidate, cached);
+  // Without a ready engine the dialog still opens with the automatic best
+  // quality; the real ladder is yt-dlp's answer.
+  if (!nativePort || !ytdlpNetworkAllowed()) return youtubeProbeForUi(candidate, cached || null);
+  const settings = await getSettings();
+  let result;
+  try {
+    result = await inspectYoutubeViaNative(candidate.url, { allowPrivateNetworkMedia: Boolean(settings.allowPrivateNetworkMedia) });
+  } catch (error) {
+    if (cached) return youtubeProbeForUi(candidate, cached);
+    throw error;
+  }
+  const inspection = {
+    at: Date.now(),
+    title: cleanText(result?.title, 240),
+    duration: positive(result?.duration) || 0,
+    live: Boolean(result?.live),
+    audioOnly: Boolean(result?.audioOnly),
+    variants: (Array.isArray(result?.variants) ? result.variants : []).slice(0, 32)
+      .map((variant) => ({ height: positive(variant?.height), width: positive(variant?.width), bandwidth: positive(variant?.bandwidth) || 0 }))
+      .filter((variant) => variant.height && variant.height <= YOUTUBE_MAX_HEIGHT)
+      .sort((a, b) => b.height - a.height)
+  };
+  // The candidate object may have been replaced while yt-dlp was answering.
+  const target = tabMedia.get(tabId)?.get(`youtube:${canonicalizeUrl(candidate.url)}`) || candidate;
+  target.youtubeInspection = inspection;
+  if (inspection.title) {
+    target.title = inspection.title;
+    target.titleRank = TITLE_RANK_INPUT;
+    target.suggestedFilename = `${sanitizeFilename(inspection.title)}.${target.ext || "mp4"}`;
+  }
+  if (inspection.duration) target.duration = inspection.duration;
+  if (inspection.variants[0]) {
+    target.height = inspection.variants[0].height;
+    target.width = inspection.variants[0].width || target.width || null;
+  }
+  await persistSession();
+  broadcast({ type: "MEDIA_UPDATED", tabId, item: withoutManifestText(target) });
+  return youtubeProbeForUi(target, inspection);
+}
+
+function inspectYoutubeViaNative(url, options, timeoutMs = YOUTUBE_INSPECT_TIMEOUT_MS) {
+  const port = nativePort;
+  if (!port) return Promise.reject(codedError("engine_unreachable", "本地下载引擎未连接"));
+  const requestId = crypto.randomUUID();
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pendingHostInspects.delete(requestId);
+      reject(codedError("engine_not_responding", "本地引擎读取 YouTube 清晰度超时"));
+    }, timeoutMs);
+    pendingHostInspects.set(requestId, { port, resolve, reject, timer });
+    try {
+      port.postMessage({ type: "inspect_youtube", requestId, url, options: { allowPrivateNetworkMedia: Boolean(options?.allowPrivateNetworkMedia) } });
+    } catch (error) {
+      clearTimeout(timer);
+      pendingHostInspects.delete(requestId);
+      reject(error);
+    }
+  });
+}
+
+// Adapter pages (Pornhub, MissAV, Jable) hand the engine a Referer/Origin
+// pair plus the browser's own User-Agent: their CDNs answer 412/403 without
+// them. No cookie or token is involved; the values derive from the page origin.
+function adapterHeadersForPage(tabUrl) {
+  try {
+    const page = new URL(tabUrl);
+    if (!/^https?:$/.test(page.protocol)) return null;
+    const headers = { referer: `${page.origin}/`, origin: page.origin };
+    const userAgent = cleanText(globalThis.navigator?.userAgent, 400);
+    if (userAgent) headers["user-agent"] = userAgent;
+    return headers;
+  } catch {
+    return null;
+  }
+}
+
+function adapterRequestHeaders(candidate) {
+  const headers = candidate?.adapterHeaders;
+  if (!headers || typeof headers !== "object") return {};
+  const result = {};
+  for (const key of ["referer", "origin", "user-agent"]) {
+    if (typeof headers[key] === "string" && headers[key]) result[key] = headers[key];
+  }
+  return result;
+}
+
+function urlWithoutQuery(value) {
+  try {
+    const url = new URL(value);
+    return `${url.origin}${url.pathname}`;
+  } catch {
+    return "";
+  }
+}
+
 async function inspectHlsThroughNative(tabId, candidate, options = {}) {
   const url = canonicalizeUrl(candidate?.url);
   if (!url) throw codedError("invalid_address", "清单地址无效");
@@ -3089,7 +3582,7 @@ async function inspectHlsThroughNative(tabId, candidate, options = {}) {
   const capture = requestHeaders.get(headerKey(tabId, url));
   const headers = capture && Date.now() - capture.at <= HEADER_TTL_MS
     ? nonSensitiveMediaHeaders(capture.headers)
-    : {};
+    : adapterRequestHeaders(candidate);
   const result = await inspectHlsViaNative(url, headers);
   const manifestText = typeof result.text === "string" && result.text.length <= 1_500_000 ? result.text : null;
   if (!manifestText) throw codedError("stream_too_large", "媒体清单超出大小限制");
@@ -3580,7 +4073,10 @@ function probeForUi(probe, candidate) {
     // candidate instead of inside the media playlist. Project it with the same
     // opaque selector shape a master probe produces so one dialog code path
     // serves both; the group is ranked descending so option order = best first.
-    if (probe.type === "media" && !variants.length && Array.isArray(candidate?.variants)) {
+    // An adapter ladder (one single-variant master per quality, Pornhub-style)
+    // outranks the one variant the probed master itself lists.
+    const adapterLadder = Boolean(candidate?.ladderKey) && Array.isArray(candidate?.variants) && candidate.variants.length > variants.length;
+    if ((probe.type === "media" && !variants.length && Array.isArray(candidate?.variants)) || adapterLadder) {
       const groupVariants = candidate.variants
         .filter((variant) => variantGroupSelector(candidate, variant?.url))
         .slice(0, MAX_HLS_GROUP_VARIANTS)
@@ -3784,7 +4280,9 @@ async function startDownload(candidate, options, tabId, context = {}) {
     throw codedError("media_stale", "该媒体候选项已更新，请重新选择后下载");
   }
   candidate = preDispatchCandidate;
-  const pageTitle = candidate.pageTitle || candidate.title || "media";
+  // A YouTube row names itself after the video (the tab title minus the
+  // site suffix, or yt-dlp's title once probed), never after the raw tab.
+  const pageTitle = (candidate.kind === "youtube" ? candidate.title : candidate.pageTitle) || candidate.title || "media";
   const requestedName = cleanText(options.filename, 200) || renderFilename(candidate, settings.filenameTemplate, pageTitle);
   const filename = sanitizeFilename(requestedName);
   // chrome.downloads follows redirects outside the worker's fetch policy.
@@ -3803,9 +4301,17 @@ async function startDownload(candidate, options, tabId, context = {}) {
   // opt those final browser exceptions into the pinned native path as well.
   const advanced = candidate.kind === "hls" || candidate.kind === "dash" || candidate.kind === "dash_pair" || candidate.kind === "youtube"
     || opts.extractAudio || opts.convert || opts.useNativeForDirect || !browserDirectEligible;
-  const requestedVariantUrl = dashPair || candidate.kind === "dash"
+  if (candidate.adapterExpiresAt && Date.now() > candidate.adapterExpiresAt) {
+    throw codedError("link_expired", "签名链接已过期，请重新扫描页面");
+  }
+  let requestedVariantUrl = dashPair || candidate.kind === "dash" || candidate.kind === "youtube"
     ? null
     : resolveManifestVariantSelector(candidate, options.variantUrl);
+  // The YouTube quality choice is an upper bound on height for yt-dlp.
+  const youtubeMaxHeight = candidate.kind === "youtube" ? resolveYoutubeQualitySelector(candidate, options.variantUrl) : 0;
+  if (candidate.kind === "youtube" && candidate.youtubeInspection?.live) {
+    throw codedError("stream_live", "FluxCatch 0.2.5 暂不支持录制 YouTube 直播");
+  }
   const requestedDashRepresentationIndex = dashPair || candidate.kind !== "dash"
     ? null
     : resolveDashRepresentationSelector(candidate, options.variantUrl);
@@ -3877,8 +4383,8 @@ async function startDownload(candidate, options, tabId, context = {}) {
   // may have to reload itself to obtain the API; remember what to continue.
   noteNativeIntent({ surface: context.surface || null, pendingDownload: pendingDownloadRecord(candidate, options, tabId) });
   const port = await ensureNativePort();
-  if (candidate.kind === "youtube" && ytdlpNetworkDisabled()) {
-    throw codedError("external_tool_disabled", "0.2.5 暂停外部引擎联网，等待受控网络代理");
+  if (candidate.kind === "youtube" && !ytdlpNetworkAllowed()) {
+    throw codedError("youtube_tool_missing", "本地引擎未找到 yt-dlp，无法下载 YouTube 视频");
   }
   const finalCandidate = requireTabCandidate(tabId, candidate);
   if (!dashPair && (finalCandidate.kind !== candidate.kind || canonicalizeUrl(finalCandidate.url) !== canonicalizeUrl(candidate.url))) {
@@ -3914,6 +4420,15 @@ async function startDownload(candidate, options, tabId, context = {}) {
   // The native host receives the selected rendition playlist directly; a media
   // playlist has no variant table, so the master-based variantUrl switch would
   // be meaningless (and rejected) here.
+  // Site-proxied playlists (The Economist) answer only to the browser session:
+  // the worker fetches them with its own credentials and hands the engine the
+  // text, so the pinned client fetches nothing it cannot be authorised for.
+  let preloadedManifests = null;
+  if (candidate.site === "economist" && candidate.kind === "hls" && !hlsGroupPair) {
+    const preload = await preloadEconomistManifests(candidate, requestedVariantUrl, networkScope);
+    preloadedManifests = preload.manifests;
+    requestedVariantUrl = preload.variantUrl;
+  }
   const nativeHlsUrl = hlsGroupPair ? hlsGroupPair.videoUrl : null;
   const nativeVariantUrl = hlsGroupPair ? null : requestedVariantUrl;
   const nativeAudioUrl = hlsGroupPair?.audioUrl || dashPair?.audio.url || null;
@@ -3929,7 +4444,7 @@ async function startDownload(candidate, options, tabId, context = {}) {
   const capture = requestHeaders.get(captureKey);
   const captured = dashPair
     ? dashPairHeaders(tabId, dashPair.video.url)
-    : capture && Date.now() - capture.at <= HEADER_TTL_MS ? capture.headers : {};
+    : capture && Date.now() - capture.at <= HEADER_TTL_MS ? capture.headers : adapterRequestHeaders(candidate);
   const audioCaptureKey = dashPair ? headerKey(tabId, dashPair.audio.url) : null;
   const audioHeaders = dashPair ? dashPairHeaders(tabId, dashPair.audio.url) : null;
   if (capture && !dashPair && captured !== capture.headers) requestHeaders.delete(captureKey);
@@ -3989,7 +4504,9 @@ async function startDownload(candidate, options, tabId, context = {}) {
         audioHeaders,
         expiresAt: dashPair?.expiresAt || null,
         expectedDuration: dashPair ? positive(candidate.duration) || 0 : 0,
-        allowPrivateNetworkMedia: Boolean(settings.allowPrivateNetworkMedia)
+        allowPrivateNetworkMedia: Boolean(settings.allowPrivateNetworkMedia),
+        maxHeight: youtubeMaxHeight || null,
+        preloadedManifests
       }
     });
     // Keep the capture only while this in-memory native job is active so a
@@ -4073,7 +4590,7 @@ async function openNativePort() {
   }
   nativePort = port;
   port.onMessage.addListener((message) => {
-    if (message?.type === "inspect_hls_result") {
+    if (message?.type === "inspect_hls_result" || message?.type === "inspect_youtube_result") {
       resolveHostInspect(message.requestId, message, port);
       return;
     }
@@ -4095,7 +4612,6 @@ async function openNativePort() {
         lastError: null
       };
       void clearNativeApiRecoveryMarker();
-      if (ytdlpNetworkDisabled()) void dropYouTubeCandidates();
       resolveHostPing(port, message.requestId);
     }
     void handleNativeHostMessage(message);
@@ -4590,7 +5106,15 @@ function resolveHostInspect(requestId, message, port) {
   if (!pending || pending.port !== port) return;
   clearTimeout(pending.timer);
   pendingHostInspects.delete(requestId);
-  if (message?.ok) pending.resolve({ text: String(message.text || ""), finalUrl: String(message.finalUrl || "") });
+  if (message?.ok && message.type === "inspect_youtube_result") {
+    pending.resolve({
+      title: typeof message.title === "string" ? message.title : "",
+      duration: Number(message.duration) || 0,
+      live: Boolean(message.live),
+      audioOnly: Boolean(message.audioOnly),
+      variants: Array.isArray(message.variants) ? message.variants : []
+    });
+  } else if (message?.ok) pending.resolve({ text: String(message.text || ""), finalUrl: String(message.finalUrl || "") });
   else pending.reject(message?.error ? new Error(String(message.error)) : codedError("stream_invalid", "本地引擎读取播放列表失败"));
 }
 
@@ -4941,13 +5465,15 @@ async function restoreSession() {
         const manifest = item.kind === "hls" || item.kind === "dash";
         const sourceFilenames = uniqueCleanTexts([
           ...(Array.isArray(item.sourceFilenames) ? item.sourceFilenames : []),
-          item.suggestedFilename
+          isTitleDerivedFilename(item.suggestedFilename, item.title) ? "" : item.suggestedFilename
         ], 260, 40);
         const naming = candidateNaming({
           kind: item.kind,
           ext: cleanText(item.ext, 12),
           url,
-          inputTitle: item.title,
+          inputTitle: "",
+          previousTitle: item.title,
+          previousTitleRank: titleRankOf(item, TITLE_RANK_INPUT),
           pageTitle: cleanText(item.pageTitle, 240),
           suggestedFilenames: sourceFilenames
         });
@@ -4958,6 +5484,7 @@ async function restoreSession() {
           generation: currentTabGeneration(numericTabId),
           url,
           title: naming.title,
+          titleRank: naming.titleRank,
           suggestedFilename: naming.suggestedFilename,
           sourceFilenames,
           contentLength: manifest ? 0 : Math.max(0, Number(item.contentLength || 0)),
@@ -5691,6 +6218,8 @@ function isActiveJob(job) {
 async function downloadUserUrl(tabId, rawUrl, options, context = {}) {
   const url = canonicalizeUrl(cleanText(rawUrl, 4096));
   if (!url || !/^https?:$/i.test(new URL(url).protocol)) throw codedError("url_scheme_invalid", "请输入 http 或 https 的媒体地址");
+  const youtubeWatch = youtubeAdapterEnabled() ? youtubeWatchUrl(url) : null;
+  if (youtubeWatch) return downloadUserYoutubeUrl(tabId, youtubeWatch, options, context);
   if (isPolicyBlocked(url, "")) throw codedError("site_not_supported", "商店版本不支持从此平台下载");
   const settings = await getSettings();
   const networkScope = networkScopeForSettings(settings);
@@ -5718,6 +6247,28 @@ async function downloadUserUrl(tabId, rawUrl, options, context = {}) {
     tabUrl: canonicalizeUrl(tab?.url) || ""
   });
   const candidate = tabMedia.get(tabId)?.get(`${classified.kind}:${url}`);
+  if (!accepted || !candidate) throw codedError("ignored_by_settings", "该地址被当前设置忽略（域名屏蔽或小于最小媒体大小）");
+  await persistSession();
+  return startDownload(candidate, options, tabId, context);
+}
+
+// A pasted watch link becomes the same page candidate the adapter publishes
+// on a YouTube tab; the probe fills in the title and ladder.
+async function downloadUserYoutubeUrl(tabId, watchUrl, options, context = {}) {
+  const videoId = new URL(watchUrl).searchParams.get("v") || "";
+  const accepted = await addCandidate(tabId, {
+    kind: "youtube",
+    url: watchUrl,
+    mime: "video/mp4",
+    ext: "mp4",
+    title: `YouTube ${videoId}`,
+    tabUrl: watchUrl,
+    source: "user",
+    provenance: "user_supplied",
+    site: "youtube",
+    confidence: 1
+  });
+  const candidate = tabMedia.get(tabId)?.get(`youtube:${watchUrl}`);
   if (!accepted || !candidate) throw codedError("ignored_by_settings", "该地址被当前设置忽略（域名屏蔽或小于最小媒体大小）");
   await persistSession();
   return startDownload(candidate, options, tabId, context);
@@ -5912,12 +6463,7 @@ async function reconcileBrowserJob(job, missingIsFailure = true) {
 
 async function getSettings() {
   const data = await chrome.storage.local.get("settings");
-  const settings = normalizeSettings(data.settings || {});
-  if (settings.youtubeEnabled && !ytdlpNetworkAllowed()) {
-    settings.youtubeEnabled = false;
-    await chrome.storage.local.set({ settings });
-  }
-  return settings;
+  return normalizeSettings(data.settings || {});
 }
 
 function normalizeSettings(value) {
@@ -5936,7 +6482,6 @@ function normalizeSettings(value) {
     blockedDomains: normalizeDomains(value.blockedDomains),
     filenameTemplate: cleanText(value.filenameTemplate, 160) || DEFAULT_SETTINGS.filenameTemplate,
     showNotifications: value.showNotifications === undefined ? DEFAULT_SETTINGS.showNotifications : Boolean(value.showNotifications),
-    youtubeEnabled: Boolean(value.youtubeEnabled),
     autoEnrichSiteQuality: typeof value.autoEnrichSiteQuality === "boolean"
       ? value.autoEnrichSiteQuality
       : DEFAULT_SETTINGS.autoEnrichSiteQuality,
@@ -6089,10 +6634,6 @@ function disconnectedHostStatus({ needsPermission = false, failureReason = null,
 
 function requireCompatibleNativeHost() {
   if (hostCompatibility(hostStatus).compatible !== true) throw codedError("engine_update_needed", HOST_MISMATCH_MESSAGE);
-}
-
-function ytdlpNetworkDisabled() {
-  return !ytdlpNetworkAllowed();
 }
 
 function headerKey(tabId, url) {

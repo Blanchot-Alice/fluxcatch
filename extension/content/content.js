@@ -11,6 +11,10 @@
   const MAX_PREVIEW_URL_LENGTH = 4096;
   const TOP_FRAME = window === window.top;
   const SITE_PAYLOAD_KIND = globalThis.__fluxcatchSiteExtract?.payloadSiteForPage?.(location.hostname, TOP_FRAME) || null;
+  // Pornhub / MissAV / Jable: the page's own scripts name the HLS ladder.
+  const LADDER_SITE = Boolean(SITE_PAYLOAD_KIND)
+    && (globalThis.__fluxcatchSiteExtract?.LADDER_SITES || []).includes(SITE_PAYLOAD_KIND);
+  const SITE_TITLE_SUFFIX = /\s*(?:[-|–]\s*)?(?:Pornhub(?:\.com)?|MissAV|ThisAV|Jable(?:\.tv)?)\s*$/i;
   const X_PROGRESSIVE_CHANNEL = "fluxcatch-x-progressive-v1";
   const SITE_MEDIA_CACHE_MAX = 256;
   const SITE_MEDIA_CACHE_TTL_MS = 15 * 60 * 1000;
@@ -120,10 +124,85 @@
     return String(location.pathname || "").match(/^\/[^/]+\/status\/(\d+)(?:\/|$)/i)?.[1] || "";
   }
 
+  // The one video a ladder page is about; listing and search pages have none.
+  function currentLadderPageKey() {
+    if (!LADDER_SITE) return "";
+    try {
+      const page = new URL(location.href);
+      if (SITE_PAYLOAD_KIND === "pornhub") {
+        const viewkey = page.searchParams.get("viewkey") || "";
+        return /^\/view_video\.php$/i.test(page.pathname) && /^[a-z0-9]{4,40}$/i.test(viewkey) ? viewkey : "";
+      }
+      if (SITE_PAYLOAD_KIND === "jable") return String(page.pathname.match(/^\/videos\/([^/?#]+)/i)?.[1] || "");
+      if (SITE_PAYLOAD_KIND === "missav") {
+        return String(page.pathname.match(/^(?:\/dm\d+)?(?:\/[a-z]{2}(?:-[a-z]{2})?)?\/([a-z0-9][a-z0-9-]{2,})\/?$/i)?.[1] || "");
+      }
+    } catch {
+      return "";
+    }
+    return "";
+  }
+
   function hasSupportedSitePayloadRoute() {
     return SITE_PAYLOAD_KIND === "instagram" ? Boolean(currentInstagramCode())
       : SITE_PAYLOAD_KIND === "twitter" ? Boolean(currentXStatusId())
-        : false;
+        : LADDER_SITE ? Boolean(currentLadderPageKey())
+          : false;
+  }
+
+  // The readable video title for a ladder page: the social-card title, the
+  // heading, then the document title, each without the site's own suffix.
+  function sitePageTitle(fallback = "") {
+    const values = [
+      document.querySelector?.('meta[name="twitter:title" i], meta[property="twitter:title" i]')?.content,
+      document.querySelector?.('meta[property="og:title" i]')?.content,
+      document.querySelector?.("h1")?.textContent,
+      document.title,
+      fallback
+    ];
+    for (const value of values) {
+      const text = String(value || "").replace(/\s+/g, " ").trim().replace(SITE_TITLE_SUFFIX, "").trim();
+      if (text) return text.slice(0, 240);
+    }
+    return "";
+  }
+
+  // Each rendition the page declares becomes one HLS candidate carrying the
+  // page's ladder key; the worker groups them into one card with a quality
+  // menu and hands every transfer to the pinned native client.
+  function scanLadderScripts(root) {
+    const extract = globalThis.__fluxcatchSiteExtract;
+    if (!extract || !LADDER_SITE || !currentLadderPageKey()) return;
+    const scripts = [];
+    if (root instanceof HTMLScriptElement) scripts.push(root);
+    if (root.querySelectorAll) scripts.push(...root.querySelectorAll("script"));
+    for (const script of scripts) {
+      if (processedSiteScripts.has(script)) continue;
+      const text = script.textContent || "";
+      if (!text) continue;
+      processedSiteScripts.add(script);
+      if (text.length > 8_000_000 || !extract.scriptMayCarryLadder(SITE_PAYLOAD_KIND, text)) continue;
+      const ladder = extract.extractSiteLadder(SITE_PAYLOAD_KIND, text);
+      if (!ladder) continue;
+      const title = sitePageTitle(ladder.title);
+      const poster = ladder.thumbnailUrl ? sendPreview(ladder.thumbnailUrl, "og:image") : null;
+      for (const rendition of ladder.renditions.slice(0, 32)) {
+        const candidate = {
+          url: rendition.url,
+          mime: "application/vnd.apple.mpegurl",
+          source: "site-payload",
+          width: rendition.width || null,
+          height: rendition.height || null,
+          duration: ladder.duration || null,
+          title,
+          ladderKey: ladder.key,
+          ladderRank: rendition.height || 0,
+          ...(poster ? { thumbnailUrl: poster, thumbnailSource: "poster" } : {})
+        };
+        cacheSiteCandidate(candidate);
+        send(candidate);
+      }
+    }
   }
 
   function pruneSiteMediaCache(now = Date.now()) {
@@ -307,6 +386,10 @@
   function scanSitePayloads(root = document) {
     const extract = globalThis.__fluxcatchSiteExtract;
     if (!extract || !SITE_PAYLOAD_KIND) return;
+    if (LADDER_SITE) {
+      scanLadderScripts(root);
+      return;
+    }
     const requestedMediaId = SITE_PAYLOAD_KIND === "instagram" ? currentInstagramCode() : currentXStatusId();
     if (!requestedMediaId) return;
     const scripts = [];

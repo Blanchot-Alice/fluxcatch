@@ -287,6 +287,9 @@ export function candidateForPersistence(candidate) {
     sources: safe.sources,
     provenance: safe.provenance,
     sourceFilenames: safe.sourceFilenames,
+    // Which source named the candidate (worker-private ranking); a restored
+    // candidate must not let a weaker later observation rename it.
+    titleRank: Number.isInteger(candidate?.titleRank) ? candidate.titleRank : null,
     thumbnailUrl: preview?.thumbnailUrl || null,
     thumbnailSource: preview?.thumbnailSource || null,
     thumbnailFrameId: preview?.thumbnailFrameId ?? null,

@@ -22,9 +22,10 @@ Unpacked source reports commit `development` and no build timestamp. `npm run pa
 After reloading the unpacked extension, open its gear menu. Settings starts
 with **运行状态** and places the everyday controls under **基础下载**,
 **性能**, **检测与命名**, **隐私与网络**, **本地能力**, and **通知**.
-The **本地能力** matrix reports host connection, protocol compatibility,
-FFmpeg/local processing, yt-dlp installation, and external-tool networking as
-separate states. `已安装` does not mean a stable-profile feature is available.
+The **FluxCatch 能保存什么** list reports what the engine can save. The
+**YouTube** row reads 支持 only once a Ready engine reports a usable yt-dlp
+(see below); until then it reads the engine's own state, or 需要额外组件
+("Needs an extra component") when the engine is Ready but yt-dlp is not installed.
 
 The form's save action remains disabled until a normalized value changes.
 Notification permission is requested when the notification control is enabled;
@@ -33,8 +34,8 @@ control. If notification permission was revoked in Chrome, opening Settings
 normalizes the ineffective saved preference to off before any later grant can
 take effect. Enabling local-network media requires a confirmation and still does
 not permit metadata, link-local, multicast, unspecified, or reserved targets.
-The **实验室** section is informational in the stable profile and contains no
-switch that can activate YouTube, live HLS, or encrypted HLS support.
+The **实验室** section is informational and contains no switch that can
+activate live HLS support; YouTube and encrypted (AES-128) HLS need no switch.
 
 ## Install the macOS native host
 
@@ -68,7 +69,27 @@ HLS download support in 0.2.5 covers clear static VOD, including masters with a
 separate audio rendition; live, encrypted, discontinuous, and nested
 separate-audio playlists fail closed instead of handing a network URL to FFmpeg.
 
-The installer records FFmpeg as `FLUXCATCH_FFMPEG`. Advanced users may override the output directory with `FLUXCATCH_DOWNLOAD_DIR`. The stable GitHub profile exposes no YouTube or yt-dlp controls and never launches an external tool with a network URL. Installing yt-dlp does not alter the capability profile.
+The installer records FFmpeg as `FLUXCATCH_FFMPEG`. Advanced users may override the output directory with `FLUXCATCH_DOWNLOAD_DIR`.
+
+## YouTube: install yt-dlp yourself
+
+FluxCatch does not bundle yt-dlp; YouTube changes faster than FluxCatch
+releases, so the engine uses the copy installed on this Mac and re-checks it on
+every Retry in Settings. Install or update it with Homebrew:
+
+```bash
+brew install yt-dlp
+```
+
+`pip install -U yt-dlp` works as well. The engine looks in `PATH`,
+`/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin` and `~/bin`; set
+`FLUXCATCH_YTDLP` in the launcher to pin another executable. FFmpeg is needed to
+merge YouTube's separate video and audio streams. yt-dlp never opens a network
+connection of its own: the engine hands it a loopback broker that applies the
+same resolve, policy and peer checks as every other native transfer
+(`docs/ARCHITECTURE.md`, "YouTube through yt-dlp"). Without yt-dlp the YouTube
+row still appears on watch pages and a download reports that the tool is
+missing instead of failing silently.
 
 From a source checkout, uninstall the host with:
 

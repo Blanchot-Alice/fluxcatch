@@ -23,6 +23,7 @@ import os
 import re
 import selectors
 import shutil
+import signal
 import socket
 import stat
 import struct
@@ -107,12 +108,24 @@ QUEUED_MESSAGE = "排队中，等待其他下载完成"
 FFMPEG_MAX_THREADS = 4
 FFMPEG_MAX_OUTPUT_BYTES = 512 * 1024 * 1024 * 1024
 FFMPEG_MAX_WALL_SECONDS = 6 * 60 * 60
+# External tools (yt-dlp) reach the network only through the loopback
+# ExternalToolBroker; see that class for the policy it applies.
+EXTERNAL_TOOL_BROKER_CAPABILITY = "broker-v1"
+EXTERNAL_TOOL_MAX_WALL_SECONDS = 6 * 60 * 60
+EXTERNAL_TOOL_INSPECT_TIMEOUT_SECONDS = 90
+EXTERNAL_TOOL_MAX_INSPECT_BYTES = 24 * 1024 * 1024
+EXTERNAL_TOOL_MAX_TUNNELS = 64
+EXTERNAL_TOOL_BROKER_PORTS = frozenset({80, 443})
+EXTERNAL_TOOL_TUNNEL_IDLE_SECONDS = 300
+YTDLP_WORK_PREFIX = ".fluxcatch-ytdlp-"
+YTDLP_MAX_HEIGHT = 8640
 DASH_PAIR_WORK_PREFIX = ".fluxcatch-dash-pair-"
 TEMP_WORK_PREFIXES = (
     DASH_PAIR_WORK_PREFIX,
     "fluxcatch-hls-",
     "fluxcatch-dash-",
     ".fluxcatch-convert-",
+    YTDLP_WORK_PREFIX,
 )
 DASH_PAIR_EXPIRY_SAFETY_SECONDS = 30.0
 
@@ -298,16 +311,18 @@ class YtDlpCapabilities:
 
     @property
     def available(self) -> bool:
-        # yt-dlp owns its DNS, redirect and child-resource connections.  It
-        # remains unavailable until those transfers can be mediated by the
-        # same pinned client as every native HTTP request.
-        return False
+        # yt-dlp is usable once an executable answered the version probe. Its
+        # connections never leave the machine directly: every job hands it the
+        # loopback ExternalToolBroker, which resolves, policy-checks and pins
+        # each CONNECT target exactly like the native HTTP client.
+        return self.installed and bool(self.version) and not self.probe_error
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "available": self.available,
             "installed": self.installed,
-            "networkDisabled": True,
+            "networkDisabled": not self.available,
+            "broker": EXTERNAL_TOOL_BROKER_CAPABILITY,
             "path": self.path,
             "version": self.version,
             "probeError": self.probe_error,
@@ -315,12 +330,14 @@ class YtDlpCapabilities:
 
 
 def probe_ytdlp(path: str | None = None) -> YtDlpCapabilities:
-    """Report whether yt-dlp is installed, without enabling network use.
+    """Report whether a usable yt-dlp is installed on this Mac.
 
-    FLUXCATCH_YTDLP pins an explicit executable; otherwise the usual PATH
-    entries plus Homebrew/pip install locations are probed.  Installation is
-    reported separately from availability because external-process networking
-    is fail-closed until a pinned broker exists.
+    FluxCatch does not bundle yt-dlp: YouTube changes faster than FluxCatch
+    releases, and a bundled copy would pin users to a stale extractor. The
+    engine looks for an installed copy instead. FLUXCATCH_YTDLP pins an
+    explicit executable; otherwise PATH plus the Homebrew/pip install
+    locations are probed on every ping, so installing or upgrading yt-dlp
+    takes effect at the next "Retry" without reinstalling the engine.
     """
     candidates: list[str] = []
     if path:
@@ -2054,11 +2071,47 @@ def _manifest_fetch_bounded(
     raise DownloadError("Manifest download failed without a result")
 
 
+# Playlists the extension fetched with the browser's own session for a site
+# that proxies them behind its login (The Economist Insider). The engine uses
+# the text in place of its own fetch for exactly those addresses; every child
+# the text names still goes through the pinned client and the network policy.
+_PRELOADED_MANIFESTS: contextvars.ContextVar[dict[str, str]] = contextvars.ContextVar(
+    "fluxcatch_preloaded_manifests",
+    default={},
+)
+MAX_PRELOADED_MANIFESTS = 4
+MAX_PRELOADED_MANIFEST_BYTES = 1_500_000
+
+
+def preloaded_manifests(value: Any, job_url: str) -> dict[str, str]:
+    if not isinstance(value, dict) or not value:
+        return {}
+    if len(value) > MAX_PRELOADED_MANIFESTS:
+        raise DownloadError("Too many preloaded playlists")
+    result: dict[str, str] = {}
+    for raw_url, text in value.items():
+        url = valid_url(raw_url)
+        if not _same_origin(url, job_url):
+            raise DownloadError("Preloaded playlist is not on the media origin")
+        if not isinstance(text, str) or len(text.encode("utf-8")) > MAX_PRELOADED_MANIFEST_BYTES:
+            raise DownloadError("Preloaded playlist exceeds the size limit")
+        if not text.lstrip("\ufeff").lstrip().startswith("#EXTM3U"):
+            raise DownloadError("Preloaded playlist is not an HLS playlist")
+        result[url] = text
+    return result
+
+
 def fetch_manifest(
     url: str,
     headers: dict[str, str],
     cancel: threading.Event | None = None,
 ) -> ManifestFetchResult:
+    preloaded = _PRELOADED_MANIFESTS.get()
+    if url in preloaded:
+        # The address still passes the policy gate so a preloaded text cannot
+        # stand in for a target the engine would refuse to contact.
+        current_network_policy().authorize(url, purpose="preloaded playlist")
+        return ManifestFetchResult(text=preloaded[url], final_url=url, request_headers=clean_headers(headers))
     cancel = cancel or threading.Event()
     last_error: Exception | None = None
     timeout_streak = 0
@@ -3840,6 +3893,360 @@ def run_ffmpeg(
             staging.unlink(missing_ok=True)
 
 
+class ExternalToolBroker:
+    """Loopback HTTP CONNECT proxy that brokers an external tool's connections.
+
+    yt-dlp owns its DNS lookups, redirects and child-resource connections, so
+    it cannot use the pinned urllib client that every native transfer goes
+    through. The broker closes that gap instead of opening the network: the
+    tool is started with ``--proxy`` pointing at this loopback listener and a
+    per-process random credential; every ``CONNECT host:port`` is resolved
+    and checked against the job's NetworkPolicy; the upstream socket is
+    dialled to one of the authorized addresses (or chained through the OS
+    proxy when one is configured for that host) and the connected peer is
+    validated before a single byte is relayed. Loopback, private, link-local,
+    multicast, unspecified, reserved and metadata targets therefore fail
+    closed exactly as they do for the native client, while TLS stays end to
+    end between the tool and the origin. Only ports 80 and 443 are brokered
+    and only CONNECT is accepted, so the tool cannot turn the broker into a
+    plain-HTTP side door.
+    """
+
+    def __init__(self, policy: NetworkPolicy | None = None) -> None:
+        self.policy = policy or current_network_policy()
+        self.username = "fluxcatch"
+        self.token = base64.urlsafe_b64encode(os.urandom(24)).decode("ascii").rstrip("=")
+        self._server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._server.bind(("127.0.0.1", 0))
+        self._server.listen(16)
+        self._server.settimeout(0.5)
+        self.port = int(self._server.getsockname()[1])
+        self._closed = threading.Event()
+        self._lock = threading.Lock()
+        self._sockets: set[socket.socket] = set()
+        self.tunnels = 0
+        self.rejections: list[str] = []
+        self._thread = threading.Thread(target=self._serve, name="fluxcatch-broker", daemon=True)
+        self._thread.start()
+
+    @property
+    def proxy_url(self) -> str:
+        return f"http://{self.username}:{self.token}@127.0.0.1:{self.port}"
+
+    def close(self) -> None:
+        self._closed.set()
+        with contextlib.suppress(OSError):
+            self._server.close()
+        with self._lock:
+            sockets = list(self._sockets)
+        for sock in sockets:
+            with contextlib.suppress(OSError):
+                sock.shutdown(socket.SHUT_RDWR)
+            with contextlib.suppress(OSError):
+                sock.close()
+        self._thread.join(timeout=2)
+
+    def _serve(self) -> None:
+        while not self._closed.is_set():
+            try:
+                conn, _peer = self._server.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                return
+            with self._lock:
+                if len(self._sockets) >= EXTERNAL_TOOL_MAX_TUNNELS:
+                    with contextlib.suppress(OSError):
+                        conn.close()
+                    continue
+                self._sockets.add(conn)
+            threading.Thread(target=self._handle, args=(conn,), daemon=True).start()
+
+    @staticmethod
+    def _reply(conn: socket.socket, status: int, reason: str, extra: str = "") -> None:
+        with contextlib.suppress(OSError):
+            conn.sendall(f"HTTP/1.1 {status} {reason}\r\nConnection: close\r\nContent-Length: 0\r\n{extra}\r\n".encode("latin-1"))
+
+    def _authorized(self, header: str) -> bool:
+        scheme, _, encoded = header.strip().partition(" ")
+        if scheme.lower() != "basic" or not encoded:
+            return False
+        try:
+            decoded = base64.b64decode(encoded.strip(), validate=True).decode("utf-8")
+        except (ValueError, UnicodeDecodeError):
+            return False
+        user, _, token = decoded.partition(":")
+        return hmac.compare_digest(user, self.username) and hmac.compare_digest(token, self.token)
+
+    @staticmethod
+    def _parse_target(value: str) -> tuple[str, int]:
+        text = value.strip()
+        if text.startswith("["):
+            host, _, port = text[1:].partition("]")
+            port = port.lstrip(":")
+        else:
+            host, _, port = text.rpartition(":")
+        host = host.strip().rstrip(".").lower()
+        if not host or not port.isdigit() or not re.fullmatch(r"[a-z0-9.:_-]{1,253}", host):
+            raise ValueError("Malformed CONNECT target")
+        return host, int(port)
+
+    def _dial(self, target: Any, host: str, port: int) -> socket.socket:
+        proxies = _system_proxies()
+        proxy = proxies.get("https") or proxies.get("http")
+        if proxy and not _target_bypasses_proxy(host):
+            # Same trust model as the pinned client: the OS proxy is a locally
+            # trusted hop, so peer pinning cannot apply across its tunnel;
+            # authorization and resolution already ran before the dial.
+            parsed = urllib.parse.urlsplit(proxy if "://" in proxy else f"http://{proxy}")
+            if parsed.scheme != "http" or not parsed.hostname:
+                raise OSError("Unsupported system proxy")
+            upstream = socket.create_connection((parsed.hostname, parsed.port or 8080), 20)
+            try:
+                connect = f"CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n"
+                if parsed.username:
+                    credential = base64.b64encode(f"{urllib.parse.unquote(parsed.username)}:{urllib.parse.unquote(parsed.password or '')}".encode()).decode("ascii")
+                    connect += f"Proxy-Authorization: Basic {credential}\r\n"
+                upstream.sendall((connect + "\r\n").encode("latin-1"))
+                head = b""
+                while b"\r\n\r\n" not in head:
+                    chunk = upstream.recv(4096)
+                    if not chunk or len(head) > 16_384:
+                        raise OSError("System proxy closed the CONNECT")
+                    head += chunk
+                status = head.split(b"\r\n", 1)[0].split(b" ")
+                if len(status) < 2 or status[1] != b"200":
+                    raise OSError("System proxy refused the CONNECT")
+                return upstream
+            except Exception:
+                upstream.close()
+                raise
+        last_error: Exception | None = None
+        for address in sorted(target.addresses):
+            upstream = None
+            try:
+                upstream = socket.create_connection((address, port), 20)
+                self.policy.validate_peer(upstream.getpeername()[0], target)
+                return upstream
+            except (OSError, NetworkPolicyError) as error:
+                last_error = error
+                if upstream is not None:
+                    upstream.close()
+        if isinstance(last_error, NetworkPolicyError):
+            raise last_error
+        raise OSError(f"Could not connect to authorized network target {host}")
+
+    def _handle(self, conn: socket.socket) -> None:
+        upstream: socket.socket | None = None
+        try:
+            conn.settimeout(15)
+            head = b""
+            while b"\r\n\r\n" not in head:
+                chunk = conn.recv(4096)
+                if not chunk:
+                    return
+                head += chunk
+                if len(head) > 16_384:
+                    self._reply(conn, 431, "Request header too large")
+                    return
+            request_line, _, rest = head.partition(b"\r\n")
+            parts = request_line.decode("latin-1").split(" ")
+            if len(parts) != 3 or parts[0].upper() != "CONNECT":
+                self._reply(conn, 405, "Only CONNECT is brokered")
+                return
+            headers: dict[str, str] = {}
+            for line in rest.split(b"\r\n"):
+                name, separator, value = line.decode("latin-1").partition(":")
+                if separator:
+                    headers[name.strip().lower()] = value.strip()
+            if not self._authorized(headers.get("proxy-authorization", "")):
+                self._reply(conn, 407, "Proxy authentication required", 'Proxy-Authenticate: Basic realm="FluxCatch"\r\n')
+                return
+            host, port = self._parse_target(parts[1])
+            if port not in EXTERNAL_TOOL_BROKER_PORTS:
+                self._reply(conn, 403, "Port is not brokered")
+                return
+            target = self.policy.authorize(f"https://{host}:{port}/", purpose="external tool connection")
+            upstream = self._dial(target, host, port)
+            with self._lock:
+                self._sockets.add(upstream)
+                self.tunnels += 1
+            conn.sendall(b"HTTP/1.1 200 Connection established\r\n\r\n")
+            self._pump(conn, upstream)
+        except NetworkPolicyError as error:
+            with self._lock:
+                if len(self.rejections) < 32:
+                    self.rejections.append(redact_text(error))
+            self._reply(conn, 403, "Blocked by FluxCatch network policy")
+        except (OSError, ValueError, UnicodeError):
+            self._reply(conn, 502, "Upstream connection failed")
+        finally:
+            for sock in (conn, upstream):
+                if sock is None:
+                    continue
+                with self._lock:
+                    self._sockets.discard(sock)
+                with contextlib.suppress(OSError):
+                    sock.close()
+
+    def _pump(self, client: socket.socket, upstream: socket.socket) -> None:
+        client.settimeout(None)
+        upstream.settimeout(None)
+        client.setblocking(False)
+        upstream.setblocking(False)
+        selector = selectors.DefaultSelector()
+        selector.register(client, selectors.EVENT_READ, upstream)
+        selector.register(upstream, selectors.EVENT_READ, client)
+        open_sides = 2
+        last_activity = time.monotonic()
+        try:
+            while open_sides and not self._closed.is_set():
+                events = selector.select(timeout=1.0)
+                if not events:
+                    if time.monotonic() - last_activity > EXTERNAL_TOOL_TUNNEL_IDLE_SECONDS:
+                        return
+                    continue
+                for key, _mask in events:
+                    source = key.fileobj
+                    destination = key.data
+                    try:
+                        data = source.recv(65_536)
+                    except BlockingIOError:
+                        continue
+                    except OSError:
+                        data = b""
+                    if not data:
+                        selector.unregister(source)
+                        open_sides -= 1
+                        with contextlib.suppress(OSError):
+                            destination.shutdown(socket.SHUT_WR)
+                        continue
+                    last_activity = time.monotonic()
+                    try:
+                        destination.setblocking(True)
+                        destination.sendall(data)
+                        destination.setblocking(False)
+                    except OSError:
+                        return
+        finally:
+            selector.close()
+
+
+def _tool_path_entries(*executables: str | None) -> str:
+    entries: list[str] = []
+    for executable in executables:
+        if executable:
+            parent = str(Path(executable).resolve().parent)
+            if parent not in entries:
+                entries.append(parent)
+    for standard in ("/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"):
+        if standard not in entries:
+            entries.append(standard)
+    return ":".join(entries)
+
+
+def _ytdlp_environment(executable: str, ffmpeg: str | None, work_dir: Path) -> dict[str, str]:
+    """A minimal environment: no inherited proxy variables, no user config."""
+    return {
+        "PATH": _tool_path_entries(executable, ffmpeg),
+        "HOME": str(Path.home()),
+        "TMPDIR": str(work_dir),
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "PYTHONIOENCODING": "utf-8",
+        "NO_COLOR": "1",
+    }
+
+
+def _ytdlp_common_args(executable: str, broker: ExternalToolBroker, ffmpeg: str | None) -> list[str]:
+    args = [
+        executable,
+        "--ignore-config",
+        "--no-cache-dir",
+        "--no-playlist",
+        "--no-mtime",
+        "--no-color",
+        "--no-warnings",
+        "--proxy",
+        broker.proxy_url,
+        "--socket-timeout",
+        "30",
+        "--retries",
+        "5",
+        "--fragment-retries",
+        "5",
+    ]
+    if ffmpeg:
+        args.extend(["--ffmpeg-location", ffmpeg])
+    return args
+
+
+def ytdlp_format_args(container: str, extract_audio: bool, max_height: int = 0) -> list[str]:
+    """The format selection handed to yt-dlp for one download.
+
+    The quality the user picked becomes an upper bound on height; yt-dlp then
+    merges the best video and audio below it into the requested container.
+    """
+    if extract_audio:
+        return ["-f", "bestaudio/best", "-x", "--audio-format", "mp3", "--audio-quality", "2"]
+    height = int(max_height) if 0 < int(max_height) <= YTDLP_MAX_HEIGHT else 0
+    limit = f"[height<={height}]" if height else ""
+    selector = f"bv*{limit}+ba/b{limit}"
+    if container == "webm":
+        order = "res,vcodec:vp9,acodec:opus"
+    elif container == "mkv":
+        order = "res"
+    else:
+        container = "mp4"
+        order = "res,vcodec:h264,acodec:m4a,ext"
+    return ["-f", selector, "-S", order, "--merge-output-format", container, "--remux-video", container]
+
+
+YTDLP_DOWNLOAD_TEMPLATE = (
+    "download:FLUXCATCH\t%(progress.status)s\t%(progress.downloaded_bytes)s\t%(progress.total_bytes)s"
+    "\t%(progress.total_bytes_estimate)s\t%(progress.speed)s\t%(progress.fragment_index)s\t%(progress.fragment_count)s"
+)
+YTDLP_POSTPROCESS_TEMPLATE = "postprocess:FLUXCATCH_PP\t%(progress.status)s\t%(postprocessor)s"
+
+
+def _ytdlp_number(value: str) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return number if math.isfinite(number) and number >= 0 else 0.0
+
+
+def _terminate_process_group(proc: subprocess.Popen[bytes]) -> None:
+    if proc.poll() is not None:
+        return
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+    except (OSError, ProcessLookupError):
+        proc.terminate()
+    try:
+        proc.wait(timeout=4)
+    except subprocess.TimeoutExpired:
+        with contextlib.suppress(OSError, ProcessLookupError):
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        proc.kill()
+        proc.wait()
+
+
+def _ytdlp_output_file(work_dir: Path) -> Path | None:
+    produced: list[Path] = []
+    for entry in work_dir.iterdir():
+        if not entry.is_file() or entry.is_symlink() or not entry.name.startswith("media."):
+            continue
+        if entry.name.endswith((".part", ".ytdl", ".temp")) or re.search(r"\.f[0-9a-z_-]+\.[A-Za-z0-9]+$", entry.name):
+            continue
+        produced.append(entry)
+    if not produced:
+        return None
+    produced.sort(key=lambda path: path.stat().st_size, reverse=True)
+    return produced[0]
+
+
 def youtube_download(
     url: str,
     target: Path,
@@ -3848,10 +4255,257 @@ def youtube_download(
     cancel: threading.Event,
     progress: Progress,
     executable: str | None,
+    *,
+    ffmpeg: str | None = None,
+    max_height: int = 0,
+    concurrent_fragments: int = 4,
+    work_root: Path | None = None,
 ) -> Path:
-    """Fail closed until yt-dlp can use the native pinned HTTP broker."""
-    del url, target, container, extract_audio, cancel, progress, executable
-    raise external_network_process_error("yt-dlp")
+    """Download one YouTube watch URL with yt-dlp through the loopback broker.
+
+    yt-dlp writes into a private work directory beside the output, every
+    connection it opens goes through ExternalToolBroker, and the finished file
+    is published under the reserved output name without overwriting anything.
+    """
+    if not executable:
+        raise DownloadError("yt-dlp is not installed; YouTube downloads need it")
+    safe_url = valid_url(url)
+    if target.exists() or target.is_symlink():
+        raise DownloadError("Output filename became occupied")
+    if cancel.is_set():
+        raise Cancelled()
+    work_dir = Path(tempfile.mkdtemp(prefix=YTDLP_WORK_PREFIX, dir=str(work_root or target.parent)))
+    broker = ExternalToolBroker(current_network_policy())
+    args = [
+        *_ytdlp_common_args(executable, broker, ffmpeg),
+        "--quiet",
+        "--progress",
+        "--newline",
+        "--progress-template",
+        YTDLP_DOWNLOAD_TEMPLATE,
+        "--progress-template",
+        YTDLP_POSTPROCESS_TEMPLATE,
+        "--concurrent-fragments",
+        str(max(1, min(8, int(concurrent_fragments or 1)))),
+        "-o",
+        str(work_dir / "media.%(ext)s"),
+        *ytdlp_format_args(container, extract_audio, max_height),
+        "--",
+        safe_url,
+    ]
+    error_log = tempfile.TemporaryFile(mode="w+b")
+    proc: subprocess.Popen[bytes] | None = None
+    selector = selectors.DefaultSelector()
+    stdout_buffer = bytearray()
+    finished_bytes = 0
+    current_bytes = 0
+    current_total = 0
+    started = time.monotonic()
+    phase_message = "正在通过 YouTube 引擎下载"
+
+    def consume_line(line: str) -> None:
+        nonlocal finished_bytes, current_bytes, current_total, phase_message
+        fields = line.rstrip("\r\n").split("\t")
+        if fields[0] == "FLUXCATCH" and len(fields) >= 8:
+            status = fields[1]
+            downloaded = _ytdlp_number(fields[2])
+            total = _ytdlp_number(fields[3]) or _ytdlp_number(fields[4])
+            speed = _ytdlp_number(fields[5])
+            fragment_index = _ytdlp_number(fields[6])
+            fragment_count = _ytdlp_number(fields[7])
+            if status == "finished":
+                finished_bytes += int(downloaded)
+                current_bytes = 0
+                current_total = 0
+                return
+            current_bytes = int(downloaded)
+            current_total = int(total)
+            elapsed = max(0.001, time.monotonic() - started)
+            total_bytes = finished_bytes + current_total if current_total else 0
+            done_bytes = finished_bytes + current_bytes
+            message = phase_message
+            if fragment_count > 0:
+                message = f"{phase_message} · 分片 {int(fragment_index)}/{int(fragment_count)}"
+            payload: dict[str, Any] = {
+                "status": "downloading",
+                "bytes": done_bytes,
+                "total": total_bytes,
+                "speed": int(speed) if speed else int(done_bytes / elapsed),
+                "message": message,
+            }
+            if total_bytes:
+                payload["progress"] = min(0.99, done_bytes / total_bytes)
+            progress.report(payload)
+        elif fields[0] == "FLUXCATCH_PP" and len(fields) >= 3:
+            if fields[1] == "started":
+                progress.status("remuxing", f"正在合并音视频 · {fields[2]}", bytes=finished_bytes, total=0)
+
+    def consume_bytes(chunk: bytes, *, final: bool = False) -> None:
+        stdout_buffer.extend(chunk)
+        while b"\n" in stdout_buffer:
+            raw_line, _, remainder = stdout_buffer.partition(b"\n")
+            stdout_buffer[:] = remainder
+            consume_line(raw_line.decode("utf-8", "replace"))
+        if final and stdout_buffer:
+            consume_line(stdout_buffer.decode("utf-8", "replace"))
+            stdout_buffer.clear()
+
+    success = False
+    try:
+        progress.status("starting", "正在启动 YouTube 引擎")
+        proc = subprocess.Popen(
+            args,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=error_log,
+            bufsize=0,
+            start_new_session=True,
+            cwd=str(work_dir),
+            env=_ytdlp_environment(executable, ffmpeg, work_dir),
+        )
+        assert proc.stdout is not None
+        selector.register(proc.stdout, selectors.EVENT_READ)
+        while proc.poll() is None:
+            if cancel.is_set():
+                _terminate_process_group(proc)
+                raise Cancelled()
+            if time.monotonic() - started > EXTERNAL_TOOL_MAX_WALL_SECONDS:
+                _terminate_process_group(proc)
+                raise DownloadError("yt-dlp exceeded the processing time limit")
+            for key, _mask in selector.select(timeout=0.25):
+                consume_bytes(os.read(key.fileobj.fileno(), 64 * 1024))
+        while chunk := os.read(proc.stdout.fileno(), 64 * 1024):
+            consume_bytes(chunk)
+        consume_bytes(b"", final=True)
+        if proc.returncode != 0:
+            error_log.seek(0)
+            tail = error_log.read().decode("utf-8", "replace")[-4000:]
+            rejected = "；".join(broker.rejections[-3:])
+            detail = redact_text(tail.strip())
+            if rejected:
+                detail = f"{detail} [network policy: {rejected}]"
+            raise DownloadError(f"yt-dlp failed ({proc.returncode}): {detail}")
+        produced = _ytdlp_output_file(work_dir)
+        if produced is None or produced.stat().st_size == 0:
+            raise DownloadError("yt-dlp produced no output")
+        produced.chmod(0o600)
+        suffix = produced.suffix.lower()
+        published_target = target if suffix == target.suffix.lower() or not re.fullmatch(r"\.[a-z0-9]{1,5}", suffix) else target.with_suffix(suffix)
+        target = commit_file(produced, published_target)
+        success = True
+        return target
+    finally:
+        if proc is not None:
+            _terminate_process_group(proc)
+            if proc.stdout is not None:
+                proc.stdout.close()
+        selector.close()
+        error_log.close()
+        broker.close()
+        shutil.rmtree(work_dir, ignore_errors=True)
+        del success
+
+
+def summarize_ytdlp_info(info: Any) -> dict[str, Any]:
+    """Project yt-dlp's -J output onto the small shape the extension needs.
+
+    Only the quality ladder (one entry per distinct height, best bitrate per
+    height), the title, the duration and the live flag cross the Native
+    Messaging channel; the format URLs, signatures and cookies stay here.
+    """
+    if not isinstance(info, dict):
+        raise DownloadError("yt-dlp returned no media information")
+    if info.get("_type") in {"playlist", "multi_video"} and isinstance(info.get("entries"), list) and info["entries"]:
+        first = info["entries"][0]
+        info = first if isinstance(first, dict) else info
+    formats = info.get("formats")
+    if not isinstance(formats, list):
+        formats = [info] if info.get("url") else []
+    by_height: dict[int, dict[str, Any]] = {}
+    for entry in formats:
+        if not isinstance(entry, dict):
+            continue
+        vcodec = str(entry.get("vcodec") or "none").lower()
+        try:
+            height = int(entry.get("height") or 0)
+        except (TypeError, ValueError):
+            height = 0
+        if vcodec == "none" or height <= 0 or height > YTDLP_MAX_HEIGHT:
+            continue
+        try:
+            bandwidth = int(float(entry.get("tbr") or entry.get("vbr") or 0) * 1000)
+        except (TypeError, ValueError):
+            bandwidth = 0
+        try:
+            width = int(entry.get("width") or 0)
+        except (TypeError, ValueError):
+            width = 0
+        current = by_height.get(height)
+        if current is None or bandwidth > current["bandwidth"]:
+            by_height[height] = {
+                "height": height,
+                "width": width if width > 0 else None,
+                "bandwidth": max(0, bandwidth),
+                "codecs": str(entry.get("vcodec") or "")[:60],
+                "ext": str(entry.get("ext") or "")[:8],
+            }
+    variants = [by_height[height] for height in sorted(by_height, reverse=True)][:32]
+    try:
+        duration = int(float(info.get("duration") or 0))
+    except (TypeError, ValueError):
+        duration = 0
+    return {
+        "title": str(info.get("title") or "")[:240],
+        "duration": duration if 0 < duration < 7 * 24 * 3600 else 0,
+        "live": bool(info.get("is_live")),
+        "audioOnly": not variants and bool(formats),
+        "variants": variants,
+    }
+
+
+def youtube_inspect(url: str, executable: str | None, ffmpeg: str | None = None) -> dict[str, Any]:
+    """Ask yt-dlp (through the broker) which qualities a watch URL offers."""
+    if not executable:
+        raise DownloadError("yt-dlp is not installed; YouTube downloads need it")
+    safe_url = valid_url(url)
+    work_dir = Path(tempfile.mkdtemp(prefix=f"{YTDLP_WORK_PREFIX}inspect-"))
+    broker = ExternalToolBroker(current_network_policy())
+    proc: subprocess.Popen[bytes] | None = None
+    try:
+        args = [*_ytdlp_common_args(executable, broker, ffmpeg), "--quiet", "--skip-download", "-J", "--", safe_url]
+        proc = subprocess.Popen(
+            args,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+            cwd=str(work_dir),
+            env=_ytdlp_environment(executable, ffmpeg, work_dir),
+        )
+        try:
+            stdout, stderr = proc.communicate(timeout=EXTERNAL_TOOL_INSPECT_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            _terminate_process_group(proc)
+            raise DownloadError("yt-dlp did not answer within the inspection time limit") from None
+        if proc.returncode != 0:
+            tail = stderr.decode("utf-8", "replace")[-4000:]
+            rejected = "；".join(broker.rejections[-3:])
+            detail = redact_text(tail.strip())
+            if rejected:
+                detail = f"{detail} [network policy: {rejected}]"
+            raise DownloadError(f"yt-dlp failed ({proc.returncode}): {detail}")
+        if len(stdout) > EXTERNAL_TOOL_MAX_INSPECT_BYTES:
+            raise DownloadError("yt-dlp media information exceeded the inspection size limit")
+        try:
+            info = json.loads(stdout.decode("utf-8", "replace") or "null")
+        except ValueError as error:
+            raise DownloadError("yt-dlp returned unreadable media information") from error
+        return summarize_ytdlp_info(info)
+    finally:
+        if proc is not None:
+            _terminate_process_group(proc)
+        broker.close()
+        shutil.rmtree(work_dir, ignore_errors=True)
 
 
 def ffprobe_path(ffmpeg: str | None) -> str | None:
@@ -3988,7 +4642,7 @@ class Host:
         self.ffmpeg_capabilities = probe_ffmpeg(os.environ.get("FLUXCATCH_FFMPEG") or None)
         self.ffmpeg = self.ffmpeg_capabilities.path or None
         self.ytdlp_capabilities = probe_ytdlp(os.environ.get("FLUXCATCH_YTDLP") or None)
-        self.ytdlp = None
+        self.ytdlp = self.ytdlp_capabilities.path if self.ytdlp_capabilities.available else None
         self.config = load_host_config()
         self.download_dir = resolve_download_dir(self.config)
         self.known_download_dirs = [path for path in known_download_dirs(self.config) if path != self.download_dir]
@@ -4006,10 +4660,10 @@ class Host:
     def handle(self, message: dict[str, Any]) -> None:
         kind = message.get("type")
         if kind == "ping":
-            # Re-probe installation truth, but keep external-process network
-            # access unavailable until yt-dlp can use a pinned broker.
+            # Re-probe on every ping: installing or upgrading yt-dlp after the
+            # engine started takes effect at the next "Retry" in Settings.
             self.ytdlp_capabilities = probe_ytdlp(os.environ.get("FLUXCATCH_YTDLP") or None)
-            self.ytdlp = None
+            self.ytdlp = self.ytdlp_capabilities.path if self.ytdlp_capabilities.available else None
             self.send({
                 "type": "pong",
                 "requestId": message.get("requestId"),
@@ -4023,7 +4677,7 @@ class Host:
                     "ytdlp": self.ytdlp_capabilities.as_dict(),
                     "dashPlanner": "static-v1",
                     "dashPair": "direct-v1",
-                    "externalNetworkProcesses": "disabled",
+                    "externalNetworkProcesses": EXTERNAL_TOOL_BROKER_CAPABILITY,
                     "fileActions": "finder-v1",
                     "pause": PAUSE_CAPABILITY,
                 },
@@ -4082,6 +4736,10 @@ class Host:
                     "ok": False,
                     "error": str(error),
                 })
+            return
+        if kind == "inspect_youtube":
+            # yt-dlp takes seconds to answer; keep the reader loop free.
+            self.executor.submit(self.handle_inspect_youtube, message)
             return
         if kind != "download":
             self.send({"type": "error", "requestId": message.get("requestId"), "error": "Unknown request type"})
@@ -4150,6 +4808,7 @@ class Host:
         network_token = set_current_network_policy(NetworkPolicy(
             allow_private_network_media=options.get("allowPrivateNetworkMedia") is True,
         ))
+        preload_token: contextvars.Token[dict[str, str]] | None = None
         slot_held = False
         try:
             if cancel.is_set():
@@ -4165,6 +4824,7 @@ class Host:
             kind = str(message.get("mediaKind") or "video").strip().lower()
             url = valid_url(message.get("videoUrl") or options.get("videoUrl") or message.get("url")) if kind == "dash_pair" else valid_url(message.get("url"))
             headers = clean_headers(message.get("headers"))
+            preload_token = _PRELOADED_MANIFESTS.set(preloaded_manifests(options.get("preloadedManifests"), url) if kind == "hls" else {})
             pair_audio_url: str | None = None
             pair_video_headers: dict[str, str] | None = None
             pair_audio_headers: dict[str, str] | None = None
@@ -4319,6 +4979,10 @@ class Host:
                     cancel,
                     progress,
                     self.ytdlp,
+                    ffmpeg=self.ffmpeg,
+                    max_height=bounded_int(options.get("maxHeight"), 0, YTDLP_MAX_HEIGHT, 0),
+                    concurrent_fragments=concurrent_fragments,
+                    work_root=self.download_dir,
                 )
             else:
                 raw_target = target
@@ -4373,6 +5037,8 @@ class Host:
                     self.reserved_targets.discard(reserved_target)
             with self.jobs_lock:
                 self.jobs.pop(job_id, None)
+            if preload_token is not None:
+                _PRELOADED_MANIFESTS.reset(preload_token)
             reset_current_network_policy(network_token)
 
     def completion_message(self, job_id: str, target: Path, *, started: float, extract_audio: bool = False) -> dict[str, Any]:
@@ -4398,6 +5064,22 @@ class Host:
             "elapsedMs": int((time.monotonic() - started) * 1000),
             "downloadDir": str(self.download_dir),
         }
+
+    # ---- External tools ----------------------------------------------------
+    def handle_inspect_youtube(self, message: dict[str, Any]) -> None:
+        reply: dict[str, Any] = {"type": "inspect_youtube_result", "requestId": message.get("requestId")}
+        network_token = set_current_network_policy(NetworkPolicy(
+            allow_private_network_media=(message.get("options") or {}).get("allowPrivateNetworkMedia") is True
+            if isinstance(message.get("options"), dict) else False,
+        ))
+        try:
+            summary = youtube_inspect(valid_url(message.get("url")), self.ytdlp, self.ffmpeg)
+            reply.update({"ok": True, **summary})
+        except Exception as error:  # noqa: BLE001 - reported (redacted) to the extension
+            reply.update({"ok": False, "error": redact_text(error)})
+        finally:
+            reset_current_network_policy(network_token)
+        self.send(reply)
 
     # ---- File actions ------------------------------------------------------
     def handle_choose_folder(self, message: dict[str, Any]) -> None:

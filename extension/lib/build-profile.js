@@ -13,7 +13,10 @@ export const BUILD_PROFILE = Object.freeze({
     liveHls: false,
     encryptedHls: true,
     separateAudioHls: true,
-    externalToolNetwork: false,
+    // yt-dlp reaches the network only through the engine's loopback broker
+    // (native-host/host.py ExternalToolBroker), which applies the same
+    // resolve/policy/peer checks as the pinned client.
+    externalToolNetwork: true,
     remoteThumbnails: true
   })
 });

@@ -59,6 +59,8 @@ export const FAILURE_CODES = Object.freeze([
   "component_missing",
   "mp3_encoder_missing",
   "external_tool_disabled",
+  "youtube_tool_missing",
+  "external_tool_failed",
   "internal_error",
   // Disk and folders
   "disk_full",
@@ -167,6 +169,7 @@ const PARAM_KEYS = Object.freeze({
   stream_empty: ["track"],
   drm_protected: ["track"],
   component_missing: ["feature"],
+  external_tool_failed: ["exit_code"],
   processing_failed: ["stage", "exit_code"],
   processing_timeout: ["hours"],
   key_fetch_failed: ["retries"],
@@ -476,7 +479,7 @@ const CAUSE_RULES = [
   rule(/本地引擎响应超时/, "engine_not_responding"),
   rule(/本地下载引擎不支持暂停/, "pause_unsupported"),
   rule(/消息格式无效|消息来源未通过校验|任务编号无效|标签页编号无效|不支持的文件操作|^Unknown message type\b/, "invalid_request"),
-  rule(/商店版本不支持从此平台下载/, "site_not_supported"),
+  rule(/商店版本不支持从此平台下载|此版本不支持从此平台下载/, "site_not_supported"),
   rule(/该域名已在 FluxCatch 设置中被忽略/, "site_ignored"),
   rule(/该地址被当前设置忽略/, "ignored_by_settings"),
   rule(/网络策略已阻止\s*(\S*?)（blocked_(?:private|local_name)）/, "private_network_blocked", (match) => ({ host: hostFromUrl(match[1]) })),
@@ -491,7 +494,10 @@ const CAUSE_RULES = [
   rule(/媒体清单超出大小限制/, "stream_too_large"),
   rule(/读取媒体清单超时\s*[(（]\s*(\d+)\s*秒/, "playlist_timeout", (match) => ({ seconds: Number(match[1]) })),
   rule(/本地引擎读取播放列表超时/, "playlist_timeout"),
-  rule(/本地引擎读取播放列表失败/, "stream_invalid"),
+  rule(/本地引擎读取播放列表失败|播放列表地址发生了跳转/, "stream_invalid"),
+  // Worker-preloaded playlists (The Economist): a malformed preload is the
+  // worker's own fault, never something the user can act on.
+  rule(/^(?:Too many preloaded playlists|Preloaded playlist is not on the media origin)/i, "internal_error"),
   rule(/HLS 直播录制/, "stream_live"),
   rule(/包含时间线切换/, "stream_discontinuous"),
   rule(/暂停外部引擎联网/, "external_tool_disabled"),
@@ -509,6 +515,21 @@ const CAUSE_RULES = [
   rule(/任务不存在或已结束/, "job_ended"),
   rule(/这条任务现在不能暂停/, "cannot_pause"),
   rule(/这条任务不在暂停状态/, "not_paused"),
+
+  // YouTube through yt-dlp (host.py youtube_download / youtube_inspect and
+  // the worker's own gate). Specific causes first, the generic exit last.
+  rule(/本地引擎未找到 yt-dlp|yt-dlp is not installed/i, "youtube_tool_missing"),
+  rule(/本地引擎读取 YouTube 清晰度超时|yt-dlp did not answer within/i, "engine_not_responding"),
+  rule(/暂不支持录制 YouTube 直播/, "stream_live"),
+  rule(/^yt-dlp failed \(-?\d+\):.*\[network policy:/i, "download_not_allowed"),
+  rule(/^yt-dlp failed \(-?\d+\):.*(?:Private video|Sign in to confirm|members-only|channel's members|confirm your age|age-restricted|requires login|not available in your country|HTTP Error 403)/i, "http_forbidden"),
+  rule(/^yt-dlp failed \(-?\d+\):.*Requested format is not available/i, "quality_unavailable"),
+  rule(/^yt-dlp failed \(-?\d+\):.*(?:Video unavailable|has been removed|does not exist|is not available|no longer available|HTTP Error 404)/i, "http_not_found"),
+  rule(/^yt-dlp failed \(-?\d+\):.*(?:is live|live event|livestream|premieres? in|premiere will begin)/i, "stream_live"),
+  rule(/^yt-dlp failed \(-?\d+\):.*(?:No space left on device|Disc quota exceeded)/i, "disk_full"),
+  rule(/^yt-dlp failed \((-?\d+)\)/i, "external_tool_failed", (match) => ({ exit_code: Number(match[1]) })),
+  rule(/^yt-dlp exceeded the processing time limit/i, "processing_timeout", () => ({ hours: PROCESSING_TIME_LIMIT_HOURS })),
+  rule(/^yt-dlp (?:produced no output|returned (?:no|unreadable) media information|media information exceeded)/i, "external_tool_failed"),
 
   // Engine tools and processing.
   rule(/直接联网已由安全策略关闭/, "external_tool_disabled"),
@@ -1002,6 +1023,14 @@ const CATALOG = Object.freeze({
   external_tool_disabled: {
     en: () => "FluxCatch can't download this kind of video yet.",
     zh: () => "FluxCatch 暂时还不能下载这类视频。"
+  },
+  youtube_tool_missing: {
+    en: () => `YouTube downloads need yt-dlp on this Mac. Install it, then choose Retry in ${ENGINE_SETTINGS_EN}.`,
+    zh: () => `下载 YouTube 视频需要这台 Mac 上装有 yt-dlp。请先安装它，再到${ENGINE_SETTINGS_ZH}点“重试”。`
+  },
+  external_tool_failed: {
+    en: (p) => `The YouTube engine couldn't finish this download${Number.isInteger(p.exit_code) ? ` (exit code ${p.exit_code})` : ""}. Retry; if it keeps failing, update yt-dlp.`,
+    zh: (p) => `YouTube 引擎没能完成这个下载${Number.isInteger(p.exit_code) ? `（退出码 ${p.exit_code}）` : ""}。请重试；反复失败时请更新 yt-dlp。`
   },
   internal_error: {
     en: () => "Something went wrong inside FluxCatch. Retry the download.",

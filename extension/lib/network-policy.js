@@ -187,6 +187,22 @@ export function isBilibiliMetadataEndpoint(value) {
   }
 }
 
+// The Economist Insider episode API: the site's own origin, one fixed path,
+// one slug, nothing else. https only; the loopback E2E fixture (which maps
+// the hostname to 127.0.0.1) is reached over plain http and is admitted only
+// under the explicit private-network opt-in that every fixture run sets.
+export function isEconomistInsiderEndpoint(value, { allowInsecure = false } = {}) {
+  try {
+    const url = new URL(value);
+    if (url.username || url.password || url.hash || url.search) return false;
+    if (url.hostname.toLowerCase() !== "www.economist.com") return false;
+    if (url.protocol !== "https:" && !(allowInsecure && url.protocol === "http:")) return false;
+    return /^\/video-api\/events\/[a-z0-9][a-z0-9-]{1,200}$/i.test(url.pathname);
+  } catch {
+    return false;
+  }
+}
+
 function hostMatchesSuffix(hostname, suffix) {
   const expected = cleanHostname(suffix).replace(/^\*\./, "");
   return Boolean(expected) && (hostname === expected || hostname.endsWith(`.${expected}`));
@@ -253,7 +269,8 @@ export function evaluateNetworkRequest({
   }
 
   if (purpose === "site_metadata") {
-    if (provenance !== "fixed_site_api" || !isBilibiliMetadataEndpoint(url.href)) {
+    if (provenance !== "fixed_site_api"
+      || !(isBilibiliMetadataEndpoint(url.href) || isEconomistInsiderEndpoint(url.href, { allowInsecure: privateOptIn }))) {
       return { allowed: false, reason: "site_metadata_not_allowlisted", url: url.href };
     }
   }
