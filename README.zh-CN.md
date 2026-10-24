@@ -6,14 +6,12 @@
 
 **所见，即所得。**
 
-*本地优先的媒体检测与获取引擎 · macOS + Chrome*
+*本地优先的媒体下载器 · macOS 上的 Chrome*
 
-
-一款基于 Manifest V3 的静默观察者。
-
-顺着页面自身的呼吸，捕获自然流淌的直链、HLS 与 DASH；借由策略受控的本地引擎，将流动的光影沉淀为确定的实体。
-
-无云端驻留，无中继介入。除却你目光停留的原点，你的字节不渡他方。
+FluxCatch 是一个 Manifest V3 扩展，配一个很小的本地引擎。页面在放什么，它就
+看见什么：直链文件、HLS、DASH，列成一张如实的画质阶梯，再经由受策略约束的本地
+引擎保存到你的 Mac 上。没有云端，没有中转，没有账号；字节只在你的机器和你正在
+看的网站之间往来。
 
 [![Version](https://img.shields.io/badge/version-0.2.5-5E8F84?style=flat-square)](https://github.com/Blanchot-Alice/fluxcatch/releases)
 [![Chrome MV3](https://img.shields.io/badge/Chrome-Manifest_V3-8E82AD?style=flat-square&logo=googlechrome&logoColor=white)](https://developer.chrome.com/docs/extensions/develop/migrate)
@@ -27,46 +25,65 @@
 
 ---
 
-## 为什么是 FluxCatch
-
-浏览器下载工具通常只有两条路：把每一个字节都交给云服务的“云端帮手”，或者
-靠注入页面与每个网站改版缠斗的爬虫。FluxCatch 走第三条路——
-**一台透明、本地优先的媒体检查与获取引擎**：只报告浏览器已经收到的内容，
-用平实的语言说明每一条边界；门关着就是关着，绝不撬锁。
+## 你会得到什么
 
 | | |
 | --- | --- |
-| 🔍 **被动检测** | 只随页面自身的流量而行。可选的画质增强有速率限制、仅限单一站点、一键即关。 |
-| 📺 **诚实的画质阶梯** | HLS 变体与 DASH 分辨率逐条列出——包括你登录账号在 B 站实际可播的那一档。 |
-| 🎚 **变体聚组** | 站点从不暴露 master playlist 也能聚成一张卡 + 清晰度下拉；音视频经 FFmpeg 无损合并。 |
-| ⚡ **有条件加速** | 服务器支持 Range 才并行下载；能力照实说，不打包票。 |
-| 🔒 **本地优先隐私** | 无遥测、无账号、无中转。Cookie 锁定在原站范围内，跨域跳转即被剥离。 |
-| 🛡️ **DRM 就是 DRM** | 受保护内容只做检测与提示——不解密、不绕过。 |
+| 🔍 **被动检测** | 只读页面自己请求过的内容。可选的画质补全有速率限制、只针对单一站点，一个开关就能关掉。 |
+| 📺 **如实的画质阶梯** | HLS 变体和 DASH 分辨率照原样列出，包括你登录账号在 B 站真正能播的那一档。 |
+| 🎚 **变体合并** | 播放器从不给出主列表，也能合成一张带清晰度菜单的卡片；音视频由 FFmpeg 无损合并。 |
+| ⏯ **暂停、续传、排队** | 任何任务都能暂停、稍后接着下：直链从断点续传，HLS 与 DASH 复用磁盘上已有的每个完整分片。 |
+| 📥 **整页下载与链接下载** | 一键下载整页媒体，链接框可以粘贴任何媒体地址，保存目录经由引擎自己选。 |
+| 🗂 **真正的下载记录** | 引擎保存的文件不会出现在 `chrome://downloads`，所以 FluxCatch 自己记一份按日分组的记录，带封面帧、搜索和 Finder 操作。 |
+| ⚡ **看条件加速** | 服务器支持 Range 才并行传输；只在成立的地方才这么说。 |
+| 🔒 **本地优先的隐私** | 没有遥测、账号和中转。Cookie 只限原站，跨域跳转时去掉。 |
+| 🛡️ **DRM 就是 DRM** | 受保护的内容只检测、只提示，从不解密，也不绕过。 |
 
-## 站点适配
+## 专门适配的站点
 
-通用检测覆盖多数常规请求，少数播放器需要专门对待：
+通用检测覆盖多数常规播放器，这些站点需要多做一些：
 
 | 站点 | 状态 | 说明 |
 | --- | --- | --- |
 | **Bilibili** `/video/` | 🧪 内测 | DASH 音视频配对、不透明清晰度选择器、登录感知的画质阶梯、签名链接仅存内存。番剧页不在支持声明内。 |
 | **Instagram** | 🧪 内测 | 从页面/SPA 数据中选出最佳完整 MP4；播放分片自动抑制。 |
 | **X / Twitter** | 🧪 内测 | 优先最高码率的 `video_info` 渐进式 MP4，而非 HLS。 |
-| **YouTube** | ⏸ 仅源码 | 实验代码保留在仓库中；稳定版不暴露任何 YouTube 通道，也绝不启动 yt-dlp。 |
+| **YouTube** | 🧪 内测 | 观看页本身就是候选行；引擎调用本机已装的 yt-dlp（`brew install yt-dlp`），所有连接经本机回环代理套用同一套网络策略。清晰度梯度与标题来自 yt-dlp，可输出 MP4/MKV/WebM/MP3。 |
+| **Pornhub** | 🧪 内测 | 页面 `flashvars` 里的清晰度梯度（每档一个签名 HLS 主列表）合成一张带清晰度菜单的卡片；引擎回放页面的 Referer/Origin。 |
+| **MissAV** | 🧪 内测 | 从页面的 packer 脚本里解出播放列表地址，不执行页面代码；主列表的 360p 到 1080p 梯度由引擎读取。 |
+| **Jable** | 🧪 内测 | 页面 `hlsUrl` 指向的 AES-128 播放列表；密钥与分片走固定客户端，FFmpeg 本地解密。站点本身在 Cloudflare 之后。 |
+| **经济学人 Insider** | 🧪 内测 | 订阅者节目：站点的节目 API 与需要登录会话的 Brightcove 播放列表由您自己已登录的浏览器会话读取，引擎下载各档画质并合并独立音轨。只下载您的订阅本来就能播放的内容。 |
 
 ## 界面
 
-媒体一经检出，工具栏角标即时点亮。Popup 负责快速保存，Side Panel 是长任务
-工作台，设置页把构建身份、隐私边界和本机能力放进同一段诚实的阅读流。
+三个界面和两个页面共用一套设计系统，有**清晨**和**黄昏**两套主题（跟随系统
+外观），界面语言为**英文**或**中文**（跟随 Chrome，也可在设置里指定）：
 
-| Popup | Side Panel | 下载对话框 |
+- **弹出窗口**，针对当前页面：检出的媒体、下载队列、快速保存；
+- **侧边栏**，长时间下载的工作台；
+- **下载记录页**，完整的记录，带搜索和 Finder 操作；
+- **设置页**，把构建身份、隐私边界、保存目录和引擎能保存什么放在同一段阅读流里；
+- 完成通知直接通向文件。
+
+| 弹出窗口 | 侧边栏 | 下载对话框 |
 | :---: | :---: | :---: |
-| <img src="docs/assets/popup.png" height="440" alt="弹窗"> | <img src="docs/assets/sidepanel.png" height="440" alt="侧栏工作台"> | <img src="docs/assets/hls-download-dialog.png" height="440" alt="下载对话框"> |
+| <img src="docs/assets/popup.png" height="440" alt="弹出窗口"> | <img src="docs/assets/sidepanel.png" height="440" alt="侧边栏"> | <img src="docs/assets/download-dialog.png" height="440" alt="下载对话框"> |
+
+<p align="center"><img src="docs/assets/downloads.png" width="720" alt="FluxCatch 下载记录页"></p>
 
 <p align="center"><img src="docs/assets/options.png" width="720" alt="FluxCatch 设置页"></p>
 
-三个界面共享同一套设计令牌，支持键盘操作、可见焦点、深色模式、窄窗口与
-`prefers-reduced-motion`。
+背景是一层静止的色彩，叫作**池塘图层**：几条青瓷、丁香、玫瑰和杏色的漂带，每台
+机器安装时定一次，只在留白和空白处显露，所有内容下方都被遮掉。进度条用它所处
+状态的颜色。页眉静止时就是画布本身，页面滚动后才染上颜色。字体（Fraunces、
+Instrument Sans 和一份中文标题字子集）随扩展一起打包，不从网络取任何东西。键盘
+操作、可见焦点、窄窗口和 `prefers-reduced-motion` 全程支持。
+
+每一屏都在 Chrome for Testing 里按量化预算检查（`scripts/design-audit.mjs`）：
+字体样式数、左侧对齐线、容器嵌套、对合成背景的文字对比度、裁切、语言泄漏、细线、
+留白里池塘图层的色度与明度，以及滚动位置 0 时的页眉。当前构建的 108 个审计屏全部
+满足预算；`scripts/design-atlas.mjs` 把两次运行的截图并排打印成图集。规则的简版
+在 [DESIGN.md](DESIGN.md)。
 
 ## 快速开始
 
@@ -76,25 +93,26 @@
 git clone https://github.com/Blanchot-Alice/fluxcatch.git
 ```
 
-打开 `chrome://extensions` → 开启 **开发者模式** → **加载已解压的扩展程序**
-→ 选择 `extension/` 目录。
+打开 `chrome://extensions`，开启**开发者模式**，点**加载已解压的扩展程序**，
+选择 `extension/` 目录。
 
-**二 · 安装本地引擎** *（macOS，多数下载必需）*
+**二 · 安装本地引擎** *（macOS，多数下载需要它）*
 
 ```bash
 ./scripts/native-install-wrapper.sh
 ```
 
-脚本会固定 Homebrew 稳定路径、校验 Python 3.9+ 并探测 FFmpeg。也可以直接取用
-[`v0.2.5` 现成包](https://github.com/Blanchot-Alice/fluxcatch/releases/tag/v0.2.5)：
-native 压缩包请整体解压后在根目录执行 `./install-macos.sh`。
+脚本会固定 Homebrew 的稳定路径，检查 Python 3.9 或更新的版本，并探测 FFmpeg。
+也可以用 [`v0.2.5` 现成包](https://github.com/Blanchot-Alice/fluxcatch/releases/tag/v0.2.5)：
+native 压缩包整体解压后，在它的目录里执行 `./install-macos.sh`。YouTube 另外需要
+本机的 yt-dlp（`brew install yt-dlp`），装好之前设置页里那一行显示“需要额外组件”。
 
 **三 · 使用**
 
-打开在放视频的页面 → 角标亮起 → 点击图标 → 下载。
+打开正在播放的页面，角标亮起，点一下，下载。
 
-> 不装引擎也能检测和预览。多数保存、合并、转码与加速需要引擎——不走引擎的
-> Chrome 直接保存仅限白名单内的 Instagram/X 完整 MP4。
+> 不装引擎也能检测和预览。多数保存、合并、转码和加速需要引擎；只靠 Chrome
+> 保存的，仅限白名单里 Instagram 与 X 的完整 MP4。
 
 <details>
 <summary><strong>开发</strong></summary>
@@ -107,6 +125,9 @@ python3 scripts/validate.py               # manifest 与语法校验
 npm run test:e2e                          # Chrome 检测 / UI / 交互套件
 npm run package                           # dist/ 双包 + SHA256SUMS
 npm run verify:package                    # 校验和、构建身份、ZIP 安全元数据
+node scripts/design-audit.mjs --label <名称>            # 设计审计，两套主题、两种语言
+node scripts/design-atlas.mjs --before <a> --after <b>  # 两次审计的前后对照图集 PDF
+node scripts/build-icons.mjs                            # 从 SVG 源文件栅格化图标
 ```
 
 CI 只构建一次发布归档并原样保留这些字节，E2E 跑在这份 ZIP 上。从
@@ -131,13 +152,13 @@ flowchart LR
 ```
 
 扩展侧探针校验 URL 语法、主机类别、用途、来源与 origin 白名单；本地引擎进一步
-钉住对端、复核重定向与清单子资源，并在跨域跳转时单调剥离敏感头。签名链接至多
+钉住对端、复核重定向与清单子资源，并在跨域跳转时单调去掉敏感头。签名链接至多
 在 service worker 内存里存活两分钟；界面只会收到脱敏元数据和不透明引用。
 
-深入阅读：[架构文档](docs/ARCHITECTURE.md) · [隐私政策](PRIVACY.md) ·
-[安全策略](SECURITY.md) · [发布就绪](docs/RELEASE.md)
+深入阅读：[架构文档](docs/ARCHITECTURE.md) · [设计说明](DESIGN.md) ·
+[隐私政策](PRIVACY.md) · [安全策略](SECURITY.md) · [发布就绪](docs/RELEASE.md)
 
 ## 许可证
 
-[MIT](LICENSE) — FluxCatch 用于保存你拥有或被许可保存的媒体，不解密 DRM
+[MIT](LICENSE)。FluxCatch 用于保存你拥有或获准保存的媒体；它不解密 DRM
 内容，也不绕过访问控制。
