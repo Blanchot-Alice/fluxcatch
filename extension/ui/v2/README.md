@@ -35,7 +35,7 @@ classes defined in `system.css`. Nothing here keeps page state.
 | `runtime.js` | `callWorker()` and `connectWorkerPort()`: messaging with the background worker |
 | `jobs.js` | Job ordering, terminal states, the speed-sample ring and the finished-file actions (no DOM) |
 | `media.js` | Popup and side panel: detected media rows, the Download dialog, the engine status line, the downloads list, the pure media helpers |
-| `pond.js` | The procedural pond layer (§6.10) |
+| `pond.js` | The procedural pond layer (design review v3 §3.1) |
 
 Outside this folder, `extension/lib/format.js` holds the decimal byte and rate
 formatting that `locale.js` and the worker share, and `extension/lib/job-failure.js`
@@ -54,6 +54,8 @@ the failure codes and their sentences.
 - No helper paragraphs: at most one line under a control. The local engine is explained once, in Settings; elsewhere use the status line "Local engine isn’t set up · Set up".
 - No CJK in HTML or JS outside the `zh` tables of `messages/*.js`; HTML carries `data-msg` attributes, never copy.
 - No `innerHTML` in surface code (only `components.js` writes fixed icon paths).
+- The pond layer sits under no text: every text run lies inside one of the page's content boxes (its `getContentBoxes` list), so the mask clears the layer there. The audit reads the layer's pixels under each text run, measures contrast against that composited background, and fails any run with pond alpha over 0.02 under it. On full pages with gutters of 48 px or more the margins must carry chroma coverage 3% to 12% (ΔC > 0.015 in OKLCH) at p95 |ΔL| ≤ 0.03 Morning / 0.05 Dusk (v3 §3.1).
+- At scroll position 0 the `.topbar` is the canvas: its own background alpha 0, no box-shadow, `::before` band at opacity 0 (v3 §3.6).
 
 ## Type roles
 
@@ -209,7 +211,7 @@ calls it with its own locale for notifications and quality labels.
 | `button({ kind, label, iconName, title, type, action, jobId })` | `button.btn.btn-{primary\|secondary\|tertiary\|destructive}` | `data-action`, `data-job-id`. Heights 36 (32 compact). Tertiary and destructive bleed 8px so text stays on the grid. One primary per view; destructive is always confirmed. |
 | `iconButton({ iconName, label, action, jobId, haspopup })` | `button.icon-button` 32 × 32 | `title` and `aria-label` from `label`. |
 | `status(tone, label)` | `span.status.t-meta[data-tone]` | 8px dot + word. Tones `progress paused queued complete warning failed cancelled`. Exceptions only. |
-| `progress({ value, size: "row" \| "panel", state, label })`, `setProgress(el, value, state)` | `div.progress[role=progressbar]` > `span.progress-fill` | 3px in rows, 6px in the focus panel. States `active paused queued complete settled`. |
+| `progress({ value, size: "row" \| "panel", state, label })`, `setProgress(el, value, state)` | `div.progress[role=progressbar]` > `span.progress-fill` | 3px in rows, 6px in the focus panel. States `active paused queued finishing complete settled failed`; the fill is the state's colour (v3 §3.2): pond while downloading (with the tip highlight and the shimmer), harbour queued, lilac at 60% paused, ochre finishing, celadon complete (then the bar fades out), vermilion failed. No percentage-driven hue. |
 | `filename(name)`, `splitFilename(name)` | `span.filename[data-filename][data-user-content]` > `.filename-head` + `.filename-tail` | Middle truncation keeps the extension. |
 | `groupLabel(text, id)` | `h2.group-label.t-label.text-column` | No band, no rule. |
 | `statusLine({ tone, text, actions, id })` | `p.status-line.lead-grid[role=status]` > `span.line-dot` + `span.line-text.t-body` (> `span.line-actions` of tertiary buttons) | The dot hangs in the lead column. Tones `"" (harbour) progress warning complete failed`. `actions: [{ label, run(button), kind }]`. |
@@ -218,7 +220,7 @@ calls it with its own locale for notifications and quality labels.
 | `emptyState({ sentence, body, action, id })` | `{ element: section.empty-state.text-column, sentence: p.t-empty, body: p.t-body, action: button.btn, update(next) }` | Left-aligned, upper third (48 top). `action: { label, run, kind = "tertiary" }`; use `kind: "primary"` only when it is the view's one primary (popup Rescan). Pair it with the pond opening (see pond.js). |
 | `runAction(element, key, task, { onError, keepDisabled })` | promise | Single-flight per key: sets `aria-busy` and disables the element while `task` runs; labels never change. Afterwards the element gets its earlier disabled state back unless `keepDisabled()` (evaluated after the task, also on failure) returns true, e.g. a control that stays disabled until a later state change (the side panel now hides "Clear finished" instead of disabling it). |
 | `createToaster(region)` → `toast(text, tone = "success" \| "warning" \| "error")` | `div.toast` in `.toast-region` | Bottom-left, 4 s, at most 3. |
-| `createMenus(layer)` → `{ openItems(anchor, items), confirm(anchor, { question, confirmLabel, cancelLabel, confirmKind = "destructive" }), close(), isOpen() }` | `.menu-layer` > `.menu` (put `<div class="menu-layer" hidden><div class="menu"></div></div>` in the page) | Items `{ label, iconName, tone: "destructive", keepOpen, run(anchor) }`. `confirm` asks in place (the question in the row role, the strongest text in its box) and resolves true or false; the confirming button is destructive unless `confirmKind` says otherwise (an opt-in that removes nothing, Settings' "Allow", passes `"tertiary"`). Arrow keys move through the items and wrap; Escape closes and returns focus to the anchor when it is still on the page. Marks the anchor's `.row` / `.focus-panel` `data-selected`. One instance per page (it adds document listeners). |
+| `createMenus(layer)` → `{ openItems(anchor, items), confirm(anchor, { question, confirmLabel, cancelLabel, confirmKind = "destructive" }), close(), isOpen() }` | `.menu-layer` > `.menu` (put `<div class="menu-layer" hidden><div class="menu"></div></div>` in the page) | Items `{ label, iconName, tone: "destructive", keepOpen, run(anchor) }`. `confirm` asks in place (the question in the row role, the strongest text in its box) and resolves true or false; the confirming button is destructive unless `confirmKind` says otherwise (an opt-in that removes nothing, Settings' "Allow", passes `"tertiary"`). Arrow keys move through the items and wrap; Enter and Space activate the focused item on keydown (the layer consumes the key, so one press is one activation); Escape closes and returns focus to the anchor when it is still on the page. Marks the anchor's `.row` / `.focus-panel` `data-selected`. One instance per page (it adds document listeners). |
 
 ## controls.js
 
@@ -269,7 +271,9 @@ primary never count with the dialog's.
 Builder fields (`[data-field]`) get a focus ring that reaches 3:1 (2px
 `--pond-text` inside a soft halo). The two Downloads fields predate the builders
 and keep the soft halo alone (1.4:1 Morning, 1.7:1 Dusk); adding `data-field`
-to them adopts the ring.
+to them adopts the ring. An invalid field at rest draws the same construction
+in the error colour (v3 §3.9): 2px `--ring-invalid` (vermilion at 60%) inside a
+6px `--halo-invalid` (18%), never a solid outline.
 
 ## rows.js: DownloadRow
 
@@ -287,7 +291,7 @@ under the controls, then the bar. A leading status in a meta line hangs its dot
 the word stays on the text column. The focus panel bleeds 12px, like the row
 hover tint.
 
-Classes emitted: `li.row` > `span.row-lead` (`svg` 20px or `img` 56 × 32) +
+Classes emitted: `li.row` > `span.row-lead` (on full pages `span.lead-frame[data-indicator]`, 56 × 32, holding the media's `img` or a 16px type `svg`; in the popup and side panel a 20px `svg`) +
 `div.row-main` (`p.t-row.row-title` > filename, `p.t-meta.row-meta`,
 `p.t-meta.row-source`) + `div.row-trail` (`span.status`, `div.row-actions`). Live
 rows add `[data-live]`, `[data-job-id]` and a `.progress` child of the row; the
@@ -306,8 +310,8 @@ focus panel is `article.focus-panel` > row + `div.focus-progress` +
 | `liveRow(job, { focus = false, poster = true, compact = false })` | Returns a view `{ root, row, title, meta, actions, bar, details }`; insert `view.root`. `focus: true` builds the one focus panel per view. `compact: true` (popup and side panel) leaves the size out of the meta line so it fits. |
 | `updateLiveRow(view, job, { finishing, samples, onControl(action, job, button) })` | Updates in place. Controls rebuild only when status, pausable or resumable change; their handlers always get the latest `job` and call the latest `onControl`. A rebuild that replaces the focused control moves focus to the control now in the same place (Pause becomes Resume). `finishing`: `{ phase: "complete" }` (celadon) then `{ phase: "settled" }` (fades), then drop the row (§6.7: about 1.2 s and 1.8 s). `samples`: recent speeds for the chart. |
 | `transferControls(job, onControl)` | Pause or Resume (tertiary) + Cancel (destructive); `action` is `"pause"`, `"resume"` or `"cancel"`. Confirm Cancel with `menus.confirm`. |
-| `liveStatus(job, finishing)`, `liveMetaParts(job, { compact })`, `remainingTime(job)` | The status word and the meta parts, most useful first so a narrow row ellipses the size: "62%", "0:31 left", "56.3 MB/s", "1.2 GB of 3 GB" (or the bytes so far when the total is unknown). Never the parts count: that is Details only. Finishing (remuxing) shows the status word alone unless the engine names a distinct step. `remainingTime` estimates from the progress fraction when a stream has no total. |
-| `renderLiveDetails(details, job, samples)`, `segmentMap(levels, percent)`, `speedChart(samples)` | Details only inside the focus panel (§6.8). A map only when the job carries `segments` (one level 0–1 per part): finished neighbours merge into one run, 2px gaps where parts differ; an aggregate done/total never draws one. The speed line spans 80% of its slowest sample to the peak, with one meta line under it: "74 of 120 parts · Now 56.3 MB/s · Peak 58.0 MB/s". No reflection. |
+| `liveStatus(job, finishing)`, `barState(job, finishing)`, `liveMetaParts(job, { compact })`, `remainingTime(job)` | The status word and the meta parts, most useful first so a narrow row ellipses the size: "62%", "0:31 left", "56.3 MB/s", "1.2 GB of 3 GB" (or the bytes so far when the total is unknown). Never the parts count: that is Details only. Finishing (remuxing) shows the status word alone unless the engine names a distinct step. `remainingTime` estimates from the progress fraction when a stream has no total. |
+| `renderLiveDetails(details, job, samples)`, `segmentMap(levels)`, `speedChart(samples)` | Details only inside the focus panel (§6.8). A map only when the job carries `segments` (one level 0–1 per part): finished neighbours merge into one run, 2px gaps where parts differ; an aggregate done/total never draws one. The speed line spans 80% of its slowest sample to the peak, with one meta line under it: "74 of 120 parts · Now 56.3 MB/s · Peak 58.0 MB/s". No reflection. |
 
 The Downloads page keeps the job state (`finishing`, speed rings) and passes it in.
 See `extension/downloads/downloads.js` for the complete wiring.
@@ -357,11 +361,16 @@ fresh status, then resolve, or throw the issue that remains as a user error;
 (`options/options.html#local-engine`, where every Set up goes) and `openEngineSetup()`.
 
 Page plumbing: `applyStaticCopy(root)` (`[data-msg]`, `[data-msg-label]`,
-`[data-msg-placeholder]`), `bindMist(topbar, scroller)`, `pondZones(column,
-sentence, { width })` (the gutters, plus the empty-state section around a shown
-sentence; the zone never leaves that section; by default it ends at x = 480 for
-the popup and side panel, a full page passes `width`, e.g. 560 as on Downloads),
-`setPondOpening(pondElement, pond, sentence)`.
+`[data-msg-placeholder]`), `bindMist(topbar, scroller)` (keeps `data-scrolled`
+on the top bar; the band itself is CSS, see below). The pond's content boxes
+come from `contentBoxes(selectors)` in pond.js; each page lists its own.
+
+The top bar's band (v3 §3.6) is `.topbar::before`: nothing at scroll position
+0, then the tint (75% surface) and the mist fade in over the first 24 px of
+scroll, driven by a scroll timeline (`scroll(root)`; the popup names its
+`.popup-main` scroller `--page`), so a capture at scroll 0 can never show a
+stale band. `data-scrolled` only matters where scroll-driven animations are
+unsupported.
 
 Rows and dialog: `mediaRow(item, { busy, onDownload, onMore })` (glyph, the
 title, one meta line, the source line, a tertiary Download with
@@ -401,17 +410,14 @@ outside a page needs it.
 
 ## pond.js
 
-- `mountPond({ element, getZones })` → `{ refresh() }` or null. `element` is a `div.pond[data-pond][aria-hidden=true]`, first in `<body>`. `getZones()` returns `[{ x, y, width, height }]` empty areas (margins, around an empty state). For an empty state set `data-open="true"` and `--open-x` / `--open-y` on the pond element, then `refresh()`; remove `data-open` when content returns.
-- `planTouches(options)` and `oklchToRgb(L, C, H)` are exported for tests.
-- Hues come from `--touch-hues`, picked uniformly from the list. Morning uses
-  all five §6.10 hues. Dusk uses only the cool three (pond-soft, lilac,
-  celadon: `240 296.1 162`): rose and apricot turn to rust and mud at L 0.25,
-  the muddiness §2.6 rejects. This is a deliberate deviation from the §6.10
-  hue list, decided by the lead engineer. Lightness is unchanged, so the
-  layer is still equiluminant.
+The port of `docs/design-review/pond-reference/pond_layer.py`,
+`render_pond(spec="v3")` (design review v3 §3.1): drifts of touches at three
+scales, Morning touches below the ground's lightness and Dusk touches above
+the water's, alpha 0 under every content box with a 64 px feather. The script
+is the specification; no parameter is reinterpreted here.
 
-The CSS mask keeps the pond off the content column (`--column-max`, `--gutter`),
-so in the popup and side panel it only shows in the gutters and behind empty states.
+- `mountPondLayer({ element, getContentBoxes, isShown })` returns `{ refresh() }` or null. `element` is `div.pond[data-pond][aria-hidden=true]`, first in `<body>`; it gets a `<canvas>` child (system.css: no CSS mask, a 0.7 px blur). `getContentBoxes()` returns `[{ x, y, width, height }]` for every content box (header, title, controls, each text block, lists, forms, dialogs) in CSS px of the viewport; `contentBoxes(selectors)` builds it from the page (hidden elements and empty status lines have no box; open dialogs, menus and toasts are always included). Each page keeps its selector list next to its mount. Call `refresh()` after a render that moved the boxes (debounced 300 ms); resize and theme changes repaint on their own, and scrolling re-masks once per frame.
+- `PondLayer({ seed, families })`: `plan(theme, width, height, canvasL)` and `bitmap(theme, width, height, canvasL, dpr)`, each cached per theme and 128 px viewport bucket, so one install draws one layer. `planPond(options)` (pure: the drifts and every touch, in the reference's PRNG order), `renderPondBitmap(plan, dpr)`, `maskFactor(boxes, x, y)` (the mask's value at a point; overlapping feathers multiply; `MASK_FEATHER` is the 64 px), `maskContent(ctx, boxes, { dpr })` (the same mask, painted with destination-out), `contentBoxes`, `rgbToOklch`, `parseCssColor` and `oklchToRgb(L, C, H)` are exported for tests. The hue families come from `--pond-families` (tokens.css), the canvas lightness from `--canvas`, the theme from the root's `color-scheme`; the seed is a per-install integer in `chrome.storage.local`.
 
 ## Tests
 

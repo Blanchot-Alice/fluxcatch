@@ -1,0 +1,12 @@
+morning: mean|dL|=0.0041  p95|dL|=0.0249  meandC=0.0028  p95dC=0.0166
+morning: coverage(dC>0.015)=0.064
+dusk: mean|dL|=0.0076  p95|dL|=0.0484  meandC=0.0033  p95dC=0.0205
+dusk: coverage(dC>0.015)=0.078
+v2-as-written (morning): mean|dL|=0.0000 meandC=0.0001 coverage=0.003
+progress colour:
+p= 25  v2 hue= 330.5deg rgb=(189, 135, 183)   v3 hue= 268.7deg rgb=(137, 154, 201)
+p= 31  v2 hue= 338.9deg rgb=(196, 134, 177)   v3 hue= 262.2deg rgb=(133, 157, 200)
+p= 50  v2 hue=   5.4deg rgb=(215, 135, 153)   v3 hue= 241.8deg rgb=(127, 166, 196)
+p= 62  v2 hue=  22.2deg rgb=(223, 137, 134)   v3 hue= 201.8deg rgb=(103, 178, 184)
+p= 75  v2 hue=  40.4deg rgb=(226, 143, 113)   v3 hue= 158.6deg rgb=(116, 185, 146)
+palette hues (OKLCH deg): pond_soft=242, lilac=296, celadon=163, rose=12, apricot=57

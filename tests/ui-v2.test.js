@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { setUiLanguage } from "../extension/ui/v2/locale.js";
 import { DISPLAY_KEYS, MESSAGES, MODULES } from "../extension/ui/v2/messages.js";
 import { dayGroupOf, formatBytes, formatDuration, formatRate, formatRelativeTime } from "../extension/ui/v2/locale.js";
-import { planTouches, oklchToRgb } from "../extension/ui/v2/pond.js";
+import { planPond, maskFactor, maskContent, contentBoxes, rgbToOklch, parseCssColor, oklchToRgb } from "../extension/ui/v2/pond.js";
 import { splitFilename } from "../extension/ui/v2/components.js";
 import { scanColourLiterals } from "../scripts/design-audit.mjs";
 
@@ -80,7 +80,7 @@ test("v2 copy exists in both languages, with no locale leaks inside either table
   assert.deepEqual(zh, en, "zh and en tables have the same keys");
   assert.equal(en.length, Object.values(MODULES).reduce((sum, module) => sum + Object.keys(module.en).length, 0), "the merged table holds every module's keys");
   const sample = { name: "clip.mp4", count: 3, size: "3 GB", done: 31, total: 50, time: "0:05", now: "5 MB/s", peak: "6 MB/s" };
-  const LATIN_OK = new Set(["FluxCatch", "Finder", "Mac", "Chrome", "http", "https", "GB", "MB", "clip", "mp4"]);
+  const LATIN_OK = new Set(["FluxCatch", "Finder", "Mac", "Chrome", "http", "https", "GB", "MB", "clip", "mp4", "yt", "dlp"]);
   for (const key of en) {
     setUiLanguage("en");
     const english = typeof MESSAGES.en[key] === "function" ? MESSAGES.en[key](sample) : MESSAGES.en[key];
@@ -129,32 +129,116 @@ test("filenames keep their extension when truncated", () => {
   assert.equal(splitFilename("README").tail.length, 6);
 });
 
-test("pond touches are deterministic, within the §6.10 geometry, and equiluminant", () => {
-  const options = { seed: 1234, width: 1280, height: 900, lightness: 0.955, hues: [241.8, 295.6, 162.5, 12.1, 56.6], zones: [{ x: 0, y: 0, width: 200, height: 900 }, { x: 1080, y: 0, width: 200, height: 900 }] };
-  const a = planTouches(options);
-  const b = planTouches(options);
-  assert.deepEqual(a, b, "same seed, same pond");
-  assert.ok(a.length >= 150 && a.length <= 250, `touch count ${a.length}`);
-  for (const touch of a) {
-    assert.ok(touch.length >= 6 && touch.length <= 18);
-    assert.ok(touch.thickness >= 2 && touch.thickness <= 5);
-    assert.ok(Math.abs(touch.angle) <= (12 * Math.PI) / 180 + 1e-9);
-    assert.ok(touch.opacity >= 0.35 && touch.opacity <= 0.55);
-    assert.ok(Math.abs(touch.L - 0.955) <= 0.01 + 1e-9, "lightness stays within ±0.01 of the canvas");
-    assert.ok(touch.x < 200 || touch.x >= 1080, "touches fall in the margins");
+// The v3 layer (design review v3 §3.1): docs/design-review/pond-reference/pond_layer.py is the spec.
+test("the v3 pond layer is deterministic, scales with area, gathers into drifts, and sits below the Morning ground and above the Dusk water", () => {
+  const seed = 0xf1c4c7;
+  const morning = planPond({ seed, width: 1280, height: 900, theme: "morning", canvasL: 0.955 });
+  assert.deepEqual(planPond({ seed, width: 1280, height: 900, theme: "morning", canvasL: 0.955 }), morning, "same seed, same layer");
+  assert.equal(morning.drifts.length, 6, "six drifts per 1280 × 900");
+  const scales = [
+    { count: 420, length: [30, 84], width: [6, 11], alpha: [0.1, 0.24], dl: -0.03, chroma: [0.022, 0.04] },
+    { count: 2600, length: [10, 30], width: [3, 6.5], alpha: [0.22, 0.48], dl: -0.06, chroma: [0.028, 0.052] },
+    { count: 3800, length: [4, 11], width: [2, 3.4], alpha: [0.26, 0.55], dl: -0.075, chroma: [0.03, 0.058] }
+  ];
+  const mean = (list, pick) => list.reduce((sum, item) => sum + pick(item), 0) / list.length;
+  scales.forEach((scale, k) => {
+    const touches = morning.touches.filter((touch) => touch.scale === k);
+    assert.ok(touches.length > 0.8 * scale.count && touches.length <= scale.count, `scale ${k}: ${touches.length} of ${scale.count} placed`);
+    for (const touch of touches) {
+      assert.ok(touch.x >= 0 && touch.x < 1280 && touch.y >= 0 && touch.y < 900);
+      assert.ok(touch.length >= scale.length[0] && touch.length <= scale.length[1]);
+      assert.ok(touch.width >= scale.width[0] && touch.width <= scale.width[1]);
+      assert.ok(touch.alpha >= scale.alpha[0] && touch.alpha <= scale.alpha[1]);
+      assert.ok(touch.C <= scale.chroma[1] + 1e-9, "chroma never above the range (the gamut clamp can only lower it)");
+      assert.ok(touch.hue >= 0 && touch.hue < 360);
+    }
+    assert.ok(Math.abs(mean(touches, (t) => t.L) - (0.955 + scale.dl)) < 0.004, `scale ${k} sits ${scale.dl} below the ground`);
+    assert.ok(Math.abs(mean(touches, (t) => t.angle)) < 1 && mean(touches, (t) => Math.abs(t.angle)) < 8, "angles ~ N(0°, 7°)");
+  });
+  // Touches gather: a tenth of the page (its ten densest 128 × 90 cells) holds well over a tenth of them.
+  const cells = new Map();
+  for (const touch of morning.touches) {
+    const key = `${Math.floor(touch.x / 128)},${Math.floor(touch.y / 90)}`;
+    cells.set(key, (cells.get(key) || 0) + 1);
   }
-  // Composite luminance change over the canvas stays tiny: hue without value.
-  const canvas = oklchToRgb(0.955, 0.0103, 81.8);
-  const lum = ({ r, g, b }) => [r, g, b].map((v) => v / 255).map((v) => (v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4)).reduce((sum, v, i) => sum + v * [0.2126, 0.7152, 0.0722][i], 0);
-  const base = lum(canvas);
-  for (const touch of a) {
-    const [r, g, bb] = touch.rgb;
-    const blended = { r: r * touch.opacity + canvas.r * (1 - touch.opacity), g: g * touch.opacity + canvas.g * (1 - touch.opacity), b: bb * touch.opacity + canvas.b * (1 - touch.opacity) };
-    const lStar = (y) => 116 * Math.cbrt(y) - 16;
-    assert.ok(Math.abs(lStar(lum(blended)) - lStar(base)) < 2.5, "a touch moves L* by less than 2.5");
+  const densest = [...cells.values()].sort((a, b) => b - a).slice(0, 10).reduce((sum, n) => sum + n, 0);
+  assert.ok(densest / morning.touches.length >= 0.2, `the densest tenth holds ${Math.round((densest / morning.touches.length) * 100)}%`);
+  // Dusk: the same drifts and the same touch positions from the same seed, lightness above the water.
+  const dusk = planPond({ seed, width: 1280, height: 900, theme: "dusk", canvasL: 0.25 });
+  assert.deepEqual(dusk.drifts, morning.drifts);
+  assert.deepEqual(dusk.touches.map((t) => [t.x, t.y]), morning.touches.map((t) => [t.x, t.y]), "one seed, one structure on every surface");
+  [0.07, 0.135, 0.165].forEach((dl, k) => {
+    const touches = dusk.touches.filter((touch) => touch.scale === k);
+    assert.ok(Math.abs(mean(touches, (t) => t.L) - (0.25 + dl)) < 0.004, `Dusk scale ${k} sits ${dl} above the water`);
+  });
+  // Counts follow the area: the popup gets three drifts and a fraction of the touches.
+  const popup = planPond({ seed, width: 372, height: 600, theme: "morning", canvasL: 0.955 });
+  assert.equal(popup.drifts.length, 3);
+  assert.ok(popup.touches.length < 0.25 * morning.touches.length && popup.touches.length > 400, `popup touches ${popup.touches.length}`);
+});
+
+test("the content mask is 0 under a box and feathers to 1 over 64 px outside its edge, corners rounded, overlaps multiplied", () => {
+  const box = [{ x: 100, y: 60, width: 100, height: 40 }];
+  assert.equal(maskFactor(box, 150, 80), 0, "inside the box");
+  assert.equal(maskFactor(box, 100, 60), 0, "on its edge");
+  assert.equal(maskFactor(box, 150, 132), 0.5, "halfway through the feather below");
+  assert.equal(maskFactor(box, 68, 80), 0.5, "halfway through the feather to the left");
+  assert.equal(maskFactor(box, 150, 164), 1, "64 px out the layer is whole again");
+  assert.equal(maskFactor(box, 0, 0), 1);
+  assert.ok(maskFactor(box, 90, 50) > 0 && maskFactor(box, 90, 50) < 0.3, "corners are rounded: the distance to the box counts, not the two axes");
+  assert.equal(maskFactor([{ x: 20, y: 20, width: 40, height: 40 }, { x: 20, y: 100, width: 40, height: 40 }], 40, 80), (20 / 64) ** 2, "between two boxes the factors multiply");
+  assert.equal(maskFactor([{ x: 0, y: 0, width: 0, height: 10 }], 1, 1), 1, "an empty box masks nothing");
+  // The painted mask: the box itself, four sides and four corners, cut out with destination-out.
+  const calls = [];
+  const ctx = {
+    globalCompositeOperation: "source-over", fillStyle: "#000000",
+    save() { calls.push("save"); }, restore() { calls.push("restore"); },
+    fillRect(x, y, w, h) { calls.push(["fill", x, y, w, h, typeof this.fillStyle === "string" ? "solid" : this.fillStyle.kind]); },
+    createLinearGradient(x0, y0, x1, y1) { return { kind: "linear", from: [x0, y0], to: [x1, y1], stops: [], addColorStop(at, color) { this.stops.push([at, color]); } }; },
+    createRadialGradient(x, y, r0, _x, _y, r1) { return { kind: "radial", at: [x, y], r: [r0, r1], stops: [], addColorStop(at, color) { this.stops.push([at, color]); } }; }
+  };
+  maskContent(ctx, [{ x: 10, y: 20, width: 30, height: 40 }], { dpr: 2 });
+  assert.equal(ctx.globalCompositeOperation, "destination-out", "cut out of the layer (restore() is a stub here)");
+  const fills = calls.filter((call) => call[0] === "fill");
+  assert.equal(fills.length, 9, "the box, four sides, four corners");
+  assert.deepEqual(fills[0], ["fill", 20, 40, 60, 80, "solid"], "the box in device px");
+  assert.deepEqual(fills.slice(1, 5).map((f) => f[5]), ["linear", "linear", "linear", "linear"]);
+  assert.deepEqual(fills.slice(5).map((f) => f[5]), ["radial", "radial", "radial", "radial"]);
+  assert.deepEqual(fills[1].slice(1, 5), [20 - 128, 40, 128, 80], "the left feather reaches 64 CSS px (128 device px)");
+  assert.deepEqual(fills[4].slice(1, 5), [20, 120, 60, 128], "the bottom feather");
+  assert.deepEqual(fills[8].slice(1, 5), [80, 120, 128, 128], "the bottom-right corner");
+  assert.deepEqual(calls[0], "save");
+  assert.deepEqual(calls[calls.length - 1], "restore");
+});
+
+test("contentBoxes lists the rendered elements' boxes and leaves out hidden ones and empty status lines", () => {
+  const node = (id, rect, extra = {}) => ({ id, hidden: false, textContent: "text", classList: { contains: (name) => name === extra.className }, getClientRects: () => (extra.detached ? [] : [1]), getBoundingClientRect: () => rect, ...extra });
+  const nodes = [
+    node("a", { left: 10, top: 20, width: 100, height: 30 }),
+    node("b", { left: 0, top: 0, width: 50, height: 10 }, { hidden: true }),
+    node("c", { left: 5, top: 5, width: 20, height: 20 }, { detached: true }),
+    node("d", { left: 0, top: 0, width: 200, height: 44 }, { className: "status-line", textContent: "  " }),
+    node("e", { left: 0, top: 0, width: 200, height: 44 }, { className: "status-line", textContent: "Local engine isn’t set up" }),
+    node("f", { left: 0, top: 0, width: 0, height: 44 })
+  ];
+  const root = { querySelectorAll: (selector) => { assert.match(selector, /^#a, #b, dialog\[open\], \.menu-layer:not\(\[hidden\]\) > \.menu, \.toast-region > \.toast$/); return nodes; } };
+  assert.deepEqual(contentBoxes(["#a", "#b"], root), [{ x: 10, y: 20, width: 100, height: 30 }, { x: 0, y: 0, width: 200, height: 44 }]);
+  assert.deepEqual(contentBoxes(["#a"], null), []);
+});
+
+test("pond colour helpers: the canvas tokens read as the lightness the spec assumes", () => {
+  assert.deepEqual(parseCssColor("#F4F0E9"), [244, 240, 233]);
+  assert.deepEqual(parseCssColor("rgb(26, 30, 61)"), [26, 30, 61]);
+  assert.equal(parseCssColor("transparent"), null);
+  assert.ok(Math.abs(rgbToOklch(244, 240, 233).L - 0.955) < 0.005, "Morning canvas L 0.955");
+  assert.ok(Math.abs(rgbToOklch(26, 30, 61).L - 0.25) < 0.02, "Dusk canvas L about 0.25");
+  for (const [hex, hue] of [["#8FB8A3", 163], ["#7FA6C4", 242], ["#9A8CC4", 296], ["#E3AFB4", 12], ["#E7B089", 57]]) {
+    const [r, g, b] = parseCssColor(hex);
+    assert.ok(Math.abs(rgbToOklch(r, g, b).h - hue) < 1, `${hex} is the ${hue}° family`);
   }
 });
 
+// The v2 planner stays for the popup, side panel and Settings until v3 §5 step 2.
 test("the Downloads page is built on v2 only, with no copy in its HTML and no colour literals", () => {
   const html = read("extension/downloads/downloads.html");
   const order = ["../ui/v2/tokens.css", "../ui/v2/system.css", "downloads.css"].map((href) => html.indexOf(`href="${href}"`));

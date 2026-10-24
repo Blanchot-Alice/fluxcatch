@@ -11,7 +11,7 @@ import { brandMark, createMenus, createToaster, groupLabel, icon, runAction, set
 import { historyRow, liveRow, recordBytes, updateLiveRow } from "../ui/v2/rows.js";
 import { errorText, userError } from "../ui/v2/errors.js";
 import { callWorker as call, connectWorkerPort } from "../ui/v2/runtime.js";
-import { mountPond } from "../ui/v2/pond.js";
+import { contentBoxes, mountPondLayer } from "../ui/v2/pond.js";
 import { compareJobs, isTerminalStatus, recordSpeedSample, runFileAction } from "../ui/v2/jobs.js";
 
 const $ = (selector) => document.querySelector(selector);
@@ -63,7 +63,8 @@ async function init() {
   applyStaticCopy();
   bindEvents();
   onLocaleChange(() => { applyStaticCopy(); renderAll(); });
-  pond = await mountPond({ element: $("[data-pond]"), getZones: pondZones }).catch(() => null);
+  // The pond layer (design review v3 §3.1): alpha 0 under every content box.
+  pond = await mountPondLayer({ element: $("[data-pond]"), getContentBoxes: pondContentBoxes }).catch(() => null);
   await Promise.all([readPermissions(), readSettings()]);
   renderStatusLine();
   await refreshHistory();
@@ -240,6 +241,7 @@ function renderAll() {
   renderStatusLine();
   renderActive();
   renderHistory();
+  pond?.refresh();
 }
 
 function renderSummary() {
@@ -276,6 +278,7 @@ function renderStatusLine() {
   }
   container.hidden = true;
   container.replaceChildren();
+  pond?.refresh();
 }
 
 function renderLoadState() {
@@ -333,6 +336,7 @@ function renderActive() {
     const candidates = [...document.querySelectorAll(`#activeSection [data-job-id="${CSS.escape(focusJob)}"] button`)];
     (candidates.find((element) => element.dataset.action === focusAction) || candidates[0])?.focus({ preventScroll: true });
   }
+  pond?.refresh();
 }
 
 function updateLive(view, job) {
@@ -432,10 +436,10 @@ function renderHistory() {
 
 function renderEmpty(kind) {
   const empty = $("#emptyState");
-  const pondElement = $("[data-pond]");
+  const wasHidden = empty.hidden;
   if (!kind) {
     empty.hidden = true;
-    if (pondElement.dataset.open) { delete pondElement.dataset.open; pond?.refresh(); }
+    if (!wasHidden) pond?.refresh();
     return;
   }
   empty.hidden = false;
@@ -444,12 +448,8 @@ function renderEmpty(kind) {
   const action = $("#emptyAction");
   action.hidden = kind !== "noMatch";
   action.replaceChildren(document.createTextNode(msg("action.clearSearch")));
-  requestAnimationFrame(() => {
-    const rect = $("#emptySentence").getBoundingClientRect();
-    pondElement.style.setProperty("--open-x", `${Math.round(rect.left + 140)}px`);
-    pondElement.style.setProperty("--open-y", `${Math.round(rect.top + rect.height)}px`);
-    if (pondElement.dataset.open !== "true") { pondElement.dataset.open = "true"; pond?.refresh(); }
-  });
+  // The layer's mask follows the text blocks, so it repaints with them.
+  pond?.refresh();
 }
 
 function onRecordAction(action, record, control) {
@@ -564,21 +564,14 @@ async function dismissNotifications(anchor) {
   }, { onError: showError });
 }
 
-// ---------- pond zones: page margins, and the empty state when shown ----------
-function pondZones() {
-  const page = $("#page").getBoundingClientRect();
-  const width = window.innerWidth;
-  const height = window.innerHeight;
-  const zones = [
-    { x: 0, y: 0, width: Math.max(0, page.left - 12), height },
-    { x: page.right + 12, y: 0, width: Math.max(0, width - page.right - 12), height }
-  ];
-  const empty = $("#emptyState");
-  if (!empty.hidden) {
-    const rect = $("#emptySentence").getBoundingClientRect();
-    zones.push({ x: rect.left - 40, y: Math.max(0, rect.top - 70), width: 560, height: rect.height + 160 });
-  }
-  return zones;
+// ---------- pond content boxes (v3 §3.1): the layer is alpha 0 under each ----------
+// The header, the title block, the link row, each status line with text, the
+// filter row, the live and history lists, and each text block of the empty
+// state, as laid out right now.
+const DOWNLOADS_BOXES = ["#topbarInner", "#pageTitle", "#pageSummary", "#urlForm", "#statusLine", "#loadState", "#activeSection", "#filterRow", "#history", "#emptyState > *"];
+
+function pondContentBoxes() {
+  return contentBoxes(DOWNLOADS_BOXES);
 }
 
 // ---------- plumbing ----------

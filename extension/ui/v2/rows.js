@@ -4,7 +4,7 @@
 // (.row, .row-lead, .row-main, .row-trail, .row-actions, .focus-panel,
 // .segment-map, .speed-chart).
 //
-// One grid per row: lead column (glyph or poster frame) · text column
+// One grid per row: lead column (a frame on full pages, a glyph elsewhere) · text column
 // (filename in `row`, meta and source in `meta`) · trailing cell (exception
 // status, replaced by actions on hover, focus-within and selection), ending
 // on the column's right edge. The grid follows --lead and --lead-gap, so the
@@ -29,21 +29,31 @@ export function mediaKindOf(item) {
   return "video";
 }
 
-/** The lead cell: a poster frame of the user's own media (56 × 32) when
- *  `poster` is on and item.thumbnail is a data: image, else a 20px type glyph.
- *  Poster frames are for full pages only; pass poster: false in the popup and side panel. */
+/** The lead cell. On full pages (`poster` on, the default) it is the 56 × 32
+ *  frame of v3 §3.5: the media's own thumbnail when item.thumbnail is a data:
+ *  image, else the sunken ground with the 16px type glyph centred; an
+ *  indicator, not a container. The popup and side panel pass poster: false
+ *  and get the bare 20px type glyph. */
 export function rowLead(item, { poster = true } = {}) {
   const lead = document.createElement("span");
   lead.className = "row-lead";
-  if (poster && typeof item?.thumbnail === "string" && POSTER.test(item.thumbnail)) {
+  if (!poster) {
+    lead.append(icon(mediaKindOf(item)));
+    return lead;
+  }
+  const frame = document.createElement("span");
+  frame.className = "lead-frame";
+  frame.dataset.indicator = "";
+  if (typeof item?.thumbnail === "string" && POSTER.test(item.thumbnail)) {
     const image = document.createElement("img");
     image.alt = "";
     image.decoding = "async";
     image.src = item.thumbnail;
-    lead.append(image);
-    return lead;
+    frame.append(image);
+  } else {
+    frame.append(icon(mediaKindOf(item)));
   }
-  lead.append(icon(mediaKindOf(item)));
+  lead.append(frame);
   return lead;
 }
 
@@ -349,6 +359,20 @@ export function liveRow(job, { focus = false, poster = true, compact = false } =
   return view;
 }
 
+/** The bar's state (v3 §3.2): the finish hold's phase, else the job's own
+ *  state: paused, downloading (active), finishing (remuxing), failed, queued. */
+export function barState(job, finishing = null) {
+  if (finishing) return finishing.phase;
+  switch (job.status) {
+    case "paused":
+    case "pausing": return "paused";
+    case "downloading": return "active";
+    case "remuxing": return "finishing";
+    case "failed": return "failed";
+    default: return "queued";
+  }
+}
+
 /**
  * Update a live view in place (no re-render, focus stays put).
  * Controls are rebuilt only when status, pausable or resumable change; their
@@ -374,7 +398,7 @@ export function updateLiveRow(view, job, { finishing = null, samples = [], onCon
   const [tone, word] = liveStatus(job, finishing);
   const parts = finishing ? [] : liveMetaParts(job, { compact: view.compact });
   view.meta.replaceChildren(status(tone, word), document.createTextNode(parts.join(" · ")));
-  setProgress(view.bar, percent, finishing ? finishing.phase : job.status === "paused" || job.status === "pausing" ? "paused" : job.status === "downloading" ? "active" : "queued");
+  setProgress(view.bar, percent, barState(job, finishing));
   const controlsKey = finishing ? "none" : `${job.status}:${job.pausable}:${job.resumable}`;
   if (controlsKey !== view.controlsKey) {
     view.controlsKey = controlsKey;
@@ -404,7 +428,7 @@ export function renderLiveDetails(details, job, samples = []) {
   details.element.hidden = !segments && !levels.length && !hasSpeed;
   if (details.element.hidden) return;
   const nodes = [];
-  if (levels.length) nodes.push(segmentMap(levels, Math.round((Number(job.progress) || 0) * 100)));
+  if (levels.length) nodes.push(segmentMap(levels));
   const words = [];
   if (segments) words.push(msg("job.parts", segments));
   if (hasSpeed) words.push(msg("job.speedNowPeak", { now: formatRate(samples[samples.length - 1]) || "–", peak: formatRate(Math.max(...samples)) }));
@@ -425,16 +449,14 @@ export function renderLiveDetails(details, job, samples = []) {
  * own level. Contiguous finished parts merge into one solid run, so a gap
  * appears only where parts really differ (never a row of identical dashes).
  * @param {number[]} levels  one level per part, 0–1
- * @param {number} percent   the job's progress, for the fill colour
  */
-export function segmentMap(levels, percent) {
+export function segmentMap(levels) {
   const clamped = levels.map((level) => Math.max(0, Math.min(1, Number(level) || 0)));
   const map = document.createElement("div");
   map.className = "segment-map";
   map.dataset.indicator = "";
   map.setAttribute("role", "img");
   map.setAttribute("aria-label", msg("job.parts", { done: clamped.filter((level) => level >= 1).length, total: clamped.length }));
-  map.style.setProperty("--p", String(percent));
   // At most 48 cells: average neighbouring parts into buckets.
   const buckets = Math.max(1, Math.min(48, clamped.length));
   const per = clamped.length / buckets;

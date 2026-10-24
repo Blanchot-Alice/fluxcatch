@@ -37,9 +37,11 @@ function rulesOf(css) {
 const RULES = rulesOf(system);
 const ruleFor = (selector) => RULES.find((rule) => rule.selector === selector && !rule.media);
 
-test("no hairline ring at rest: a blur-0 box-shadow of 2px or less only on focus or under prefers-contrast: more", () => {
+test("no hairline ring at rest: a blur-0 box-shadow of 2px or less only on focus, on an invalid field (v3 §3.9) or under prefers-contrast: more", () => {
   for (const rule of RULES) {
     if (/prefers-contrast:\s*more/.test(rule.media)) continue;
+    // The error state is the focus ring's construction in vermilion (v3 §3.9): a ring, not a border.
+    if (/\[aria-invalid="true"\]/.test(rule.selector)) continue;
     const shadow = (rule.body.match(/box-shadow:\s*([^;]+);/) || [])[1];
     if (!shadow) continue;
     for (const part of shadow.split(/,(?![^(]*\))/)) {
@@ -88,5 +90,5 @@ test("a field in a dialog sits one value step below the dialog, and every field 
   assert.match(control.body, /background: var\(--surface\)/);
   assert.match(control.body, /border-radius: var\(--r-control\)/);
   assert.match(ruleFor(".field:focus-within").body, /box-shadow: 0 0 0 2px var\(--pond-text\)/);
-  assert.match(ruleFor('.field[data-field]:has([aria-invalid="true"]):not(:focus-within)').body, /box-shadow: 0 0 0 3px/);
+  assert.match(ruleFor('.field[data-field]:has([aria-invalid="true"]):not(:focus-within)').body, /box-shadow: 0 0 0 2px var\(--ring-invalid\), 0 0 0 6px var\(--halo-invalid\)/, "the error ring is the focus ring's construction (v3 §3.9)");
 });

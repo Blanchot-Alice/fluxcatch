@@ -1,0 +1,128 @@
+{
+  "seed": 15844551,
+  "extension": "gpnojfocoanelgibidlhholjobljefab",
+  "captures": {
+    "morning": {
+      "file": "build-empty-morning.png",
+      "canvas": "#F4F0E9",
+      "colorScheme": "light",
+      "layer": "v3",
+      "hidden": false,
+      "page": {
+        "left": 200,
+        "right": 1080
+      },
+      "boxes": [
+        {
+          "id": "topbarInner",
+          "x": 200,
+          "y": 0,
+          "width": 880,
+          "height": 56
+        },
+        {
+          "id": "pageTitle",
+          "x": 272,
+          "y": 88,
+          "width": 808,
+          "height": 34
+        },
+        {
+          "id": "urlForm",
+          "x": 200,
+          "y": 146,
+          "width": 880,
+          "height": 36
+        },
+        {
+          "id": "statusLine",
+          "x": 200,
+          "y": 182,
+          "width": 880,
+          "height": 44
+        },
+        {
+          "id": "emptySentence",
+          "x": 272,
+          "y": 274,
+          "width": 162,
+          "height": 26
+        },
+        {
+          "id": "emptyBody",
+          "x": 272,
+          "y": 308,
+          "width": 466,
+          "height": 20
+        }
+      ],
+      "viewport": [
+        1280,
+        900,
+        1
+      ],
+      "statusLine": "Local engine isn’t set upSet up"
+    },
+    "dusk": {
+      "file": "build-empty-dusk.png",
+      "canvas": "#1A1E3D",
+      "colorScheme": "dark",
+      "layer": "v3",
+      "hidden": false,
+      "page": {
+        "left": 200,
+        "right": 1080
+      },
+      "boxes": [
+        {
+          "id": "topbarInner",
+          "x": 200,
+          "y": 0,
+          "width": 880,
+          "height": 56
+        },
+        {
+          "id": "pageTitle",
+          "x": 272,
+          "y": 88,
+          "width": 808,
+          "height": 34
+        },
+        {
+          "id": "urlForm",
+          "x": 200,
+          "y": 146,
+          "width": 880,
+          "height": 36
+        },
+        {
+          "id": "statusLine",
+          "x": 200,
+          "y": 182,
+          "width": 880,
+          "height": 44
+        },
+        {
+          "id": "emptySentence",
+          "x": 272,
+          "y": 274,
+          "width": 162,
+          "height": 26
+        },
+        {
+          "id": "emptyBody",
+          "x": 272,
+          "y": 308,
+          "width": 466,
+          "height": 20
+        }
+      ],
+      "viewport": [
+        1280,
+        900,
+        1
+      ],
+      "statusLine": "Local engine isn’t set upSet up"
+    }
+  }
+}

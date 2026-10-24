@@ -1,6 +1,8 @@
 /* FluxCatch Downloads page (design review §6.15) on the v2 system.
-   One column of max 880 px. Boxes (the link field, the filter track) start on
-   the column edge; all text starts on the text column (lead 56 + gap 16).
+   One column of max 880 px. The lead column (56) holds only the BrandMark logo
+   and the row glyphs (v3 §3.4): the title, the link field, the filter row and
+   the search all start on the text column (lead 56 + gap 16), as every row's
+   text does.
    Trailing items share the column's right edge. Lists sit on the canvas.
    Rows, the focus panel and status lines are shared and live in
    ui/v2/system.css; this file holds the page's own layout only. */
@@ -16,22 +18,23 @@
   padding-bottom: var(--space-6);
 }
 
-/* ---------- link field + primary Download ---------- */
+/* ---------- link field + primary Download, on the text column ---------- */
 .url-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: var(--space-3);
   align-items: center;
-}
-
-.url-field input {
   padding-inline-start: calc(var(--lead) + var(--lead-gap));
 }
 
+.url-field input {
+  padding-inline-start: 34px;
+}
+
 .url-glyph {
-  left: calc(var(--lead) - 20px);
-  width: 20px;
-  height: 20px;
+  left: 10px;
+  width: 16px;
+  height: 16px;
 }
 
 .url-glyph svg,
@@ -47,6 +50,7 @@
   gap: var(--space-3);
   align-items: center;
   padding-top: var(--space-8);
+  padding-inline-start: calc(var(--lead) + var(--lead-gap));
 }
 
 .search-field input {

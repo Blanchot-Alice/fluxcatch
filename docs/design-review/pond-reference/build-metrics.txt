@@ -1,0 +1,23 @@
+morning: canvas #F4F0E9 · margins x<200 and x>=1080 (360000 px)
+morning margins: coverage(dC>0.015)=0.034 [target 0.04-0.12: FAIL]  p95|dL|=0.0168 [target <= 0.03: pass]  mean|dL|=0.0023  meandC=0.0018  p95dC=0.0124
+morning full page (content masked, so lower than the unmasked reference): coverage=0.049  p95|dL|=0.0213  mean|dL|=0.0064
+morning v2 build margins (audit 2026-10-22, downsampled): coverage=0.004  p95|dL|=0.0000  mean|dL|=0.0000
+dusk: canvas #1A1E3D · margins x<200 and x>=1080 (360000 px)
+dusk margins: coverage(dC>0.015)=0.039 [target 0.04-0.12: FAIL]  p95|dL|=0.0389 [target <= 0.05: pass]  mean|dL|=0.0052  meandC=0.0019  p95dC=0.0121
+dusk full page (content masked, so lower than the unmasked reference): coverage=0.059  p95|dL|=0.0469  mean|dL|=0.0106
+dusk v2 build margins (audit 2026-10-22, downsampled): coverage=0.010  p95|dL|=0.0000  mean|dL|=0.0001
+reference (pond_layer.py, full page, no mask): morning: mean|dL|=0.0041  p95|dL|=0.0249  meandC=0.0028  p95dC=0.0166 | morning: coverage(dC>0.015)=0.064 | dusk: mean|dL|=0.0076  p95|dL|=0.0484  meandC=0.0033  p95dC=0.0205 | dusk: coverage(dC>0.015)=0.078
+
+reference script, six seeds at 1280x900, no mask: margins = x<200 or x>=1080 (the Downloads page's gutters)
+seed=0xF1C4C7 morning: full cov=0.064 margins cov=0.043 margins p95dL=0.0202 (1s)
+seed=0xF1C4C7 dusk: full cov=0.078 margins cov=0.041 margins p95dL=0.0410 (1s)
+seed=0x5EED1E5 morning: full cov=0.066 margins cov=0.068 margins p95dL=0.0255 (1s)
+seed=0x5EED1E5 dusk: full cov=0.118 margins cov=0.072 margins p95dL=0.0491 (1s)
+seed=0xB morning: full cov=0.068 margins cov=0.028 margins p95dL=0.0169 (1s)
+seed=0xB dusk: full cov=0.066 margins cov=0.051 margins p95dL=0.0323 (1s)
+seed=0x16 morning: full cov=0.054 margins cov=0.051 margins p95dL=0.0210 (0s)
+seed=0x16 dusk: full cov=0.031 margins cov=0.016 margins p95dL=0.0419 (0s)
+seed=0x21 morning: full cov=0.061 margins cov=0.058 margins p95dL=0.0238 (1s)
+seed=0x21 dusk: full cov=0.097 margins cov=0.076 margins p95dL=0.0468 (1s)
+seed=0x2C morning: full cov=0.063 margins cov=0.039 margins p95dL=0.0197 (1s)
+seed=0x2C dusk: full cov=0.121 margins cov=0.043 margins p95dL=0.0378 (1s)

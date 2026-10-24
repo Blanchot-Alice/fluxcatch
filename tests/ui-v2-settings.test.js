@@ -189,6 +189,7 @@ globalThis.chrome = {
   runtime: {
     id: "abcdefghijklmnopabcdefghijklmnop",
     getURL: (path) => path,
+    getPlatformInfo: async () => ({ os: "mac", arch: "arm64", nacl_arch: "arm64" }),
     async sendMessage(message) {
       sent.push(structuredClone(message));
       switch (message.type) {
@@ -261,7 +262,7 @@ const visibleText = (root) => {
   walk(root, false);
   return out;
 };
-const AUDIT_LATIN_OK = new Set(["fluxcatch", "finder", "chrome", "macos", "mp4", "mkv", "webm", "kb", "mb", "gb", "instagram", "youtube", "bilibili", "x", "mac"]);
+const AUDIT_LATIN_OK = new Set(["fluxcatch", "finder", "chrome", "macos", "mp4", "mkv", "webm", "kb", "mb", "gb", "instagram", "youtube", "bilibili", "x", "mac", "yt-dlp"]);
 
 // ---------- static ----------
 
@@ -381,7 +382,7 @@ test("the status rows: one engine row, merging, Instagram and X, local network; 
     ["Encrypted streams", "Not set up"],
     ["Copy-protected video", "Not yet"],
     ["Videos with separate sound", "Not set up"],
-    ["YouTube", "Not yet"],
+    ["YouTube", "Not set up"],
     ["Video thumbnails", "Yes"]
   ]);
   // The Instagram/X engine switch cannot be turned on without a working engine.
@@ -398,7 +399,9 @@ test("the status rows: one engine row, merging, Instagram and X, local network; 
   assert.equal($("#engine-action").hidden, true, "a Ready engine offers no Retry");
   assert.equal($("#install").hidden, true, "nor the install steps");
   assert.equal($("#row-merge .row-status").textContent, "Yes");
-  assert.deepEqual(listed().map(([, value]) => value), ["Yes", "Yes", "Yes", "Not yet", "Yes", "Not yet", "Yes", "Not yet", "Yes"]);
+  // YouTube turns to Yes only once a Ready engine reports yt-dlp; this host does not.
+  assert.deepEqual(listed().map(([, value]) => value), ["Yes", "Yes", "Yes", "Not yet", "Yes", "Not yet", "Yes", "Needs an extra component", "Yes"], "no tool name in a status word (v3 §3.8)");
+  assert.equal($("#row-capability-7 .row-status").dataset.tone, "cancelled");
   assert.equal($("#field-useNativeForDirect").disabled, false);
   assert.equal($("#row-location .setting-description").textContent, "~/Downloads/FluxCatch");
   assert.equal($("#row-location .setting-description").hasAttribute("data-user-content"), true, "the path is user content");
@@ -684,7 +687,7 @@ test("Lab: Developer tools is off by default; on, it reveals the UI editor and v
   assert.equal($("#field-developerTools").getAttribute("aria-checked"), "false");
   assert.equal($("#field-developerTools").closest("section").id, "lab", "the row sits straight under Lab, no Developer sub-heading");
   assert.equal($("#developer-rows").hidden, true);
-  assert.match($("#row-unsupported .setting-description").textContent, /^YouTube · Live streams · Copy-protected video$/);
+  assert.match($("#row-unsupported .setting-description").textContent, /^Live streams · Copy-protected video$/);
   $("#field-developerTools").click();
   await settle();
   assert.equal(local["fluxcatch.developerTools.v1"], true);
@@ -760,4 +763,14 @@ test("a save that ends after a language switch catches the rebuilt controls up",
   assert.equal($("#row-saveAs .saved-note").dataset.visible, "true", "the note lands on the rebuilt row");
   await globalThis.chrome.storage.local.set({ "fluxcatch.uiLanguage.v1": "en" });
   await settle(20);
+});
+
+test("shortcuts are named for the platform: macOS glyphs stay on a Mac, elsewhere they are spelled out (v3 §3.8)", () => {
+  assert.equal(page.shortcutLabel("⌥⇧F", "mac"), "⌥⇧F");
+  assert.equal(page.shortcutLabel("⌥⇧F", "other"), "Alt+Shift+F");
+  assert.equal(page.shortcutLabel("⌘⇧D", "other"), "Ctrl+Shift+D", "Command is Ctrl's counterpart, as in a manifest's suggested_key");
+  assert.equal(page.shortcutLabel("⌃⌥W", "other"), "Ctrl+Alt+W");
+  assert.equal(page.shortcutLabel("⌘⌃W", "other"), "Ctrl+W", "one Ctrl");
+  assert.equal(page.shortcutLabel("Alt+Shift+F", "other"), "Alt+Shift+F", "Chrome's own key names pass through");
+  assert.equal(page.shortcutLabel("", "mac"), "");
 });

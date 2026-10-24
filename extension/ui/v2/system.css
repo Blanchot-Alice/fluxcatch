@@ -96,17 +96,58 @@ textarea {
   padding-inline-start: calc(var(--lead) + var(--lead-gap));
 }
 
-/* ---------- top bar: no rule; a mist appears once content scrolls under it ---------- */
+/* ---------- top bar: no rule; at scroll position 0 it is the canvas itself (v3 §3.6) ---------- */
 .topbar {
   position: sticky;
   top: 0;
   z-index: 10;
-  transition: box-shadow var(--t-micro) var(--ease), background-color var(--t-micro) var(--ease);
 }
 
-.topbar[data-scrolled="true"] {
-  background: var(--canvas);
+/* The band: nothing at scroll position 0, then the tint (75% surface) and the
+   mist fade in over the first 24 px of scroll, driven by the scroll position
+   itself, so no frame ever shows a stale state. Pages whose scroller is not
+   the root (the popup's .popup-main) name their timeline --page. */
+.topbar::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: color-mix(in srgb, var(--surface) 75%, transparent);
   box-shadow: var(--mist);
+  opacity: 0;
+  pointer-events: none;
+  animation: topbar-band linear both;
+  animation-timeline: scroll(root block);
+  animation-range: 0 24px;
+}
+
+@keyframes topbar-band {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+html[data-surface="popup"] {
+  timeline-scope: --page;
+}
+
+[data-surface="popup"] .popup-main {
+  scroll-timeline: --page block;
+}
+
+[data-surface="popup"] .topbar::before {
+  animation-timeline: --page;
+}
+
+/* Without scroll-driven animations the pages' own scroll listeners (bindMist,
+   data-scrolled) carry the state. */
+@supports not (animation-timeline: scroll()) {
+  .topbar::before {
+    transition: opacity var(--t-micro) var(--ease);
+  }
+
+  .topbar[data-scrolled="true"]::before {
+    opacity: 1;
+  }
 }
 
 .topbar-inner {
@@ -417,7 +458,11 @@ textarea {
 .status[data-tone="failed"] { color: var(--vermilion-text); }
 .status[data-tone="cancelled"] { color: var(--harbour-text); }
 
-/* ---------- progress: single-tone fill cooling to warm in OKLCH (§6.7) ---------- */
+/* ---------- progress: the bar is the state's colour (v3 §3.2) ----------
+   Queued harbour, downloading pond, paused lilac at 60%, finishing (merging,
+   converting) ochre, complete celadon for 1.2 s and then the bar fades out,
+   failed vermilion. No percentage-driven hue: the states are the hours of a
+   download. The tip highlight and the 3% shimmer belong to the downloading bar. */
 .progress {
   --p: 0;
   position: relative;
@@ -437,26 +482,21 @@ textarea {
   inset: 0 auto 0 0;
   width: calc(var(--p) * 1%);
   border-radius: inherit;
-  background: color-mix(in oklch, var(--lilac), var(--ochre) calc(var(--p) * 1%));
+  background: var(--pond);
   transition: width var(--t-micro) var(--ease), background-color var(--t-state) var(--ease), opacity var(--t-state) var(--ease);
 }
 
-/* A soft highlight at the tip of the fill. */
-.progress-fill::after {
-  content: "";
-  position: absolute;
-  top: 50%;
-  right: -12px;
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  transform: translateY(-50%);
-  background: radial-gradient(circle, color-mix(in srgb, var(--surface) 40%, transparent), transparent 70%);
-  pointer-events: none;
+.progress[data-state="queued"] .progress-fill {
+  background: var(--harbour);
 }
 
 .progress[data-state="paused"] .progress-fill {
-  background: color-mix(in oklch, var(--lilac) 60%, var(--sunken));
+  background: color-mix(in srgb, var(--lilac) 60%, transparent);
+}
+
+.progress[data-state="finishing"] .progress-fill {
+  width: 100%;
+  background: var(--ochre);
 }
 
 .progress[data-state="complete"] .progress-fill {
@@ -469,6 +509,24 @@ textarea {
   opacity: 0;
 }
 
+.progress[data-state="failed"] .progress-fill {
+  background: var(--vermilion);
+}
+
+/* A soft highlight at the tip of the downloading fill. */
+.progress[data-state="active"] .progress-fill::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: -12px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  transform: translateY(-50%);
+  background: radial-gradient(circle, color-mix(in srgb, var(--surface) 40%, transparent), transparent 70%);
+  pointer-events: none;
+}
+
 .progress[data-state="active"] .progress-fill::before {
   content: "";
   position: absolute;
@@ -479,6 +537,8 @@ textarea {
 
 @keyframes pond-shimmer {
   from { transform: translateX(-100%); }
+  to { transform: translateX(100%); }
+}
   to { transform: translateX(100%); }
 }
 
@@ -630,31 +690,22 @@ textarea {
   to { opacity: 1; transform: none; }
 }
 
-/* ---------- pond layer: broken colour in empty space only (§6.10) ---------- */
+/* ---------- pond layer: broken colour in empty space only (v3 §3.1) ---------- */
 .pond {
-  --col-left: max(var(--gutter), calc((100vw - var(--column-max)) / 2));
-  --col-right: calc(100vw - var(--col-left));
   position: fixed;
   inset: 0;
   z-index: -1;
   pointer-events: none;
-  background-repeat: no-repeat;
-  background-position: 0 0;
-  /* Visible in the page margins; masked to nothing under the content column. */
-  -webkit-mask-image: linear-gradient(to right, var(--mask-on) 0, var(--mask-on) calc(var(--col-left) - 24px), transparent var(--col-left), transparent var(--col-right), var(--mask-on) calc(var(--col-right) + 24px));
-  mask-image: linear-gradient(to right, var(--mask-on) 0, var(--mask-on) calc(var(--col-left) - 24px), transparent var(--col-left), transparent var(--col-right), var(--mask-on) calc(var(--col-right) + 24px));
+  /* The mask is drawn into the layer itself (alpha 0 under every content box,
+     feathered over 64 px: pond.js maskContent), and the reference's 0.7 px
+     blur softens the composited touches. */
+  filter: blur(0.7px);
 }
 
-/* Behind an empty state the pond opens around the sentence. */
-.pond[data-open="true"] {
-  -webkit-mask-image:
-    linear-gradient(to right, var(--mask-on) 0, var(--mask-on) calc(var(--col-left) - 24px), transparent var(--col-left), transparent var(--col-right), var(--mask-on) calc(var(--col-right) + 24px)),
-    radial-gradient(ellipse 420px 180px at var(--open-x, 50%) var(--open-y, 50%), var(--mask-on) 30%, transparent 100%);
-  mask-image:
-    linear-gradient(to right, var(--mask-on) 0, var(--mask-on) calc(var(--col-left) - 24px), transparent var(--col-left), transparent var(--col-right), var(--mask-on) calc(var(--col-right) + 24px)),
-    radial-gradient(ellipse 420px 180px at var(--open-x, 50%) var(--open-y, 50%), var(--mask-on) 30%, transparent 100%);
-  -webkit-mask-composite: source-over;
-  mask-composite: add;
+.pond > canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 
 /* ======================================================================
@@ -741,17 +792,34 @@ textarea {
   height: 20px;
 }
 
-/* A type glyph centres on the filename's line, where the trailing actions
-   sit; a poster frame stays centred on the row. */
-.row-lead:not(:has(img)) {
+/* A bare type glyph (popup, side panel) centres on the filename's line, where
+   the trailing actions sit; a frame stays centred on the row. */
+.row-lead:not(:has(.lead-frame)) {
   align-self: start;
   height: var(--row-line);
 }
 
-.row-lead img {
+/* Full pages (v3 §3.5): the lead is a 56 × 32 frame, the media's own
+   thumbnail or the sunken ground with the 16px type glyph centred. An
+   indicator, not a container, so it does not count toward the nesting rule. */
+.lead-frame {
+  display: grid;
+  place-items: center;
   width: var(--lead);
   height: 32px;
   border-radius: var(--r-thumb);
+  background: var(--sunken);
+  overflow: hidden;
+}
+
+.lead-frame > svg {
+  width: 16px;
+  height: 16px;
+}
+
+.lead-frame > img {
+  width: 100%;
+  height: 100%;
   object-fit: cover;
 }
 
@@ -971,7 +1039,7 @@ textarea {
   position: absolute;
   inset: 0 auto 0 0;
   width: calc(var(--level) * 100%);
-  background: color-mix(in oklch, var(--lilac), var(--ochre) calc(var(--p) * 1%));
+  background: var(--pond);
 }
 
 /* The speed line and its caption read as one block. */
@@ -1075,8 +1143,11 @@ textarea {
 
 /* Invalid: a soft vermilion halo, shaped like the focus halo (no hard ring at
    rest: §6.2, audit g). The setting's error line carries the words. */
+/* An invalid field at rest draws the focus ring's construction in the error
+   colour (v3 §3.9): 2px vermilion at 60% inside a 6px soft halo, never a
+   solid outline that reads as a border. */
 .field[data-field]:has([aria-invalid="true"]):not(:focus-within) {
-  box-shadow: 0 0 0 3px var(--halo-invalid);
+  box-shadow: 0 0 0 2px var(--ring-invalid), 0 0 0 6px var(--halo-invalid);
 }
 
 .field-unit {
@@ -1478,6 +1549,16 @@ label.setting-name {
     display: none;
   }
 
+  /* No running animation at all: the top bar's band takes the pages' own
+     scroll state (data-scrolled) and appears whole once the page has scrolled. */
+  .topbar::before {
+    animation: none !important;
+  }
+
+  .topbar[data-scrolled="true"]::before {
+    opacity: 1;
+  }
+
   /* The switch thumb jumps instead of sliding. */
   .switch-thumb {
     transition-duration: 0s !important;
@@ -1497,6 +1578,14 @@ label.setting-name {
 :root[data-motion="reduced"] .progress[data-state="active"] .progress-fill::before {
   animation: none;
   display: none;
+}
+
+:root[data-motion="reduced"] .topbar::before {
+  animation: none !important;
+}
+
+:root[data-motion="reduced"] .topbar[data-scrolled="true"]::before {
+  opacity: 1;
 }
 
 :root[data-motion="reduced"] .switch-thumb {

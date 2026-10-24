@@ -17,7 +17,10 @@
 //                   than html/body, controls, indicators, media and the pond
 //                   layer. A container inside another container is a violation.
 //  d  contrast    = text colour (alpha × ancestor opacity) composited over the
-//                   ancestor background stack on the canvas colour.
+//                   ancestor background stack on what is really under it: the
+//                   pond layer's pixels over the canvas colour (v3 §3.1), the
+//                   worst sample under the text run. Any pond alpha under a text
+//                   run is reported (pondUnderText): the mask must clear it.
 //  e  clipping    = text or control cut by an overflow:hidden/clip ancestor or by
 //                   a viewport that cannot scroll; any control or text partly or
 //                   wholly under a fixed/sticky bar at rest; any control under a
@@ -29,6 +32,10 @@
 //  g  rules       = any visible border, outline, hairline box-shadow (blur 0,
 //                   ≤ 2 px), or element/pseudo-element ≤ 2 px thick and ≥ 16 px
 //                   long with a fill.
+//  header         = at scroll position 0 the .topbar is the canvas: its own
+//                   background alpha 0 and no box-shadow, and its ::before /
+//                   ::after band at opacity 0 (v3 §3.6). The driver also checks
+//                   the capture without the pond layer pixel for pixel.
 export function pageAudit(cfg) {
   const doc = document;
   const view = window;
@@ -257,8 +264,45 @@ export function pageAudit(cfg) {
   };
   const ratio = (x, y) => { const [h, l] = [lum(x), lum(y)].sort((p, q) => q - p); return (h + 0.05) / (l + 0.05); };
   const hex = (c) => "#" + [c.r, c.g, c.b].map((v) => Math.round(v).toString(16).padStart(2, "0")).join("").toUpperCase();
+  // The pond layer is a fixed canvas behind the page; text sits on the canvas
+  // token only where the layer's mask has cleared it (v3 §3.1). Read its
+  // pixels once and composite every text run over what is really under it.
+  const pondCanvas = doc.querySelector("[data-pond] canvas");
+  let pondRead = null;
+  if (pondCanvas && pondCanvas.width > 0 && pondCanvas.height > 0) {
+    try {
+      const r = pondCanvas.getBoundingClientRect();
+      const off = new OffscreenCanvas(pondCanvas.width, pondCanvas.height);
+      const octx = off.getContext("2d", { willReadFrequently: true });
+      octx.drawImage(pondCanvas, 0, 0);
+      pondRead = { ctx: octx, sx: pondCanvas.width / Math.max(1, r.width), sy: pondCanvas.height / Math.max(1, r.height), left: r.left, top: r.top, w: pondCanvas.width, h: pondCanvas.height };
+    } catch { pondRead = null; }
+  }
+  // The layer's pixels under a viewport rect, up to about 4 096 samples; only
+  // pixels the layer actually paints (alpha > 0) are returned.
+  function pondUnder(rect) {
+    if (!pondRead) return null;
+    const x0 = Math.max(0, Math.floor((rect.left - pondRead.left) * pondRead.sx));
+    const y0 = Math.max(0, Math.floor((rect.top - pondRead.top) * pondRead.sy));
+    const x1 = Math.min(pondRead.w, Math.ceil((rect.right - pondRead.left) * pondRead.sx));
+    const y1 = Math.min(pondRead.h, Math.ceil((rect.bottom - pondRead.top) * pondRead.sy));
+    if (x1 <= x0 || y1 <= y0) return null;
+    const w = x1 - x0;
+    const h = y1 - y0;
+    const data = pondRead.ctx.getImageData(x0, y0, w, h).data;
+    const stride = Math.max(1, Math.ceil(Math.sqrt((w * h) / 4096)));
+    const samples = [];
+    for (let y = 0; y < h; y += stride) {
+      for (let x = 0; x < w; x += stride) {
+        const i = (y * w + x) * 4;
+        if (data[i + 3] > 0) samples.push({ r: data[i], g: data[i + 1], b: data[i + 2], a: data[i + 3] / 255 });
+      }
+    }
+    return samples;
+  }
   const contrastFailures = [];
   const contrastUncertain = [];
+  const pondUnderText = [];
   let contrastChecked = 0;
   for (const b of scoped) {
     if (b.el.closest(":disabled, [aria-disabled='true'], [inert]")) continue;
@@ -272,21 +316,41 @@ export function pageAudit(cfg) {
       if (bg.a > 0) layers.push(bg);
       if (bg.a >= 0.999) break;
     }
-    let bg = rootBg;
-    for (let i = layers.length - 1; i >= 0; i -= 1) bg = over(layers[i], bg);
     const fg0 = parseColor(s.color);
-    const fg = over({ ...fg0, a: fg0.a * b.opacity }, bg);
-    const value = ratio(fg, bg);
+    const composite = (base) => {
+      let stack = base;
+      for (let i = layers.length - 1; i >= 0; i -= 1) stack = over(layers[i], stack);
+      return stack;
+    };
+    // The flat case (the canvas token under the stack), then the worst pond
+    // sample under the run when no opaque layer hides the pond.
+    let bg = composite(rootBg);
+    let fg = over({ ...fg0, a: fg0.a * b.opacity }, bg);
+    let value = ratio(fg, bg);
+    let pondAlpha = 0;
+    const opaque = layers.some((layer) => layer.a >= 0.999);
+    if (!opaque && pondRead) {
+      for (const rect of b.rects) {
+        for (const p of pondUnder(rect) || []) {
+          pondAlpha = Math.max(pondAlpha, p.a);
+          const bgi = composite(over(p, rootBg));
+          const fgi = over({ ...fg0, a: fg0.a * b.opacity }, bgi);
+          const v = ratio(fgi, bgi);
+          if (v < value) { value = v; bg = bgi; fg = fgi; }
+        }
+      }
+    }
     const size = parseFloat(s.fontSize);
     const weight = parseInt(s.fontWeight, 10) || 400;
     const large = size >= 24 || (size >= 18.66 && weight >= 700);
     const required = large ? 3 : 4.5;
     contrastChecked += 1;
-    const record = { text: b.text.slice(0, 60), where: describe(b.el), ratio: Math.round(value * 100) / 100, required, fg: hex(fg), bg: hex(bg), size: s.fontSize, weight: s.fontWeight };
+    const record = { text: b.text.slice(0, 60), where: describe(b.el), ratio: Math.round(value * 100) / 100, required, fg: hex(fg), bg: hex(bg), size: s.fontSize, weight: s.fontWeight, pondAlpha: Math.round(pondAlpha * 1000) / 1000 };
     if (uncertain) contrastUncertain.push({ ...record, gradientOn: uncertain });
     if (value + 1e-6 < required) contrastFailures.push(record);
+    if (pondAlpha > 0.02) pondUnderText.push({ text: record.text, where: record.where, pondAlpha: record.pondAlpha });
   }
-  result.contrast = { checked: contrastChecked, failures: contrastFailures, uncertain: contrastUncertain };
+  result.contrast = { checked: contrastChecked, failures: contrastFailures, uncertain: contrastUncertain, pondRead: Boolean(pondRead), pondUnderText };
 
   // ---------- e: clipping and covering ----------
   const FOCUSABLE = "button, a[href], input:not([type=hidden]), select, textarea, summary, [tabindex]:not([tabindex='-1'])";
@@ -459,7 +523,8 @@ export function pageAudit(cfg) {
       }
     }
     if (parseFloat(s.outlineWidth) > 0 && s.outlineStyle !== "none" && parseColor(s.outlineColor).a > 0.02) rules.push({ where: describe(el), what: `outline ${s.outlineWidth} at rest` });
-    checkShadow(el, s.boxShadow, "");
+    // An invalid field's ring is the focus ring's construction in vermilion (v3 §3.9), not a border.
+    if (!el.matches('.field:has([aria-invalid="true"])')) checkShadow(el, s.boxShadow, "");
     const r = el.getBoundingClientRect();
     const filled = parseColor(s.backgroundColor).a > 0.05 || (s.backgroundImage && s.backgroundImage !== "none");
     if (filled && ((r.height > 0 && r.height <= 2 && r.width >= 16) || (r.width > 0 && r.width <= 2 && r.height >= 16)) && !el.closest(cfg.indicatorSelector)) {
@@ -503,7 +568,48 @@ export function pageAudit(cfg) {
 
   // ---------- pond layer presence ----------
   const pond = doc.querySelector("[data-pond]");
-  result.pond = pond ? { present: true, image: cs(pond).backgroundImage !== "none" } : { present: false };
+  result.pond = pond ? { present: true, state: pond.dataset.pondState || null, canvas: Boolean(pondRead) } : { present: false };
+
+  // ---------- header at scroll 0 (v3 §3.6) ----------
+  const topbar = doc.querySelector(".topbar");
+  if (topbar) {
+    const ts = cs(topbar);
+    const scrolled = [...doc.querySelectorAll("*")].find((el) => el.scrollTop > 0) || null;
+    const pseudo = (name) => {
+      const ps = getComputedStyle(topbar, name);
+      const shown = ps.content !== "none" && ps.content !== "normal" && ps.display !== "none";
+      return { shown, opacity: parseFloat(ps.opacity), backgroundAlpha: Math.round(parseColor(ps.backgroundColor).a * 1000) / 1000, boxShadow: ps.boxShadow };
+    };
+    const before = pseudo("::before");
+    const after = pseudo("::after");
+    const ownAlpha = Math.round(parseColor(ts.backgroundColor).a * 1000) / 1000;
+    const problems = [];
+    if (view.scrollY > 0 || scrolled) problems.push(`not at scroll 0 (scrollY ${view.scrollY}${scrolled ? ", " + describe(scrolled) + " scrolled" : ""})`);
+    if (ownAlpha > 0.001) problems.push(`header background alpha ${ownAlpha}`);
+    if (ts.boxShadow !== "none") problems.push(`header box-shadow ${ts.boxShadow}`);
+    for (const [name, p] of [["::before", before], ["::after", after]]) {
+      if (!p.shown) continue;
+      if (p.opacity * p.backgroundAlpha > 0.001) problems.push(`${name} shows a band (opacity ${p.opacity}, background alpha ${p.backgroundAlpha})`);
+      if (p.boxShadow !== "none" && p.opacity > 0.001) problems.push(`${name} shows a shadow (opacity ${p.opacity})`);
+    }
+    const r = topbar.getBoundingClientRect();
+    // The bar's content (its rendered children: the inner column, the popup's
+    // view bar) is excluded from the pixel check; the rest of the bar is canvas.
+    const content = [...topbar.children].filter(isRendered).map((el) => el.getBoundingClientRect()).filter((cr) => cr.width > 0 && cr.height > 0).map((cr) => ({ x: cr.left, y: cr.top, width: cr.width, height: cr.height }));
+    result.header = {
+      present: true,
+      scrollY: view.scrollY,
+      backgroundAlpha: ownAlpha,
+      boxShadow: ts.boxShadow,
+      band: { opacity: before.opacity, backgroundAlpha: before.backgroundAlpha, boxShadow: before.boxShadow },
+      rect: { x: r.left, y: r.top, width: r.width, height: r.height },
+      content,
+      modal: Boolean(inModal),
+      problems
+    };
+  } else {
+    result.header = { present: false };
+  }
   result.viewport = { width: view.innerWidth, height: view.innerHeight, scrollHeight: se.scrollHeight, lang: doc.documentElement.lang };
   return result;
 }

@@ -119,7 +119,7 @@ test("pages show public URLs but send only opaque candidate references", () => {
 });
 
 test("stable builds hide external-tool candidates and setup paths", () => {
-  assert.equal(media.isOfferedCandidate({ kind: "youtube" }), false);
+  assert.equal(media.isOfferedCandidate({ kind: "youtube" }), true, "the GitHub build carries the brokered yt-dlp adapter");
   assert.equal(media.isOfferedCandidate({ kind: "segment" }), false);
   assert.equal(media.isOfferedCandidate({ kind: "video" }), true);
   for (const source of [mediaJs, popupJs, sidepanelJs]) assert.doesNotMatch(source, /yt-dlp|ytdlp/);

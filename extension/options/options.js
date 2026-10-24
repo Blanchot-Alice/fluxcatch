@@ -14,7 +14,7 @@ import { brandMark, button, createMenus, createToaster, filename, icon, runActio
 import { controlOf, isSwitchOn, markSaved, nav, numberField, segmented, select, setSettingError, setSwitch, settingRow, switchControl, textField } from "../ui/v2/controls.js";
 import { errorText, userError } from "../ui/v2/errors.js";
 import { callWorker } from "../ui/v2/runtime.js";
-import { mountPond } from "../ui/v2/pond.js";
+import { contentBoxes, mountPondLayer } from "../ui/v2/pond.js";
 import { bindUiCustomization, loadDeveloperTools, saveDeveloperTools } from "../ui/customization.js";
 import {
   FILENAME_TOKENS,
@@ -99,6 +99,7 @@ const state = {
   developer: false,
   languagePref: "auto",
   shortcuts: [],
+  platform: "mac",
   // Typed fields whose value is not stored: invalid input, or a save that failed.
   invalid: new Set(),
   templateSelection: { start: 0, end: 0 },
@@ -139,13 +140,14 @@ async function init() {
   mountChrome();
   try { state.developer = await loadDeveloperTools(); } catch { state.developer = false; }
   try { state.languagePref = await loadUiLanguage(); } catch { state.languagePref = "auto"; }
+  state.platform = await readPlatform();
   state.shortcuts = await readShortcuts();
   build();
   built = true;
   // Layout overrides only: the UI editor never replaces v2 copy (rename table, §5 note).
   customization = await bindUiCustomization({ onChange: onCustomizationChange }).catch(() => null);
   bindGlobalEvents();
-  mountPond({ element: $("[data-pond]"), getZones: pondZones }).then((mounted) => { pond = mounted; }).catch(() => {});
+  mountPondLayer({ element: $("[data-pond]"), getContentBoxes: pondContentBoxes }).then((mounted) => { pond = mounted; }).catch(() => {});
   await load();
 }
 
@@ -324,13 +326,15 @@ function buildCapabilities() {
     // Next to Encrypted streams: AES-128 streams save, DRM never does.
     [msg("settings.cap.protected"), false, true],
     [msg("settings.cap.separateAudio"), features.separateAudioHls, true],
-    [YOUTUBE, features.externalToolNetwork, true],
+    // YouTube needs yt-dlp on this Mac as well as the engine: the row turns
+    // to Yes only once a Ready engine reports the tool (renderEngine).
+    [YOUTUBE, features.externalToolNetwork, true, "ytdlp"],
     [msg("settings.cap.thumbnails"), features.remoteThumbnails, false]
   ];
-  return capabilities.map(([name, feature, needsEngine], index) => {
+  return capabilities.map(([name, feature, needsEngine, tool], index) => {
     const enabled = feature === true;
     const statusNode = enabled ? rowStatus("complete", msg("settings.yes")) : rowStatus("cancelled", msg("settings.notYet"));
-    ui.capabilities.push({ status: statusNode, enabled, needsEngine });
+    ui.capabilities.push({ status: statusNode, enabled, needsEngine, tool: tool || null });
     return row(`capability-${index}`, { name, control: statusNode });
   });
 }
@@ -613,10 +617,40 @@ async function readShortcuts() {
   }
 }
 
+// macOS glyphs and the names Windows and Linux use, in Chrome's order there
+// (Ctrl, Alt, Shift); Command is Ctrl's counterpart, as in a manifest's suggested_key.
+const MAC_GLYPHS = [["⌘", "Ctrl"], ["⌃", "Ctrl"], ["⌥", "Alt"], ["⇧", "Shift"]];
+
+/** The shortcut as this platform names it (v3 §3.8): Chrome reports macOS
+ *  glyphs ("⌥⇧F") on a Mac and key names ("Alt+Shift+F") elsewhere; a glyph
+ *  string that reaches another platform is spelled out. Exported for tests. */
+export function shortcutLabel(shortcut, platform = state.platform) {
+  const text = String(shortcut || "").trim();
+  if (!text || platform === "mac" || !/[⌃⌥⇧⌘]/.test(text)) return text;
+  const names = [];
+  let rest = text;
+  for (const [glyph, name] of MAC_GLYPHS) {
+    if (!rest.includes(glyph)) continue;
+    if (!names.includes(name)) names.push(name);
+    rest = rest.replaceAll(glyph, "");
+  }
+  return [...names, rest.trim()].filter(Boolean).join("+");
+}
+
+/** "mac" or "other": Chrome's own word for the platform, else the browser's. */
+async function readPlatform() {
+  try {
+    const info = await globalThis.chrome?.runtime?.getPlatformInfo?.();
+    if (info?.os) return info.os === "mac" ? "mac" : "other";
+  } catch { /* fall through */ }
+  const hint = String(globalThis.navigator?.userAgentData?.platform || globalThis.navigator?.platform || "");
+  return /mac/i.test(hint) ? "mac" : "other";
+}
+
 function shortcutsText() {
   const parts = state.shortcuts
     .filter((command) => SHORTCUT_LABELS[command.name] && command.shortcut)
-    .map((command) => `${command.shortcut} ${msg(SHORTCUT_LABELS[command.name])}`);
+    .map((command) => `${shortcutLabel(command.shortcut)} ${msg(SHORTCUT_LABELS[command.name])}`);
   return parts.length ? parts.join(" · ") : msg("settings.shortcuts.none");
 }
 
@@ -752,6 +786,7 @@ function renderLoadState() {
   sections.setAttribute("aria-busy", "true");
   text.textContent = msg(state.loadFailed ? "settings.loadFailed" : "settings.loading");
   retry.hidden = !state.loadFailed;
+  pond?.refresh();
 }
 
 // ---------- loading ----------
@@ -1130,10 +1165,22 @@ function renderEngine() {
   };
   mirror($(".row-status", ui.rows.merge), view.merging ? ["complete", "settings.yes"] : ["cancelled", "settings.notYet"]);
   for (const capability of ui.capabilities) {
-    if (capability.enabled && capability.needsEngine) mirror(capability.status, ["complete", "settings.yes"]);
+    if (!capability.enabled || !capability.needsEngine) continue;
+    if (capability.tool === "ytdlp" && !engineToolReady("ytdlp")) {
+      mirror(capability.status, ["cancelled", "settings.cap.toolMissing"]);
+      continue;
+    }
+    mirror(capability.status, ["complete", "settings.yes"]);
   }
   renderSwitchGates();
   renderLocation();
+}
+
+// A Ready engine confirms an external tool only when it reports the tool as
+// present and usable; an older engine that never reported it stays "No".
+function engineToolReady(name) {
+  const tool = state.host?.capabilities?.[name];
+  return Boolean(tool && tool.available === true && tool.networkDisabled === false);
 }
 
 function showEngineError() {
@@ -1317,15 +1364,11 @@ function updateCurrentSection() {
   ui.nav.setCurrent(current);
 }
 
-// ---------- pond zones: the page margins only ----------
-function pondZones() {
-  const page = $("#page").getBoundingClientRect();
-  const width = globalThis.innerWidth;
-  const height = globalThis.innerHeight;
-  return [
-    { x: 0, y: 0, width: Math.max(0, page.left - 12), height },
-    { x: page.right + 12, y: 0, width: Math.max(0, width - page.right - 12), height }
-  ];
+// ---------- pond content boxes (v3 §3.1): the header, the title block, the nav and the whole content column ----------
+const SETTINGS_BOXES = ["#topbarInner", "#settingsTitle", "#settingsSubtitle", "#navSlot", "#content"];
+
+function pondContentBoxes() {
+  return contentBoxes(SETTINGS_BOXES);
 }
 
 // For node probes and the design audit: the current page state, read-only.

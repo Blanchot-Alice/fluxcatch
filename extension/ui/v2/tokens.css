@@ -95,18 +95,14 @@
   --mist: 0 10px 18px -14px rgba(78, 70, 130, 0.22);
   --press-inset: inset 0 1px 3px rgba(43, 45, 73, 0.16);
   --scrim: rgba(43, 45, 73, 0.32);
-  --mask-on: black;
-  /* An invalid field's soft halo (§6.2): vermilion, shaped like the focus halo. */
-  --halo-invalid: color-mix(in oklch, var(--vermilion) 45%, transparent);
+  /* An invalid field's ring and halo (v3 §3.9): the focus ring's construction in vermilion. */
+  --ring-invalid: color-mix(in srgb, var(--vermilion) 60%, transparent);
+  --halo-invalid: color-mix(in srgb, var(--vermilion) 18%, transparent);
 
-  /* Pond layer touches: brief hue at the canvas lightness (§6.10). The
-     generator jitters lightness ±0.02 and clamps chroma to the sRGB gamut.
-     Dusk lists the cool hues twice: at L 0.25 rose and apricot turn to rust
-     and mud, so they keep their place but fall to under 30% of the touches. */
-  --touch-l: 0.955;
-  --touch-hues: 241.8 295.6 162.5 12.1 56.6;
-  --touch-opacity-min: 0.35;
-  --touch-opacity-max: 0.55;
+  /* The pond layer's hue families (design review v3 §3.1), in order round
+     the drift field: celadon, pond-soft, lilac, rose, apricot. Measured from
+     the Morning tokens; both themes use the same families. */
+  --pond-families: 162.5 241.8 295.6 12.1 56.6;
 }
 
 /* ===================== Dusk ===================== */
@@ -144,13 +140,8 @@
   --mist: 0 10px 18px -14px rgba(8, 10, 28, 0.6);
   --press-inset: inset 0 1px 3px rgba(8, 10, 28, 0.4);
   --scrim: rgba(8, 10, 28, 0.55);
-  --mask-on: black;
-  --halo-invalid: color-mix(in oklch, var(--vermilion-text) 60%, transparent);
-  --touch-l: 0.25;
-  /* Dusk: cool hues only; rose and apricot turn brown at this lightness (§2.6). */
-  --touch-hues: 240 296.1 162;
-  --touch-opacity-min: 0.35;
-  --touch-opacity-max: 0.55;
+  --ring-invalid: color-mix(in srgb, var(--vermilion-text) 60%, transparent);
+  --halo-invalid: color-mix(in srgb, var(--vermilion-text) 18%, transparent);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -188,13 +179,8 @@
     --mist: 0 10px 18px -14px rgba(8, 10, 28, 0.6);
     --press-inset: inset 0 1px 3px rgba(8, 10, 28, 0.4);
     --scrim: rgba(8, 10, 28, 0.55);
-    --mask-on: black;
-    --halo-invalid: color-mix(in oklch, var(--vermilion-text) 60%, transparent);
-    --touch-l: 0.25;
-    /* Dusk: cool hues only; rose and apricot turn brown at this lightness (§2.6). */
-    --touch-hues: 240 296.1 162;
-    --touch-opacity-min: 0.35;
-    --touch-opacity-max: 0.55;
+    --ring-invalid: color-mix(in srgb, var(--vermilion-text) 60%, transparent);
+    --halo-invalid: color-mix(in srgb, var(--vermilion-text) 18%, transparent);
   }
 }
 
@@ -232,7 +218,7 @@
   --gutter: 32px;
   --lead: 56px;
   --lead-gap: 16px;
-  --row-pad: 12px;
+  --row-pad: 14px;
   --group-above: 24px;
   --group-below: 8px;
 
@@ -269,12 +255,14 @@
   --gutter: 16px;
   --lead: 32px;
   --lead-gap: 12px;
+  --row-pad: 12px;
 }
 
 [data-surface="sidepanel"] {
   --gutter: 20px;
   --lead: 32px;
   --lead-gap: 12px;
+  --row-pad: 12px;
 }
 
 [data-surface="settings"] {
@@ -283,11 +271,19 @@
   --content-max: 680px;
 }
 
-/* Compact density tightens rows (8px instead of 12) and control height.
+/* Compact density tightens rows (10px instead of 14 on full pages, 8 instead
+   of 12 in the popup and side panel, v3 §3.5) and control height.
    Set data-density="compact" on the surface root or on one list. */
 [data-density="compact"] {
-  --row-pad: 8px;
+  --row-pad: 10px;
   --control-height: 32px;
+}
+
+[data-surface="popup"][data-density="compact"],
+[data-surface="sidepanel"][data-density="compact"],
+[data-surface="popup"] [data-density="compact"],
+[data-surface="sidepanel"] [data-density="compact"] {
+  --row-pad: 8px;
 }
 
 /* Chinese text gets 2px more line-height in row, body and meta (§4). */

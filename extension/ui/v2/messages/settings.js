@@ -86,6 +86,7 @@ const en = {
   "settings.cap.separateAudio": "Videos with separate sound",
   "settings.cap.thumbnails": "Video thumbnails",
   "settings.cap.protected": "Copy-protected video",
+  "settings.cap.toolMissing": "Needs an extra component",
 
   // ---------- saving ----------
   "settings.location.name": "Save location",
@@ -296,6 +297,7 @@ const zh = {
   "settings.cap.separateAudio": "音画分开传输的视频",
   "settings.cap.thumbnails": "视频封面",
   "settings.cap.protected": "带数字版权加密的视频",
+  "settings.cap.toolMissing": "需要额外组件",
 
   // ---------- saving ----------
   "settings.location.name": "保存位置",

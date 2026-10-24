@@ -340,7 +340,9 @@ test("history rows show a status only for exceptions, and hand actions to the ca
   assert.equal(done.querySelector(".row-trail > .status"), null, "completed rows carry no status");
   assert.equal(done.querySelector(".row-meta").textContent, "MP4 · 2160p · 2.4 GB · 2:28");
   assert.match(done.querySelector(".row-source").textContent, /^youtube\.com · 1 hr\.? ago$/);
-  assert.ok(done.querySelector(".row-lead > img"), "full pages show the poster frame");
+  assert.ok(done.querySelector(".row-lead > .lead-frame[data-indicator] > img"), "full pages frame the media's own thumbnail (v3 §3.5)");
+  const plain = rows.historyRow({ ...RECORDS.done, thumbnail: null }, { now: NOW });
+  assert.ok(plain.querySelector(".row-lead > .lead-frame[data-indicator] > svg") && !plain.querySelector("img"), "without a thumbnail the frame holds the type glyph");
   assert.ok(rows.historyRow(RECORDS.done, { now: NOW, poster: false }).querySelector(".row-lead > svg"), "poster: false shows the type glyph");
   click(done.querySelector('[data-action="open"]'));
   click(done.querySelector('[data-action="more"]'));
@@ -387,6 +389,12 @@ test("live rows update in place; the focus panel adds the 6px bar and Details", 
   assert.equal(row.actions.children.length, 0, "a finishing row drops its controls");
   assert.equal(row.root.querySelector(".progress").dataset.state, "complete");
   assert.equal(row.meta.querySelector(".status").dataset.tone, "complete");
+  // v3 §3.2: the bar is the state's colour, so the state names it; no percentage hue.
+  assert.deepEqual(["queued", "starting", "downloading", "paused", "pausing", "remuxing", "failed"].map((status) => rows.barState({ status })), ["queued", "queued", "active", "paused", "paused", "finishing", "failed"]);
+  assert.equal(rows.barState({ status: "downloading" }, { phase: "settled" }), "settled");
+  const remuxing = rows.liveRow({ ...job, status: "remuxing", progress: 1 });
+  rows.updateLiveRow(remuxing, { ...job, status: "remuxing", progress: 1 });
+  assert.equal(remuxing.root.querySelector(".progress").dataset.state, "finishing");
 
   const stream = { ...job, jobId: "j2", total: 0, message: "分片 74/120", kind: "hls" };
   const panel = rows.liveRow(stream, { focus: true });
@@ -910,6 +918,91 @@ test("menus: arrow keys wrap, Escape closes, and focus returns only to an anchor
   }
 });
 
+// Settings' home-network switch: its click opens the confirm, Cancel closes it
+// and returns focus to the switch. Chrome on macOS replays a keydown the page
+// left unhandled through the system key path while the window is key (the
+// e2e's DevTools-driven window is): the replay is another keydown plus a
+// keypress that activates whatever is focused by then, so an Enter on Cancel
+// that only the button's own keypress handled went Cancel -> switch -> Cancel
+// without end. The layer now consumes Enter and Space on keydown.
+test("menus: Enter on a confirm's Cancel runs it once and consumes the key, so a replayed key cannot reopen the popover", async () => {
+  const layer = document.createElement("div");
+  layer.hidden = true;
+  const menuNode = document.createElement("div");
+  menuNode.className = "menu";
+  layer.append(menuNode);
+  const savedWindow = globalThis.window;
+  const savedListen = document.addEventListener;
+  let onKey = null;
+  globalThis.window = { innerWidth: 1280, innerHeight: 800, addEventListener() {} };
+  document.addEventListener = (type, fn) => { if (type === "keydown") onKey = fn; };
+  // One key press as the engine delivers it: keydown, then (unless the page
+  // consumed the keydown) the keypress that activates the focused button, and
+  // then Chrome's replay of the unhandled key, which starts over.
+  const press = (name) => {
+    let hops = 0;
+    let event;
+    for (; hops < 50; hops++) {
+      event = { key: hops ? "Unidentified" : name, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } };
+      onKey(event);
+      if (event.defaultPrevented) break;
+      document.activeElement?.click?.();
+    }
+    return { consumed: event.defaultPrevented, replays: hops };
+  };
+  try {
+    const menus = components.createMenus(layer);
+    const anchor = document.createElement("button");
+    anchor.getBoundingClientRect = () => ({ top: 10, bottom: 42, left: 10, right: 42 });
+    document.append(anchor);
+    const answers = [];
+    let opened = 0;
+    anchor.addEventListener("click", () => {
+      opened += 1;
+      menus.confirm(anchor, { question: "Allow downloads from my home network?", confirmLabel: "Allow", cancelLabel: "Cancel", confirmKind: "tertiary" }).then((answer) => answers.push(answer));
+    });
+    anchor.click();
+    const [cancel] = menuNode.querySelectorAll(".confirm-actions button");
+    assert.equal(document.activeElement, cancel, "Cancel takes focus");
+    let cancelClicks = 0;
+    cancel.addEventListener("click", () => { cancelClicks += 1; });
+    const enter = press("Enter");
+    assert.deepEqual(enter, { consumed: true, replays: 0 }, "the layer consumes the keydown, so nothing is replayed");
+    assert.equal(cancelClicks, 1, "Cancel ran exactly once");
+    assert.equal(layer.hidden, true, "the confirm closed");
+    assert.equal(document.activeElement, anchor, "focus is back on the switch");
+    assert.equal(opened, 1, "the switch was not activated again");
+    await Promise.resolve();
+    assert.deepEqual(answers, [false]);
+
+    // Space confirms the same way; the answer is the focused button's.
+    anchor.click();
+    const [, allow] = menuNode.querySelectorAll(".confirm-actions button");
+    allow.focus();
+    assert.deepEqual(press(" "), { consumed: true, replays: 0 });
+    await Promise.resolve();
+    assert.deepEqual(answers, [false, true]);
+    assert.equal(document.activeElement, anchor);
+
+    // Enter runs a menu item once too, and only while an item is focused.
+    let ran = 0;
+    menus.openItems(anchor, [{ label: "Copy link", run: () => { ran += 1; } }]);
+    assert.deepEqual(press("Enter"), { consumed: true, replays: 0 });
+    assert.equal(ran, 1);
+    assert.equal(layer.hidden, true);
+    menus.openItems(anchor, [{ label: "Copy link", run: () => { ran += 1; } }]);
+    document.activeElement = anchor;
+    const outside = { key: "Enter", defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } };
+    onKey(outside);
+    assert.equal(outside.defaultPrevented, false, "a key outside the popover is the page's own");
+    assert.equal(ran, 1);
+    menus.close({ restore: false });
+  } finally {
+    globalThis.window = savedWindow;
+    document.addEventListener = savedListen;
+  }
+});
+
 // ---------- static checks ----------
 
 test("v2 sources: no colour literals, no CJK outside the zh tables, no innerHTML except fixed icon paths", () => {
@@ -962,14 +1055,16 @@ const px = (value) => Number.parseFloat(value);
 test("surface grids put text at x = 60 in the popup and x = 64 in the side panel; Settings adds nav tokens", () => {
   const grid = tokens.slice(tokens.indexOf("/* §5 grid and spacing"), tokens.indexOf("/* Shape. */"));
   const full = Object.fromEntries([...grid.matchAll(/(--(?:gutter|lead|lead-gap|column-max|row-pad)):\s*([^;]+);/g)].map((m) => [m[1], m[2]]));
-  assert.deepEqual(full, { "--column-max": "880px", "--gutter": "32px", "--lead": "56px", "--lead-gap": "16px", "--row-pad": "12px" });
+  assert.deepEqual(full, { "--column-max": "880px", "--gutter": "32px", "--lead": "56px", "--lead-gap": "16px", "--row-pad": "14px" }, "full-page rows pad 14px (v3 §3.5)");
   const popup = blockOf('[data-surface="popup"]');
   const side = blockOf('[data-surface="sidepanel"]');
   const settings = blockOf('[data-surface="settings"]');
   assert.equal(px(popup["--gutter"]) + px(popup["--lead"]) + px(popup["--lead-gap"]), 60);
   assert.equal(px(side["--gutter"]) + px(side["--lead"]) + px(side["--lead-gap"]), 64);
   assert.deepEqual([settings["--nav-width"], settings["--nav-gap"], settings["--content-max"]], ["200px", "48px", "680px"]);
-  assert.equal(blockOf('[data-density="compact"]')["--row-pad"], "8px");
+  assert.deepEqual([popup["--row-pad"], side["--row-pad"]], ["12px", "12px"], "the popup and side panel keep 12px rows");
+  assert.equal(blockOf('[data-density="compact"]')["--row-pad"], "10px", "compact full pages pad 10px");
+  assert.match(tokens, /\[data-surface="popup"\]\[data-density="compact"\],\n\[data-surface="sidepanel"\]\[data-density="compact"\],\n\[data-surface="popup"\] \[data-density="compact"\],\n\[data-surface="sidepanel"\] \[data-density="compact"\] \{\n  --row-pad: 8px;/, "compact popup and side panel rows pad 8px");
 });
 
 function hexBlock(selector) {
@@ -1076,7 +1171,8 @@ test("pass 2 system rules: hung status dot unclipped, live meta under the contro
   assert.match(system, /\.row\[data-live\] \.row-meta \{ grid-column: 2 \/ -1; grid-row: 2; \}/);
   assert.match(ruleBody(".row[data-live] > .progress"), /grid-column: 2 \/ -1;\s*grid-row: 3;/);
   assert.match(ruleBody(".row[data-live] > .row-trail"), /margin-block-end: calc\(\(var\(--row-line\) - var\(--control-height-compact\)\) \/ 2\)/);
-  assert.match(ruleBody(".row-lead:not(:has(img))"), /align-self: start;\s*height: var\(--row-line\);/);
+  assert.match(ruleBody(".row-lead:not(:has(.lead-frame))"), /align-self: start;\s*height: var\(--row-line\);/);
+  assert.match(ruleBody(".lead-frame"), /width: var\(--lead\);\s*height: 32px;\s*border-radius: var\(--r-thumb\);\s*background: var\(--sunken\);/, "the full-page lead frame (v3 §3.5)");
   assert.match(ruleBody(".focus-panel"), /margin-inline: calc\(-1 \* var\(--space-3\)\);\s*padding: var\(--space-4\) var\(--space-3\);/);
   assert.match(ruleBody(".row::before"), /inset: 0 calc\(-1 \* var\(--space-3\)\)/, "the row tint bleeds the same 12px");
   // Top bar, status line, filename, empty sentence, Details, speed line, invalid halo, error rows.
@@ -1089,14 +1185,19 @@ test("pass 2 system rules: hung status dot unclipped, live meta under the contro
   assert.match(ruleBody(".focus-details[open] > summary svg"), /transform: none/);
   assert.match(ruleBody(".speed-chart"), /height: 24px/);
   assert.match(ruleBody(".speed-block"), /gap: var\(--space-1\)/);
-  assert.match(system, /:has\(\[aria-invalid="true"\]\):not\(:focus-within\) \{\s*box-shadow: 0 0 0 3px var\(--halo-invalid\);/);
+  assert.match(system, /:has\(\[aria-invalid="true"\]\):not\(:focus-within\) \{\s*box-shadow: 0 0 0 2px var\(--ring-invalid\), 0 0 0 6px var\(--halo-invalid\);/, "the error state is the focus ring's construction in vermilion (v3 §3.9)");
   assert.match(ruleBody(".setting-text:has(> .setting-error:not([hidden])) > .setting-description"), /display: none/);
-  // Tokens: the halo in every theme block; Dusk draws only the cool §6.10 hues
-  // (pond-soft, lilac, celadon): rose and apricot turn brown at L 0.25 (§2.6, lead decision).
+  // Tokens: the halo in every theme block; the pond's five hue families once, for both themes (v3 §3.1).
   assert.equal((tokens.match(/--halo-invalid:/g) || []).length, 3);
-  const duskHues = [...tokens.matchAll(/--touch-l: 0\.25;\s*(?:\/\*[^*]*\*\/\s*)?--touch-hues: ([^;]+);/g)].map((m) => m[1].trim());
-  assert.deepEqual(duskHues, ["240 296.1 162", "240 296.1 162"], "both Dusk blocks");
-  assert.ok(duskHues[0].split(" ").map(Number).every((hue) => hue >= 90), "no warm hue in Dusk");
+  assert.equal((tokens.match(/--ring-invalid: color-mix\(in srgb, var\(--vermilion(?:-text)?\) 60%, transparent\);/g) || []).length, 3, "the 60% vermilion ring in every theme block");
+  assert.equal((tokens.match(/--halo-invalid: color-mix\(in srgb, var\(--vermilion(?:-text)?\) 18%, transparent\);/g) || []).length, 3, "the 18% soft halo in every theme block");
+  // v3 §3.6: the top bar's band is nothing at scroll position 0 and fades in over the first 24 px, scroll-driven.
+  assert.match(ruleBody(".topbar::before"), /opacity: 0;[\s\S]*animation-timeline: scroll\(root block\);\s*animation-range: 0 24px;/);
+  assert.match(ruleBody(".topbar::before"), /background: color-mix\(in srgb, var\(--surface\) 75%, transparent\);\s*box-shadow: var\(--mist\);/);
+  assert.doesNotMatch(system, /\.topbar\[data-scrolled="true"\] \{/, "no JS-driven band outside the fallbacks");
+  assert.match(system, /prefers-reduced-motion: reduce\) \{[\s\S]*?\.topbar::before \{\s*animation: none !important;/, "reduced motion runs no scroll-driven band; the scroll state shows it whole");
+  assert.equal((tokens.match(/--pond-families: 162\.5 241\.8 295\.6 12\.1 56\.6;/g) || []).length, 1);
+  assert.doesNotMatch(tokens, /--touch-|--mask-on/, "the v2 touch and mask tokens are gone");
 });
 
 test("pass 2 system copy and formatters: just now, spaced Chinese numerals, one rate precision, one Cancel verb", async () => {

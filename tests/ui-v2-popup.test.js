@@ -606,26 +606,6 @@ test("while the Download dialog is open the empty state behind the scrim steps o
   assert.doesNotMatch(read("extension/ui/v2/media.css"), /\.empty-state/, "one copy, in system.css next to the popup dialog rule");
 });
 
-test("the pond zone of an empty state stays inside its section, never above it", async () => {
-  await bootPopup({ items: [] });
-  const { pondZones } = await import("../extension/ui/v2/media.js");
-  const section = $("#mediaEmpty");
-  const sentence = section.querySelector(".t-empty");
-  section.getBoundingClientRect = () => ({ left: 60, top: 140, right: 356, bottom: 300, width: 296, height: 160 });
-  sentence.getBoundingClientRect = () => ({ left: 60, top: 172, right: 356, bottom: 198, width: 296, height: 26 });
-  sentence.getClientRects = () => [1];
-  const column = { getBoundingClientRect: () => ({ left: 16, right: 356 }) };
-  const zones = pondZones(column, sentence);
-  const empty = zones[2];
-  assert.equal(empty.y, 140, "starts at the section, not 70 px above the sentence");
-  assert.equal(empty.y + empty.height, 300, "ends with the section");
-  assert.ok(empty.x + empty.width <= window.innerWidth);
-  assert.equal(empty.x + empty.width, Math.min(window.innerWidth, 480), "popup-sized by default");
-  const wide = pondZones(column, sentence, { width: 560 })[2];
-  assert.equal(wide.x, 20);
-  assert.equal(wide.width, Math.min(window.innerWidth, 580) - 20, "a full page passes its own width");
-});
-
 test("a nameless download reads \"Untitled media\" in the UI language, never a hard-coded word", async () => {
   await bootPopup({ jobs: [] });
   const { createJobList, readableMediaTitle, defaultFilename } = await import("../extension/ui/v2/media.js");
@@ -724,7 +704,7 @@ test("a quality probe is announced while it runs", async () => {
 
 test("the first data load never waits for the pond's paint", () => {
   for (const file of ["extension/popup/popup.js", "extension/sidepanel/sidepanel.js"]) {
-    assert.doesNotMatch(read(file), /await mountPond/, file);
+    assert.doesNotMatch(read(file), /await mountPondLayer/, file);
   }
 });
 
@@ -836,26 +816,6 @@ test("media rows keep one right edge: the slot mirrors the overflow's footprint"
   assert.match(slot, /width:\s*var\(--icon-button\)/);
   assert.match(slot, /height:\s*var\(--icon-button\)/);
   assert.match(slot, /margin-inline-end:\s*calc\(-1 \* var\(--space-2\)\)/, "the same end margin as .row-actions .icon-button");
-});
-
-test("the pond repaints an opening it was asked for before it finished mounting", async () => {
-  const { setPondOpening } = await import("../extension/ui/v2/media.js");
-  const host = { dataset: {}, style: { setProperty() {} } };
-  const sentence = { isConnected: true, getBoundingClientRect: () => ({ left: 60, top: 200, width: 280, height: 26 }) };
-  setPondOpening(host, null, sentence);
-  await settle(2);
-  assert.equal(host.dataset.open, "true", "the opening is recorded before the pond exists");
-  let refreshed = 0;
-  const pond = { refresh: () => { refreshed += 1; } };
-  setPondOpening(host, pond, sentence);
-  await settle(2);
-  assert.equal(refreshed, 1, "the newly mounted pond paints the opening");
-  setPondOpening(host, pond, sentence);
-  await settle(2);
-  assert.equal(refreshed, 1, "an opening it already painted is not painted again");
-  setPondOpening(host, pond, null);
-  assert.equal(host.dataset.open, undefined);
-  assert.equal(refreshed, 2, "closing repaints");
 });
 
 test("empty-state copy: native Chinese, the Display glyphs exist, no 拆/底/推", async () => {

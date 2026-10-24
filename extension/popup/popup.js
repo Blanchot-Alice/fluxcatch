@@ -12,7 +12,7 @@ import { brandMark, createMenus, createToaster, emptyState, icon, iconButton, li
 import { segmented, select } from "../ui/v2/controls.js";
 import { errorText, userError } from "../ui/v2/errors.js";
 import { callWorker as call, connectWorkerPort } from "../ui/v2/runtime.js";
-import { mountPond } from "../ui/v2/pond.js";
+import { contentBoxes, mountPondLayer } from "../ui/v2/pond.js";
 import {
   applyStaticCopy,
   bindMist,
@@ -31,10 +31,8 @@ import {
   openEngineSetup,
   openMediaMenu,
   pingEngine,
-  pondZones,
   recheckEngine,
-  requireEngineReady,
-  setPondOpening
+  requireEngineReady
 } from "../ui/v2/media.js";
 
 const $ = (selector) => document.querySelector(selector);
@@ -124,7 +122,7 @@ async function init() {
     renderAll();
   });
   // The pond paints on its own time; the first data load never waits for it.
-  void mountPond({ element: $("[data-pond]"), getZones }).catch(() => null).then((mounted) => {
+  void mountPondLayer({ element: $("[data-pond]"), getContentBoxes }).catch(() => null).then((mounted) => {
     pond = mounted;
     renderPond();
   });
@@ -455,17 +453,18 @@ function renderJobsState() {
   renderPond();
 }
 
-function visibleEmptySentence() {
-  const empty = state.view === "media" ? ui.mediaEmpty : ui.jobsEmpty;
-  return empty && !empty.element.hidden ? empty.sentence : null;
-}
-
+/** The layer's mask follows the popup's boxes; a render that moved them repaints it. */
 function renderPond() {
-  setPondOpening($("[data-pond]"), pond, visibleEmptySentence());
+  pond?.refresh();
 }
 
-function getZones() {
-  return pondZones($("#column"), visibleEmptySentence());
+// Every content box (v3 §3.1): the header, the view bar, each status line
+// with text, the list headers, the lists, each text block of an empty state,
+// and the footer links.
+const POPUP_BOXES = ["#topbarInner", "#viewBar", "#engineLine", "#mediaHeaderSlot > *", "#mediaState", "#mediaRows", "#mediaEmptySlot .empty-state > *", "#jobsState", "#jobRows", "#jobsEmptySlot .empty-state > *", "#footer .foot-links"];
+
+function getContentBoxes() {
+  return contentBoxes(POPUP_BOXES);
 }
 
 // ---------- actions ----------

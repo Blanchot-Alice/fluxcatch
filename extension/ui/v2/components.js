@@ -93,7 +93,7 @@ export function status(tone, label) {
   return element;
 }
 
-/** Progress (§6.7). state: active | paused | queued | complete | settled */
+/** Progress (v3 §3.2): the fill is the state's colour. state: active | paused | queued | finishing | complete | settled | failed */
 export function progress({ value = 0, size = "row", state = "active", label = "" }) {
   const element = document.createElement("div");
   element.className = "progress";
@@ -302,9 +302,22 @@ export function createMenus(layer) {
   document.addEventListener("keydown", (event) => {
     if (layer.hidden) return;
     if (event.key === "Escape") { event.preventDefault(); close(); return; }
-    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
     const items = [...menu.querySelectorAll("button")];
     if (!items.length) return;
+    // Enter and Space activate the focused item here, on keydown, and the key
+    // is consumed. Left to the button's own keypress activation, the keydown
+    // stays unhandled, and Chrome on macOS then replays an unhandled key
+    // through the system key path when the window is key (a DevTools-driven
+    // window is): the replay lands on the anchor that close() just focused and
+    // activates it, which reopens the popover, and so on without end.
+    if (event.key === "Enter" || event.key === " ") {
+      const active = document.activeElement;
+      if (!items.includes(active)) return;
+      event.preventDefault();
+      active.click();
+      return;
+    }
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
     event.preventDefault();
     const index = items.indexOf(document.activeElement);
     const next = event.key === "ArrowDown" ? (index + 1) % items.length : (index - 1 + items.length) % items.length;

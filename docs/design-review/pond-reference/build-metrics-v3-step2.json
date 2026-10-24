@@ -1,0 +1,326 @@
+{
+  "popup-media-morning-en": {
+    "coverage": 0.010850439882697948,
+    "p95": 0.023571883302108465,
+    "mean": 0.0070550857156703815,
+    "region": "whole frame vs the no-pond capture; p95 within the layer's footprint"
+  },
+  "popup-jobs-morning-en": {
+    "coverage": 0.012252565982404692,
+    "p95": 0.02490070892855989,
+    "mean": 0.007385313741648575,
+    "region": "whole frame vs the no-pond capture; p95 within the layer's footprint"
+  },
+  "popup-link-dialog-morning-en": {
+    "coverage": 0.0,
+    "p95": 0.00370130607472563,
+    "mean": 0.001726762335477506,
+    "region": "whole frame vs the no-pond capture; p95 within the layer's footprint"
+  },
+  "sidepanel-morning-en": {
+    "coverage": 0.031689814814814816,
+    "p95": 0.03283175694476537,
+    "mean": 0.009811096112277014,
+    "region": "whole frame vs the no-pond capture; p95 within the layer's footprint"
+  },
+  "popup-results-morning-en": {
+    "coverage": 0.0,
+    "p95": 0.003516238706508301,
+    "mean": 0.0021978544198656296,
+    "region": "whole frame vs the no-pond capture; p95 within the layer's footprint"
+  },
+  "popup-media-dialog-morning-en": {
+    "coverage": 0.0,
+    "p95": 0.0031948702466855217,
+    "mean": 0.0020794093180249483,
+    "region": "whole frame vs the no-pond capture; p95 within the layer's footprint"
+  },
+  "sidepanel-link-dialog-morning-en": {
+    "coverage": 0.010408068783068783,
+    "p95": 0.024502037560803047,
+    "mean": 0.00824426024026071,
+    "region": "whole frame vs the no-pond capture; p95 within the layer's footprint"
+  },
+  "sidepanel-results-morning-en": {
+    "coverage": 0.029909391534391535,
+    "p95": 0.035148248073543775,
+    "mean": 0.011402169633714857,
+    "region": "whole frame vs the no-pond capture; p95 within the layer's footprint"
+  },
+  "downloads-1280-morning-en": {
+    "coverage": 0.047920833333333336,
+    "p95": 0.018878595495271377,
+    "mean": 0.0028427070359813966,
+    "region": "margins x<200, x\u22651080 (200 px each)"
+  },
+  "downloads-960-morning-en": {
+    "coverage": 0.0031493055555555554,
+    "p95": 0.00664649929395722,
+    "mean": 0.0010407791805468057,
+    "region": "margins x<40, x\u2265920 (40 px each)"
+  },
+  "settings-1280-morning-en": {
+    "coverage": 0.04774305555555555,
+    "p95": 0.018990655390659472,
+    "mean": 0.002881703878221333,
+    "region": "margins x<200, x\u22651080 (200 px each)"
+  },
+  "settings-960-morning-en": {
+    "coverage": 0.0006041666666666667,
+    "p95": 0.00664649929395722,
+    "mean": 0.0011567621462389114,
+    "region": "margins x<40, x\u2265920 (40 px each)"
+  },
+  "settings-full-1280-morning-en": {
+    "coverage": 0.0538531571774682,
+    "p95": 0.020236104672329724,
+    "mean": 0.0028881506846544047,
+    "region": "margins x<200, x\u22651080 (200 px each)"
+  },
+  "preview-morning-en": {
+    "coverage": 0.04868501984126984,
+    "p95": 0.019388639816593,
+    "mean": 0.0029809253713081085,
+    "region": "margins x<280, x\u22651160 (280 px each)"
+  },
+  "preview-text-morning-en": {
+    "coverage": 0.05066617063492063,
+    "p95": 0.019834771215086124,
+    "mean": 0.003099072140394949,
+    "region": "margins x<280, x\u22651160 (280 px each)"
+  },
+  "preview-controls-morning-en": {
+    "coverage": 0.04919604037267081,
+    "p95": 0.01966947836009114,
+    "mean": 0.0029782490785447,
+    "region": "margins x<280, x\u22651160 (280 px each)"
+  },
+  "preview-rows-morning-en": {
+    "coverage": 0.05087439172749392,
+    "p95": 0.020393989673470614,
+    "mean": 0.003044836151191538,
+    "region": "margins x<280, x\u22651160 (280 px each)"
+  },
+  "preview-feedback-morning-en": {
+    "coverage": 0.0488025954308849,
+    "p95": 0.019672291533028408,
+    "mean": 0.0030193268707976147,
+    "region": "margins x<280, x\u22651160 (280 px each)"
+  },
+  "preview-overlays-morning-en": {
+    "coverage": 0.04907825082016105,
+    "p95": 0.019786200090118666,
+    "mean": 0.0030647902432331844,
+    "region": "margins x<280, x\u22651160 (280 px each)"
+  },
+  "preview-overlays-item-morning-en": {
+    "coverage": 0.04907825082016105,
+    "p95": 0.019786200090118666,
+    "mean": 0.0030647902432331844,
+    "region": "margins x<280, x\u22651160 (280 px each)"
+  },
+  "popup-media-dusk-en": {
+    "coverage": 0.005231243890518084,
+    "p95": 0.05542681726930415,
+    "mean": 0.017117585117262905,
+    "region": "whole frame vs the no-pond capture; p95 within the layer's footprint"
+  },
+  "popup-jobs-dusk-en": {
+    "coverage": 0.005944525904203323,
+    "p95": 0.058295357107788714,
+    "mean": 0.01807052655851629,
+    "region": "whole frame vs the no-pond capture; p95 within the layer's footprint"
+  },
+  "popup-link-dialog-dusk-en": {
+    "coverage": 0.0,
+    "p95": 0.0034219515502352388,
+    "mean": 0.0015218783602074532,
+    "region": "whole frame vs the no-pond capture; p95 within the layer's footprint"
+  },
+  "sidepanel-dusk-en": {
+    "coverage": 0.023623015873015872,
+    "p95": 0.06712121878519609,
+    "mean": 0.019409662075748454,
+    "region": "whole frame vs the no-pond capture; p95 within the layer's footprint"
+  },
+  "popup-results-dusk-en": {
+    "coverage": 0.0011266603415559773,
+    "p95": 0.031272546405388346,
+    "mean": 0.00881434233452836,
+    "region": "whole frame vs the no-pond capture; p95 within the layer's footprint"
+  },
+  "popup-media-dialog-dusk-en": {
+    "coverage": 0.0,
+    "p95": 0.0,
+    "mean": 0.0,
+    "region": "whole frame vs the no-pond capture; p95 within the layer's footprint"
+  },
+  "sidepanel-link-dialog-dusk-en": {
+    "coverage": 0.0014464285714285714,
+    "p95": 0.033895439928598586,
+    "mean": 0.012452234503811398,
+    "region": "whole frame vs the no-pond capture; p95 within the layer's footprint"
+  },
+  "sidepanel-results-dusk-en": {
+    "coverage": 0.023609126984126982,
+    "p95": 0.07246738840915218,
+    "mean": 0.022524196400355467,
+    "region": "whole frame vs the no-pond capture; p95 within the layer's footprint"
+  },
+  "downloads-1280-dusk-en": {
+    "coverage": 0.03373125,
+    "p95": 0.043324751499906944,
+    "mean": 0.006462159619760344,
+    "region": "margins x<200, x\u22651080 (200 px each)"
+  },
+  "downloads-960-dusk-en": {
+    "coverage": 0.0028576388888888887,
+    "p95": 0.01486593058870872,
+    "mean": 0.002337478550739439,
+    "region": "margins x<40, x\u2265920 (40 px each)"
+  },
+  "settings-1280-dusk-en": {
+    "coverage": 0.03414236111111111,
+    "p95": 0.04369314788673734,
+    "mean": 0.006531088188860677,
+    "region": "margins x<200, x\u22651080 (200 px each)"
+  },
+  "settings-960-dusk-en": {
+    "coverage": 0.00296875,
+    "p95": 0.01466477134606986,
+    "mean": 0.00242941607425879,
+    "region": "margins x<40, x\u2265920 (40 px each)"
+  },
+  "settings-full-1280-dusk-en": {
+    "coverage": 0.03412780133252574,
+    "p95": 0.03589592310091644,
+    "mean": 0.005274635649468396,
+    "region": "margins x<200, x\u22651080 (200 px each)"
+  },
+  "preview-dusk-en": {
+    "coverage": 0.02899156746031746,
+    "p95": 0.044261483283868364,
+    "mean": 0.006732638952123085,
+    "region": "margins x<280, x\u22651160 (280 px each)"
+  },
+  "preview-text-dusk-en": {
+    "coverage": 0.030306051587301586,
+    "p95": 0.0453352271530465,
+    "mean": 0.007005619461922132,
+    "region": "margins x<280, x\u22651160 (280 px each)"
+  },
+  "preview-controls-dusk-en": {
+    "coverage": 0.028956909937888197,
+    "p95": 0.043132693508613595,
+    "mean": 0.0062961058599275465,
+    "region": "margins x<280, x\u22651160 (280 px each)"
+  },
+  "preview-rows-dusk-en": {
+    "coverage": 0.028986357316649287,
+    "p95": 0.04396937379384658,
+    "mean": 0.006447023998775798,
+    "region": "margins x<280, x\u22651160 (280 px each)"
+  },
+  "preview-feedback-dusk-en": {
+    "coverage": 0.02790268941584731,
+    "p95": 0.043088107160840716,
+    "mean": 0.006392433867494098,
+    "region": "margins x<280, x\u22651160 (280 px each)"
+  },
+  "preview-overlays-dusk-en": {
+    "coverage": 0.028946559051595586,
+    "p95": 0.043261203572794615,
+    "mean": 0.00648705430879266,
+    "region": "margins x<280, x\u22651160 (280 px each)"
+  },
+  "preview-overlays-item-dusk-en": {
+    "coverage": 0.028946559051595586,
+    "p95": 0.043261203572794615,
+    "mean": 0.00648705430879266,
+    "region": "margins x<280, x\u22651160 (280 px each)"
+  },
+  "downloads-empty-1280-morning-en": {
+    "coverage": 0.04268125,
+    "p95": 0.020749762611145584,
+    "mean": 0.003194627282501938,
+    "region": "margins x<200, x\u22651080 (200 px each)"
+  },
+  "downloads-empty-960-morning-en": {
+    "coverage": 0.024881944444444446,
+    "p95": 0.013907565075863992,
+    "mean": 0.002188820253117057,
+    "region": "margins x<40, x\u2265920 (40 px each)"
+  },
+  "downloads-empty-1280-dusk-en": {
+    "coverage": 0.0771513888888889,
+    "p95": 0.04467836480040599,
+    "mean": 0.006892092290577678,
+    "region": "margins x<200, x\u22651080 (200 px each)"
+  },
+  "downloads-empty-960-dusk-en": {
+    "coverage": 0.04877777777777778,
+    "p95": 0.029870479865399313,
+    "mean": 0.004602635799747111,
+    "region": "margins x<40, x\u2265920 (40 px each)"
+  },
+  "popup-downloads-active-morning-en": {
+    "coverage": 0.006999938905180841,
+    "p95": 0.02290375355534735,
+    "mean": 0.010612571321938678,
+    "region": "whole frame vs the no-pond capture; p95 within the layer's footprint"
+  },
+  "sidepanel-active-morning-en": {
+    "coverage": 0.001076058201058201,
+    "p95": 0.0221479150714321,
+    "mean": 0.009499746022415368,
+    "region": "whole frame vs the no-pond capture; p95 within the layer's footprint"
+  },
+  "downloads-active-1280-morning-en": {
+    "coverage": 0.04415347222222222,
+    "p95": 0.01840002883763925,
+    "mean": 0.0030738510801738175,
+    "region": "margins x<200, x\u22651080 (200 px each)"
+  },
+  "downloads-active-960-morning-en": {
+    "coverage": 0.001236111111111111,
+    "p95": 0.013631720534130642,
+    "mean": 0.0016570966729828006,
+    "region": "margins x<40, x\u2265920 (40 px each)"
+  },
+  "settings-active-1280-morning-en": {
+    "coverage": 0.0522181486654252,
+    "p95": 0.02016516961657766,
+    "mean": 0.0029666244371579797,
+    "region": "margins x<200, x\u22651080 (200 px each)"
+  },
+  "popup-downloads-active-dusk-en": {
+    "coverage": 0.00033907624633431086,
+    "p95": 0.049447688834603265,
+    "mean": 0.018545662301664895,
+    "region": "whole frame vs the no-pond capture; p95 within the layer's footprint"
+  },
+  "sidepanel-active-dusk-en": {
+    "coverage": 0.006689814814814815,
+    "p95": 0.045677890497557994,
+    "mean": 0.012260662145834059,
+    "region": "whole frame vs the no-pond capture; p95 within the layer's footprint"
+  },
+  "downloads-active-1280-dusk-en": {
+    "coverage": 0.021768055555555554,
+    "p95": 0.042506579875683626,
+    "mean": 0.007119941049577667,
+    "region": "margins x<200, x\u22651080 (200 px each)"
+  },
+  "downloads-active-960-dusk-en": {
+    "coverage": 0.005208333333333333,
+    "p95": 0.028126022402349793,
+    "mean": 0.0036756548829130534,
+    "region": "margins x<40, x\u2265920 (40 px each)"
+  },
+  "settings-active-1280-dusk-en": {
+    "coverage": 0.022821423029174427,
+    "p95": 0.04506042457624476,
+    "mean": 0.006429899259114023,
+    "region": "margins x<200, x\u22651080 (200 px each)"
+  }
+}

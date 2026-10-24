@@ -7,6 +7,9 @@
 **Proposed** means waiting for approval before any surface changes. Nothing marked Proposed has been changed.
 **待批准**：批准之前不改动任何界面。标为“待批准”的条目一律未动。
 
+Status update, 2026-10-24: the Settings terms this table marked Proposed and that the v2 rebuild shipped are listed in `step-v3-1-pond.md` (§3.8); Andy approved that step without rejecting any, so those rows now stand as applied in Settings.
+状态更新，2026-10-24：本表标为“待批准”、而 v2 重做已经上线的设置页词条，列在 `step-v3-1-pond.md`（第 3.8 节）里；Andy 批准该步时没有否掉任何一条，这些行在设置页上即视为已应用。
+
 Source: a full inventory of every surface (popup, side panel, Settings, Downloads, UI editor, worker and engine messages) with file and line references. This table is the curated version.
 来源：对所有界面（弹窗、侧边栏、设置、下载记录、界面编辑器、后台与引擎消息）逐文件逐行的完整清点。本表是整理后的版本。
 

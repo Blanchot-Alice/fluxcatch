@@ -256,7 +256,7 @@ test("the preview is built on v2 only: tokens, system, media, page sheet; no v1 
   const { scanColourLiterals } = await import("../scripts/design-audit.mjs");
   assert.deepEqual(scanColourLiterals().filter((f) => f.file.startsWith("extension/preview/") || f.file === "extension/ui/v2/messages/preview.js"), [], "colour literals live only in tokens.css");
   assert.doesNotMatch(html + js, /frosted|tonal nav hover|count chips|pv-note/, "no spec annotations as UI text (review §7)");
-  assert.match(js, /pondZones\(\$\("#page"\), openSentence\(\), \{ width: FULL_PAGE_POND_WIDTH \}\)/, "a full-page pond zone, not the popup's");
+  assert.match(js, /mountPondLayer\(\{ element: \$\("\[data-pond\]"\), getContentBoxes: \(\) => contentBoxes\(PREVIEW_BOXES\) \}\)/, "the pond layer is masked by the shown view's boxes");
   assert.doesNotMatch(js, /function asRadioGroup|dataset\.indicator/, "radio groups and indicator dots come from the shared builders");
 });
 
@@ -537,7 +537,7 @@ test("Rows and progress: list header, media rows (media.js), the focus panel wit
   assert.doesNotMatch(focus[0].querySelector(".row-meta").textContent, /parts/, "parts only inside Details");
   assert.equal(focus[0].querySelector(".progress").getAttribute("aria-valuenow"), "62");
   const states = panel.querySelectorAll(".job-rows .progress").map((bar) => bar.dataset.state);
-  assert.deepEqual(states, ["paused", "queued", "queued", "complete"]);
+  assert.deepEqual(states, ["paused", "queued", "finishing", "complete"], "the bar is the state's colour (v3 §3.2): a finishing job is ochre, not queued");
   const words = panel.querySelectorAll(".job-rows .row-meta .status").map((s) => s.textContent);
   assert.deepEqual(words, ["Paused", "Waiting", "Finishing", "Completed"]);
   assert.equal(panel.querySelectorAll(".job-rows .row-meta")[2].textContent, "Finishing", "no echo of the status word ('Finishing the file'), no 100%");
@@ -554,11 +554,9 @@ test("Rows and progress: list header, media rows (media.js), the focus panel wit
 test("Status and empty states: status lines with Set up, frozen toasts and confirmation, the empty state with the view's one primary", async () => {
   const env = await boot({ search: "?view=feedback&demo=static" });
   const panel = panelOf("feedback");
-  // The empty state first, in the upper third, with the pond open around it.
+  // The empty state first, in the upper third; the pond layer behind the page shows around its text blocks.
   assert.equal(panel.children[1].classList.contains("empty-state"), true);
-  const pondLayer = $("[data-pond]");
-  assert.equal(pondLayer.dataset.open, "true", "the pond opens around the empty sentence");
-  assert.ok(pondLayer.style.props["--open-x"] && pondLayer.style.props["--open-y"]);
+  assert.ok($("[data-pond]"), "the pond layer sits behind the page");
   const lines = panel.querySelectorAll(".status-line");
   assert.equal(lines.length, 5);
   assert.equal(lines[0].querySelector(".line-text > span").textContent, "Local engine isn’t set up");
@@ -578,9 +576,9 @@ test("Status and empty states: status lines with Set up, frozen toasts and confi
   assert.equal(empty.querySelector(".t-empty").textContent, "No downloadable media on this page yet.");
   assert.equal(empty.querySelector(".btn-primary").textContent, "Rescan");
   click($("#tab-rows"));
-  assert.equal(pondLayer.dataset.open, undefined, "the pond closes on views without an empty state");
+  assert.equal(panel.hidden, true, "another view hides the feedback view");
   click($("#tab-feedback"));
-  assert.equal(pondLayer.dataset.open, "true");
+  assert.equal(panel.hidden, false);
 });
 
 test("Dialogs and menus: the Download dialog in link mode (input[type=url]) and item mode, shown in place, and the row overflow menu", async () => {

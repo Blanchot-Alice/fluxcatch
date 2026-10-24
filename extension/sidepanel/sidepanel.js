@@ -13,7 +13,7 @@ import { msg } from "../ui/v2/messages.js";
 import { brandMark, createMenus, createToaster, emptyState, icon, iconButton, listHeader, runAction, setStatusLine } from "../ui/v2/components.js";
 import { errorText, userError } from "../ui/v2/errors.js";
 import { callWorker as call, connectWorkerPort } from "../ui/v2/runtime.js";
-import { mountPond } from "../ui/v2/pond.js";
+import { contentBoxes, mountPondLayer } from "../ui/v2/pond.js";
 import {
   applyStaticCopy,
   bindMist,
@@ -31,10 +31,8 @@ import {
   openEngineSetup,
   openMediaMenu,
   pingEngine,
-  pondZones,
   recheckEngine,
-  requireEngineReady,
-  setPondOpening
+  requireEngineReady
 } from "../ui/v2/media.js";
 import { captureMediaRefresh, isMediaRefreshCurrent } from "./refresh-guard.js";
 
@@ -126,7 +124,7 @@ async function init() {
     renderAll();
   });
   // The pond paints on its own time; the first data load never waits for it.
-  void mountPond({ element: $("[data-pond]"), getZones }).catch(() => null).then((mounted) => {
+  void mountPondLayer({ element: $("[data-pond]"), getContentBoxes }).catch(() => null).then((mounted) => {
     pond = mounted;
     renderPond();
   });
@@ -394,19 +392,17 @@ function renderJobsState() {
   renderPond();
 }
 
-/** The pond opens around the media empty state only: the Downloads section's
- *  empty line is a plain body line. */
-function visibleEmptySentence() {
-  if (ui.mediaEmpty && !ui.mediaEmpty.element.hidden) return ui.mediaEmpty.sentence;
-  return null;
-}
-
+/** The layer's mask follows the panel's boxes; a render that moved them repaints it. */
 function renderPond() {
-  setPondOpening($("[data-pond]"), pond, visibleEmptySentence());
+  pond?.refresh();
 }
 
-function getZones() {
-  return pondZones($("#page"), visibleEmptySentence());
+// Every content box (v3 §3.1): the header, each status line with text, the
+// list headers, the focus panel, the lists and each text block of an empty state.
+const SIDEPANEL_BOXES = ["#topbarInner", "#engineLine", "#mediaHeaderSlot > *", "#mediaState", "#mediaRows", "#mediaEmptySlot .empty-state > *", "#downloadsHeaderSlot > *", "#jobsState", "#focusSlot > *", "#jobRows", "#jobsEmptySlot .empty-state > *"];
+
+function getContentBoxes() {
+  return contentBoxes(SIDEPANEL_BOXES);
 }
 
 // ---------- actions ----------

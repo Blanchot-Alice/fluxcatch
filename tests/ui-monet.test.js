@@ -36,7 +36,7 @@ test("the atmosphere is procedural: no raster or painted assets in the shared st
     assert.doesNotMatch(css, /\.(?:png|jpe?g|gif|webp|avif)\b/i, `${name} references no raster image`);
   }
   const pond = read("ui/v2/pond.js");
-  assert.match(pond, /export function planTouches/, "the pond is drawn from planned touches");
+  assert.match(pond, /export function planPond/, "the pond is drawn from planned touches");
   assert.doesNotMatch(pond, /\.(?:png|jpe?g|gif|webp|avif)\b|fetch\(/i, "and never loads an image");
 });
 

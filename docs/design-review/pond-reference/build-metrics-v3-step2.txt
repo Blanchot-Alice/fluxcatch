@@ -1,0 +1,60 @@
+audit v3-step2: §3.1 metrics in OKLCH against the canvas token, DPR 2 captures
+
+| screen | theme | lang | region | coverage ΔC>0.015 | p95 |ΔL| | mean |ΔL| | pond footprint (audit, vs no-pond) |
+|---|---|---|---|---|---|---|---|
+| popup-media | morning | en | whole frame vs the no-pond capture; p95 within the layer's footprint | 1.1 % | 0.024 | 0.007 | 11.9 % |
+| popup-jobs | morning | en | whole frame vs the no-pond capture; p95 within the layer's footprint | 1.2 % | 0.025 | 0.007 | 12.2 % |
+| popup-link-dialog | morning | en | whole frame vs the no-pond capture; p95 within the layer's footprint | 0.0 % | 0.004 | 0.002 | 0.4 % |
+| sidepanel | morning | en | whole frame vs the no-pond capture; p95 within the layer's footprint | 3.2 % | 0.033 | 0.010 | 18.4 % |
+| popup-results | morning | en | whole frame vs the no-pond capture; p95 within the layer's footprint | 0.0 % | 0.004 | 0.002 | 0.3 % |
+| popup-media-dialog | morning | en | whole frame vs the no-pond capture; p95 within the layer's footprint | 0.0 % | 0.003 | 0.002 | 0.1 % |
+| sidepanel-link-dialog | morning | en | whole frame vs the no-pond capture; p95 within the layer's footprint | 1.0 % | 0.025 | 0.008 | 10.7 % |
+| sidepanel-results | morning | en | whole frame vs the no-pond capture; p95 within the layer's footprint | 3.0 % | 0.035 | 0.011 | 13.5 % |
+| downloads-1280 | morning | en | margins x<200, x≥1080 (200 px each) | 4.8 % ✓ | 0.019 ✓ | 0.003 | 28 % |
+| downloads-960 | morning | en | margins x<40, x≥920 (40 px each) | 0.3 % ✗ | 0.007 ✓ | 0.001 | 6.9 % |
+| settings-1280 | morning | en | margins x<200, x≥1080 (200 px each) | 4.8 % ✓ | 0.019 ✓ | 0.003 | 27.9 % |
+| settings-960 | morning | en | margins x<40, x≥920 (40 px each) | 0.1 % ✗ | 0.007 ✓ | 0.001 | 4.5 % |
+| settings-full-1280 | morning | en | margins x<200, x≥1080 (200 px each) | 5.4 % ✓ | 0.020 ✓ | 0.003 | 24.5 % |
+| preview | morning | en | margins x<280, x≥1160 (280 px each) | 4.9 % ✓ | 0.019 ✓ | 0.003 | 28.4 % |
+| preview-text | morning | en | margins x<280, x≥1160 (280 px each) | 5.1 % ✓ | 0.020 ✓ | 0.003 | 29.2 % |
+| preview-controls | morning | en | margins x<280, x≥1160 (280 px each) | 4.9 % ✓ | 0.020 ✓ | 0.003 | 27.3 % |
+| preview-rows | morning | en | margins x<280, x≥1160 (280 px each) | 5.1 % ✓ | 0.020 ✓ | 0.003 | 26 % |
+| preview-feedback | morning | en | margins x<280, x≥1160 (280 px each) | 4.9 % ✓ | 0.020 ✓ | 0.003 | 28.2 % |
+| preview-overlays | morning | en | margins x<280, x≥1160 (280 px each) | 4.9 % ✓ | 0.020 ✓ | 0.003 | 28.8 % |
+| preview-overlays-item | morning | en | margins x<280, x≥1160 (280 px each) | 4.9 % ✓ | 0.020 ✓ | 0.003 | 28.8 % |
+| popup-media | dusk | en | whole frame vs the no-pond capture; p95 within the layer's footprint | 0.5 % | 0.055 | 0.017 | 10.6 % |
+| popup-jobs | dusk | en | whole frame vs the no-pond capture; p95 within the layer's footprint | 0.6 % | 0.058 | 0.018 | 10.8 % |
+| popup-link-dialog | dusk | en | whole frame vs the no-pond capture; p95 within the layer's footprint | 0.0 % | 0.003 | 0.002 | 0.2 % |
+| sidepanel | dusk | en | whole frame vs the no-pond capture; p95 within the layer's footprint | 2.4 % | 0.067 | 0.019 | 19.9 % |
+| popup-results | dusk | en | whole frame vs the no-pond capture; p95 within the layer's footprint | 0.1 % | 0.031 | 0.009 | 4.9 % |
+| popup-media-dialog | dusk | en | whole frame vs the no-pond capture; p95 within the layer's footprint | 0.0 % | 0.000 | 0.000 | 0 % |
+| sidepanel-link-dialog | dusk | en | whole frame vs the no-pond capture; p95 within the layer's footprint | 0.1 % | 0.034 | 0.012 | 7.2 % |
+| sidepanel-results | dusk | en | whole frame vs the no-pond capture; p95 within the layer's footprint | 2.4 % | 0.072 | 0.023 | 14.4 % |
+| downloads-1280 | dusk | en | margins x<200, x≥1080 (200 px each) | 3.4 % ✗ | 0.043 ✓ | 0.006 | 29.5 % |
+| downloads-960 | dusk | en | margins x<40, x≥920 (40 px each) | 0.3 % ✗ | 0.015 ✓ | 0.002 | 8.5 % |
+| settings-1280 | dusk | en | margins x<200, x≥1080 (200 px each) | 3.4 % ✗ | 0.044 ✓ | 0.007 | 29.4 % |
+| settings-960 | dusk | en | margins x<40, x≥920 (40 px each) | 0.3 % ✗ | 0.015 ✓ | 0.002 | 5.5 % |
+| settings-full-1280 | dusk | en | margins x<200, x≥1080 (200 px each) | 3.4 % ✗ | 0.036 ✓ | 0.005 | 27.8 % |
+| preview | dusk | en | margins x<280, x≥1160 (280 px each) | 2.9 % ✗ | 0.044 ✓ | 0.007 | 29.9 % |
+| preview-text | dusk | en | margins x<280, x≥1160 (280 px each) | 3.0 % ✗ | 0.045 ✓ | 0.007 | 30.6 % |
+| preview-controls | dusk | en | margins x<280, x≥1160 (280 px each) | 2.9 % ✗ | 0.043 ✓ | 0.006 | 27.9 % |
+| preview-rows | dusk | en | margins x<280, x≥1160 (280 px each) | 2.9 % ✗ | 0.044 ✓ | 0.006 | 26.5 % |
+| preview-feedback | dusk | en | margins x<280, x≥1160 (280 px each) | 2.8 % ✗ | 0.043 ✓ | 0.006 | 28.9 % |
+| preview-overlays | dusk | en | margins x<280, x≥1160 (280 px each) | 2.9 % ✗ | 0.043 ✓ | 0.006 | 29.8 % |
+| preview-overlays-item | dusk | en | margins x<280, x≥1160 (280 px each) | 2.9 % ✗ | 0.043 ✓ | 0.006 | 29.8 % |
+| downloads-empty-1280 | morning | en | margins x<200, x≥1080 (200 px each) | 4.3 % ✓ | 0.021 ✓ | 0.003 | 28.9 % |
+| downloads-empty-960 | morning | en | margins x<40, x≥920 (40 px each) | 2.5 % ✗ | 0.014 ✓ | 0.002 | 22.6 % |
+| downloads-empty-1280 | dusk | en | margins x<200, x≥1080 (200 px each) | 7.7 % ✓ | 0.045 ✓ | 0.007 | 30.5 % |
+| downloads-empty-960 | dusk | en | margins x<40, x≥920 (40 px each) | 4.9 % ✓ | 0.030 ✓ | 0.005 | 24.6 % |
+| popup-downloads-active | morning | en | whole frame vs the no-pond capture; p95 within the layer's footprint | 0.7 % | 0.023 | 0.011 | 11.8 % |
+| sidepanel-active | morning | en | whole frame vs the no-pond capture; p95 within the layer's footprint | 0.1 % | 0.022 | 0.009 | 5 % |
+| downloads-active-1280 | morning | en | margins x<200, x≥1080 (200 px each) | 4.4 % ✓ | 0.018 ✓ | 0.003 | 29.3 % |
+| downloads-active-960 | morning | en | margins x<40, x≥920 (40 px each) | 0.1 % ✗ | 0.014 ✓ | 0.002 | 5.6 % |
+| settings-active-1280 | morning | en | margins x<200, x≥1080 (200 px each) | 5.2 % ✓ | 0.020 ✓ | 0.003 | 25.6 % |
+| popup-downloads-active | dusk | en | whole frame vs the no-pond capture; p95 within the layer's footprint | 0.0 % | 0.049 | 0.019 | 12.8 % |
+| sidepanel-active | dusk | en | whole frame vs the no-pond capture; p95 within the layer's footprint | 0.7 % | 0.046 | 0.012 | 6 % |
+| downloads-active-1280 | dusk | en | margins x<200, x≥1080 (200 px each) | 2.2 % ✗ | 0.043 ✓ | 0.007 | 31 % |
+| downloads-active-960 | dusk | en | margins x<40, x≥920 (40 px each) | 0.5 % ✗ | 0.028 ✓ | 0.004 | 6.9 % |
+| settings-active-1280 | dusk | en | margins x<200, x≥1080 (200 px each) | 2.3 % ✗ | 0.045 ✓ | 0.006 | 25.8 % |
+
+targets (v3 §3.1, margins of full pages): coverage 4 % to 12 %; p95 |ΔL| ≤ 0.03 Morning, ≤ 0.05 Dusk. Popup and side panel rows are whole-frame numbers for information.

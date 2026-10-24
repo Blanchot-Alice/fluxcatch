@@ -20,7 +20,8 @@ import { BUILD_PROFILE } from "../../lib/build-profile.js";
 // Pure media helpers (no DOM)
 // ======================================================================
 
-const STREAM_KINDS = new Set(["hls", "dash", "dash_pair"]);
+// YouTube rows are streams for the dialog: no "original" format, a quality menu.
+const STREAM_KINDS = new Set(["hls", "dash", "dash_pair", "youtube"]);
 const CONTAINERS = ["mp4", "mkv", "webm"];
 const FORMAT_NAMES = { mp4: "MP4", m4v: "MP4", m4a: "M4A", mp3: "MP3", webm: "WebM", mkv: "MKV", mov: "MOV", aac: "AAC", flac: "FLAC", wav: "WAV", ogg: "OGG", oga: "OGG", opus: "Opus", ts: "TS", m2ts: "TS", avi: "AVI", flv: "FLV" };
 const MIME_EXTENSIONS = {
@@ -459,51 +460,6 @@ export function bindMist(topbar, scroller = window) {
   scroller.addEventListener("scroll", update, { passive: true });
   update();
   return update;
-}
-
-/** Pond zones (§6.10): the two gutters, plus the empty-state section around a
- *  shown empty sentence. The zone never reaches above or below that section,
- *  so no touch lands behind a status line, a list header or the next section.
- *  width: the empty-state zone's width from its left edge, for full pages
- *  (Downloads uses 560); by default the zone ends at x = 480, which suits the
- *  popup and the side panel. */
-export function pondZones(column, sentence = null, { width = null } = {}) {
-  const rect = column.getBoundingClientRect();
-  const height = window.innerHeight;
-  const zones = [
-    { x: 0, y: 0, width: Math.max(0, rect.left), height },
-    { x: rect.right, y: 0, width: Math.max(0, window.innerWidth - rect.right), height }
-  ];
-  if (sentence?.isConnected && sentence.getClientRects().length) {
-    const section = (sentence.closest?.(".empty-state") || sentence).getBoundingClientRect();
-    const left = Math.max(0, section.left - 40);
-    const right = Number(width) > 0 ? Math.min(window.innerWidth, left + Number(width)) : Math.min(window.innerWidth, 480);
-    zones.push({ x: left, y: Math.max(0, section.top), width: Math.max(0, right - left), height: section.height });
-  }
-  return zones;
-}
-
-// The pond that last painted each opening: a page can open the pond before
-// mountPond() resolves, and that pond must still repaint once it exists.
-const pondOpenedBy = new WeakMap();
-
-/** Open the pond around an empty sentence (or close it with null). */
-export function setPondOpening(pondElement, pond, sentence) {
-  if (!pondElement) return;
-  if (!sentence) {
-    if (pondElement.dataset.open) { delete pondElement.dataset.open; pond?.refresh(); }
-    return;
-  }
-  requestAnimationFrame(() => {
-    if (!sentence.isConnected) return;
-    const rect = sentence.getBoundingClientRect();
-    pondElement.style.setProperty("--open-x", `${Math.round(rect.left + 120)}px`);
-    pondElement.style.setProperty("--open-y", `${Math.round(rect.top + rect.height)}px`);
-    if (pondElement.dataset.open !== "true" || (pond && pondOpenedBy.get(pondElement) !== pond)) {
-      pondElement.dataset.open = "true";
-      if (pond) { pondOpenedBy.set(pondElement, pond); pond.refresh(); }
-    }
-  });
 }
 
 // ======================================================================

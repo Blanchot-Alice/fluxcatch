@@ -11,12 +11,23 @@
 //   g  1px borders and rules     0
 //   h  colour literals outside the token files   0 (static scan)
 // plus: Display face used at most twice per screen outside the BrandMark,
-// filenames keep their extension when truncated, and the pond layer is visible
-// in colour but vanishes in greyscale.
+// filenames keep their extension when truncated, the pond layer meets v3 §3.1
+// (in the margins of full pages chroma coverage 3% to 12% and p95 |ΔL| ≤ 0.03
+// Morning / 0.05 Dusk, measured in OKLCH against the capture without the
+// layer; no pond pixel under any text run), and the header is the canvas at
+// scroll position 0 (v3 §3.6). Text contrast (d) is measured against the
+// composited background: the pond's own pixels over the canvas.
+//
+// The pond is seeded per install; the audit pins the seed (--pond-seed, default
+// the module's built-in 0x5EED1E5) so runs compare, and reports a sweep over
+// other seeds on the Downloads page for the spread.
 //
 //   node scripts/design-audit.mjs [--label v1-baseline] [--surfaces downloads,popup]
 //        [--themes morning,dusk] [--langs en,zh] [--screens downloads-1280]
-//        [--publish docs/design-audit] [--no-focus]
+//        [--publish docs/design-audit] [--no-focus] [--pond-seed 0x5EED1E5]
+//   node scripts/design-audit.mjs --rejudge v3-step4 [--publish docs/design-audit]
+//        recomputes the verdicts of an earlier run's report.json with the current
+//        acceptance (no Chrome; captures and measurements stay as they were).
 //
 // Needs Node 22+ and a Playwright Chrome for Testing (or CHROME_PATH). Chrome
 // cannot start inside the Codex/Claude Bash sandbox; run it from a normal shell.
@@ -25,24 +36,35 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { decodePng, evaluate, keepDisplayAwake, openPage, poll, session, srgbToLab } from "./lib/chrome-harness.mjs";
+import { buildIdentity, extensionDir } from "./lib/build-identity.mjs";
+import { decodePng, evaluate, keepDisplayAwake, openPage, poll, session } from "./lib/chrome-harness.mjs";
 import { pageAudit } from "./lib/page-audit.mjs";
+import { JUDGED_MARGIN_MIN, POND_BAND, headerStrip, parseRgb, pondMetrics, pondVerdict } from "./lib/pond-metrics.mjs";
 import { extensionIdFromKey, prepareActiveExtension, registerFakeHost, startFixtureDownloads, writeFakeHostLauncher } from "./lib/active-profile.mjs";
 import { MEDIA_FIXTURE_HOST, startMediaFixture } from "./lib/media-fixture.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const EXTENSION_DIR = path.join(ROOT, "extension");
+const EXTENSION_DIR = extensionDir(ROOT);
 const argv = process.argv.slice(2);
 const option = (name, fallback) => { const index = argv.indexOf(`--${name}`); return index >= 0 ? argv[index + 1] : fallback; };
 const flag = (name) => argv.includes(`--${name}`);
 const LABEL = option("label", "run");
 const OUT = path.resolve(option("out", path.join(ROOT, "tools", "live", "out", "design-audit", LABEL)));
 const PUBLISH = option("publish", null);
+const REJUDGE = option("rejudge", null);
 const listOption = (name, fallback) => (option(name, null) || fallback).split(",").map((s) => s.trim()).filter(Boolean);
 const SURFACES = listOption("surfaces", "popup,sidepanel,downloads,settings,preview");
 const THEMES = listOption("themes", "morning,dusk");
 const LANGS = listOption("langs", "en,zh");
 const SCREEN_FILTER = option("screens", null)?.split(",") || null;
+// The per-install pond seed the audit stores before each run (v3 §3.1): the
+// module's own fallback seed unless --pond-seed says otherwise.
+export const DEFAULT_POND_SEED = 0x5EED1E5;
+const POND_SEED = Number(option("pond-seed", DEFAULT_POND_SEED)) >>> 0 || DEFAULT_POND_SEED;
+// Seeds for the spread on the Downloads page: the pinned seed, the reference
+// script's seed, the five from the step-1 sweep, then nine more.
+export const SWEEP_SEEDS = Object.freeze([0x5EED1E5, 0xF1C4C7, 0xB, 0x16, 0x21, 0x2C, 0x1, 0x2, 0x3, 0x7, 0x1234567, 0xABCDEF, 0xC0FFEE, 0xBADC0DE, 0xFACADE, 0x9E3779B9]);
+const SWEEP_SCREEN = "downloads-1280";
 
 export const BUDGETS = Object.freeze({
   stylesPerScreen: 6,
@@ -152,7 +174,7 @@ const PAGE_CONFIG = {
   filenameSelector: "[data-filename], .job-title, .media-title",
   latinAllowlist: [
     "FluxCatch", "Finder", "Chrome", "Mac", "macOS", "Windows", "Linux", "MP4", "MKV", "WebM", "MP3", "M4A", "AAC", "FLAC", "WAV", "OGG", "Opus",
-    "HLS", "DASH", "MPD", "MOV", "TS", "HTTP", "KB", "MB", "GB", "TB", "Instagram", "YouTube", "Bilibili", "Vimeo", "Twitter", "X"
+    "HLS", "DASH", "MPD", "MOV", "TS", "HTTP", "KB", "MB", "GB", "TB", "Instagram", "YouTube", "Bilibili", "Vimeo", "Twitter", "X", "yt-dlp"
   ]
 };
 
@@ -263,59 +285,52 @@ export function scanColourLiterals(root = ROOT) {
   return findings;
 }
 
-// ---------- pond layer: colour without value ----------
-function pondStats(withPond, withoutPond, layout = {}, dpr = 2) {
-  const a = decodePng(withPond);
-  const b = decodePng(withoutPond);
-  const { column = null, volatile = [], viewportRight = 0, expectVisible = true } = layout;
-  // Full pages: judge the pond outside the content column, where it shows and
-  // nothing else moves. Small surfaces have no margins worth the name, so only
-  // regions that update by themselves (progress, live regions, toasts) are skipped.
-  const skipLeft = column ? Math.floor(column.left * dpr) : Infinity;
-  const skipRight = column ? Math.ceil(column.right * dpr) : -Infinity;
-  const skipRects = volatile.map((r) => ({ l: Math.floor(r.l * dpr), t: Math.floor(r.t * dpr), r: Math.ceil(r.r * dpr), b: Math.ceil(r.b * dpr) }));
-  // The scrollbar is browser chrome and changes state between captures.
-  const contentRight = viewportRight ? Math.floor(viewportRight * dpr) : Infinity;
-  if (a.width !== b.width || a.height !== b.height) return { error: "size mismatch" };
-  let footprint = 0;
-  let sumDl = 0;
-  let sumChroma = 0;
-  const dls = [];
-  const step = 2; // every other pixel in each axis
-  let sampled = 0;
-  for (let y = 0; y < a.height; y += step) {
-    for (let x = 0; x < a.width; x += step) {
-      if (x >= skipLeft && x <= skipRight) continue;
-      if (x >= contentRight) continue;
-      if (skipRects.some((r) => x >= r.l && x <= r.r && y >= r.t && y <= r.b)) continue;
-      const i = (y * a.width + x) * 4;
-      sampled += 1;
-      if (a.pixels[i] === b.pixels[i] && a.pixels[i + 1] === b.pixels[i + 1] && a.pixels[i + 2] === b.pixels[i + 2]) continue;
-      const la = srgbToLab(a.pixels[i], a.pixels[i + 1], a.pixels[i + 2]);
-      const lb = srgbToLab(b.pixels[i], b.pixels[i + 1], b.pixels[i + 2]);
-      const dl = Math.abs(la[0] - lb[0]);
-      const dc = Math.hypot(la[1] - lb[1], la[2] - lb[2]);
-      footprint += 1;
-      sumDl += dl;
-      sumChroma += dc;
-      dls.push(dl);
+// ---------- pond seed sweep (v3 §3.1) ----------
+// The layer the shipped module renders for other seeds on this page, unmasked,
+// measured in the page's margins: how the acceptance band moves with the
+// per-install seed. Runs once per theme on the Downloads page.
+async function pondSweep(page, theme, seeds) {
+  return evaluate(page, `(async () => {
+    const mod = await import(chrome.runtime.getURL("ui/v2/pond.js"));
+    const width = document.documentElement.clientWidth;
+    const height = window.innerHeight;
+    const main = document.querySelector("main")?.getBoundingClientRect();
+    if (!main) return { error: "no main column" };
+    const left = Math.floor(main.left), right = Math.ceil(main.right);
+    const style = getComputedStyle(document.documentElement);
+    const canvasRgb = mod.parseCssColor(style.getPropertyValue("--canvas"));
+    const canvasL = mod.rgbToOklch(...canvasRgb).L;
+    const toLab = (r, g, b) => { const { L, C, h } = mod.rgbToOklch(r, g, b); const rad = h * Math.PI / 180; return [L, C * Math.cos(rad), C * Math.sin(rad)]; };
+    const [Lc, ac, bc] = toLab(...canvasRgb);
+    const out = [];
+    for (const seed of ${JSON.stringify(seeds)}) {
+      const layer = new mod.PondLayer({ seed });
+      const bitmap = layer.bitmap(${JSON.stringify(theme)}, width, height, canvasL, 1);
+      const off = new OffscreenCanvas(width, height);
+      const ctx = off.getContext("2d", { willReadFrequently: true });
+      ctx.drawImage(bitmap, 0, 0);
+      const data = ctx.getImageData(0, 0, width, height).data;
+      const dls = [];
+      let covered = 0;
+      for (let y = 0; y < height; y += 1) {
+        for (let x = 0; x < width; x += 1) {
+          if (x >= left && x < right) continue;
+          const i = (y * width + x) * 4;
+          const a = data[i + 3] / 255;
+          if (a === 0) { dls.push(0); continue; }
+          const r = Math.round(data[i] * a + canvasRgb[0] * (1 - a));
+          const g = Math.round(data[i + 1] * a + canvasRgb[1] * (1 - a));
+          const b = Math.round(data[i + 2] * a + canvasRgb[2] * (1 - a));
+          const [L, A, B] = toLab(r, g, b);
+          if (Math.hypot(A - ac, B - bc) > ${POND_BAND.chromaStep}) covered += 1;
+          dls.push(Math.abs(L - Lc));
+        }
+      }
+      dls.sort((p, q) => p - q);
+      out.push({ seed, coverage: Math.round((covered / dls.length) * 1000) / 10, p95DeltaL: Math.round(dls[Math.floor(0.95 * dls.length)] * 1000) / 1000 });
     }
-  }
-  dls.sort((p, q) => p - q);
-  const pct = (p) => (dls.length ? dls[Math.min(dls.length - 1, Math.floor(p * dls.length))] : 0);
-  const stats = {
-    footprint: Math.round((footprint / Math.max(1, sampled)) * 1000) / 10,
-    meanDeltaL: footprint ? Math.round((sumDl / footprint) * 100) / 100 : 0,
-    p95DeltaL: Math.round(pct(0.95) * 100) / 100,
-    meanDeltaChroma: footprint ? Math.round((sumChroma / footprint) * 100) / 100 : 0
-  };
-  // Where the spec shows the pond (behind a visible empty state, or in real page
-  // margins) it must be visible as colour: enough of the frame, enough chroma.
-  // Everywhere it must vanish in greyscale: 95% of changed pixels within 1.5 L*.
-  stats.expectVisible = expectVisible;
-  const visible = stats.footprint >= 0.5 && stats.meanDeltaChroma >= 1;
-  stats.pass = (expectVisible ? visible : true) && stats.p95DeltaL <= 1.5;
-  return stats;
+    return { width, height, margins: { left, right }, seeds: out };
+  })()`, 120_000);
 }
 
 // ---------- browser run ----------
@@ -384,7 +399,8 @@ async function auditScreen({ browser, http, pageUrl, fixtureTabs }, screen, them
       await new Promise((resolve) => setTimeout(resolve, screen.prepareWaitMs || 700));
     }
     if (screen.fullPage) {
-      const height = await evaluate(page, "Math.min(9000, document.scrollingElement.scrollHeight)");
+      // The report carries the height actually captured (the atlas lays pages out by it).
+      height = await evaluate(page, "Math.min(9000, document.scrollingElement.scrollHeight)");
       await page.send("Emulation.setDeviceMetricsOverride", { width: screen.width, height, deviceScaleFactor: 2, mobile: false });
       await new Promise((resolve) => setTimeout(resolve, 600));
     }
@@ -412,19 +428,32 @@ async function auditScreen({ browser, http, pageUrl, fixtureTabs }, screen, them
         const main = document.querySelector("main")?.getBoundingClientRect();
         const margins = main ? Math.min(main.left, width - main.right) : 0;
         const shown = (el) => el && !el.hidden && el.getClientRects().length > 0 && getComputedStyle(el).visibility !== "hidden";
-        const emptyShown = [...document.querySelectorAll(".empty-state")].some(shown);
         const volatile = [...document.querySelectorAll("[data-live], .focus-panel, [role=progressbar], .progress, [aria-live], .toast-region, .speed-chart, .segment-map")]
           .filter(shown).map((el) => { const r = el.getBoundingClientRect(); return { l: r.left - 4, t: r.top - 4, r: r.right + 4, b: r.bottom + 4 }; });
         return {
-          column: main && margins >= 48 ? { left: main.left, right: main.right } : null,
+          column: main && margins >= ${JUDGED_MARGIN_MIN} ? { left: main.left, right: main.right } : null,
+          margins: Math.round(margins),
           volatile,
           viewportRight: width,
-          expectVisible: emptyShown || margins >= 48
+          canvas: [document.body, document.documentElement].map((el) => getComputedStyle(el).backgroundColor)
         };
       })()`);
-      result.pond = { ...result.pond, ...pondStats(Buffer.from(shot.data, "base64"), Buffer.from(without.data, "base64"), layout) };
+      const withPixels = decodePng(Buffer.from(shot.data, "base64"));
+      const withoutPixels = decodePng(Buffer.from(without.data, "base64"));
+      // §3.1: full pages are judged in their margins; the popup, the side panel
+      // and 960-wide pages (40 px gutters, inside the feather) are reported only.
+      const judged = Boolean(layout.column) && !["popup", "sidepanel"].includes(screen.surface);
+      const metrics = pondMetrics(withPixels, withoutPixels, { column: layout.column, skip: layout.volatile, right: layout.viewportRight }, { dpr: 2 });
+      const underText = result.contrast?.pondUnderText?.length || 0;
+      result.pond = { ...result.pond, judged, margins: layout.margins, metrics, underText, verdict: pondVerdict(metrics, { theme, judged, underText }) };
+      if (result.header?.present && !result.header.modal) {
+        // §3.6, pixel for pixel: without the layer, the header outside its content box is the canvas.
+        const canvasColour = layout.canvas.map(parseRgb).find((c) => c && c.a >= 0.99) || null;
+        result.header.strip = headerStrip(withoutPixels, { header: result.header.rect, content: result.header.content, canvas: canvasColour, dpr: 2, right: layout.viewportRight });
+      }
       const grey = path.join(OUT, "shots", `${base}.no-pond.png`);
       fs.writeFileSync(grey, Buffer.from(without.data, "base64"));
+      if (screen.id === SWEEP_SCREEN && lang === "en") result.pond.sweep = await pondSweep(page, theme, SWEEP_SEEDS).catch((error) => ({ error: error.message }));
     }
     return { id: screen.id, surface: screen.surface, theme, lang, width: screen.width, height, ...result };
   } finally {
@@ -447,25 +476,42 @@ function judge(screen) {
     names: { value: screen.filenames.endTruncated.length, budget: BUDGETS.filenames }
   };
   for (const check of Object.values(checks)) check.pass = check.value <= check.budget;
-  if (screen.pond?.present && "pass" in screen.pond) checks.pond = { value: screen.pond.pass ? 0 : 1, budget: 0, pass: screen.pond.pass };
+  if (screen.pond?.verdict) checks.pond = { value: screen.pond.verdict.reasons.length, budget: 0, pass: screen.pond.verdict.pass };
+  if (screen.header?.present) {
+    const problems = screen.header.problems.length + (screen.header.strip?.stray ? 1 : 0);
+    checks.header = { value: problems, budget: 0, pass: problems === 0 };
+  }
   return checks;
 }
+export { judge };
 
-function markdown(report) {
+const hexSeed = (seed) => `0x${(Number(seed) >>> 0).toString(16).toUpperCase()}`;
+
+export function markdown(report) {
   const lines = [];
   const mark = (c) => (c ? (c.pass ? `${c.value}` : `**${c.value} ✗**`) : "–");
   lines.push(`# FluxCatch design audit — ${report.label}`, "");
-  lines.push(`Run ${report.startedAt} · commit ${report.commit} · Chrome for Testing · DPR 2`, "");
+  lines.push(`Run ${report.startedAt} · commit ${report.commit} · extension ${report.extensionDir} · Chrome for Testing · DPR 2 · pond seed ${hexSeed(report.pondSeed)}`, "");
+  if (report.rejudgedAt) lines.push(`Verdicts recomputed ${report.rejudgedAt} with the acceptance in force then (captures and measurements unchanged).`, "");
+  lines.push(`Pond (v3 §3.1): seed ${hexSeed(report.pondSeed)} stored before each run; margins of full pages with ≥ ${JUDGED_MARGIN_MIN} px gutters: chroma coverage ${POND_BAND.coverageMin}% to ${POND_BAND.coverageMax}% (ΔC > ${POND_BAND.chromaStep} in OKLCH against the capture without the layer), p95 |ΔL| ≤ ${POND_BAND.p95.morning} Morning / ${POND_BAND.p95.dusk} Dusk; no pond pixel under any text run on any screen. Cells read "coverage · p95", in parentheses where the screen is reported but not judged (popup, side panel, 960 wide). Header (v3 §3.6): at scroll 0 the top bar is the canvas (background alpha 0, no shadow, band at opacity 0, and the capture without the layer is canvas pixel for pixel outside the content box). Contrast (d) is measured against the composited background: the pond's pixels over the canvas.`, "");
   lines.push("Budgets: a ≤ 6 text styles per screen (≤ 8 app-wide) · Display ≤ 2 per screen outside the BrandMark · b ≤ 3 left edges · c 0 nested containers · d 0 contrast failures · e 0 clipped/covered · f 0 locale leaks · g 0 rules · names 0 end-truncated filenames · h 0 colour literals.", "");
   lines.push(`## Summary`, "");
   lines.push(`- Screens audited: ${report.screens.length}; screens meeting every budget: ${report.screens.filter((s) => Object.values(s.checks).every((c) => c.pass)).length}.`);
   const perLang = Object.entries(report.appWidePerLanguage || {}).map(([lang, n]) => `${lang} ${n}${n > BUDGETS.stylesAppWide ? " ✗" : ""}`).join(", ");
   lines.push(`- App-wide text styles (a), per UI language: ${perLang} (budget ${BUDGETS.stylesAppWide}); ${report.appWideStyles.length} across both languages.`);
   lines.push(`- Colour literals outside the token files (h): ${report.literals.length}${report.literals.length ? " ✗" : ""}.`);
-  lines.push("", "| Screen | Theme | Lang | a styles | Display | b edges | c nesting | d contrast | e clip | f locale | g rules | names | pond |", "|---|---|---|---|---|---|---|---|---|---|---|---|---|");
+  lines.push("", "| Screen | Theme | Lang | a styles | Display | b edges | c nesting | d contrast | e clip | f locale | g rules | names | pond | header |", "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|");
+  const pondCell = (s) => {
+    const p = s.pond;
+    if (!p?.metrics) return "–";
+    const text = `${p.metrics.coverage}% · ${p.metrics.p95DeltaL}`;
+    if (!p.verdict?.pass) return `**${text} ✗**`;
+    return p.judged ? text : `(${text})`;
+  };
+  const headerCell = (s) => (s.checks.header ? (s.checks.header.pass ? "✓" : `**${s.checks.header.value} ✗**`) : "–");
   for (const s of report.screens) {
     const c = s.checks;
-    lines.push(`| ${s.id} | ${s.theme} | ${s.lang} | ${mark(c.a)} | ${mark(c.display)} | ${mark(c.b)} | ${mark(c.c)} | ${mark(c.d)} | ${mark(c.e)} | ${mark(c.f)} | ${mark(c.g)} | ${mark(c.names)} | ${c.pond ? (c.pond.pass ? "✓" : "**✗**") : "–"} |`);
+    lines.push(`| ${s.id} | ${s.theme} | ${s.lang} | ${mark(c.a)} | ${mark(c.display)} | ${mark(c.b)} | ${mark(c.c)} | ${mark(c.d)} | ${mark(c.e)} | ${mark(c.f)} | ${mark(c.g)} | ${mark(c.names)} | ${pondCell(s)} | ${headerCell(s)} |`);
   }
   lines.push("", "## App-wide text styles", "");
   for (const style of report.appWideStyles) lines.push(`- \`${style.family.split(",").slice(0, 2).join(", ")}\` ${style.size} / ${style.lineHeight} · ${style.weight} — on ${style.screens} screen(s), e.g. “${style.sample}”`);
@@ -481,7 +527,10 @@ function markdown(report) {
     lines.push(`- e: clipped ${e.clipped.length}, covered at rest ${e.coveredAtRest.length}, focus obscured ${e.focusObscured.length}, dialog actions ${e.dialogActions.length}${[...e.clipped, ...e.coveredAtRest, ...e.focusObscured, ...e.dialogActions].slice(0, 6).map((x) => `\n  - ${x.where} — ${x.reason || `under ${x.by}`}`).join("")}`);
     lines.push(`- g: ${s.rules.length} rules${s.rules.slice(0, 6).map((r) => `\n  - ${r.where}: ${r.what}`).join("")}`);
     lines.push(`- names: ${s.filenames.endTruncated.length} end-truncated filenames${s.filenames.endTruncated.slice(0, 3).map((n) => `\n  - ${n.where}`).join("")}`);
-    if (s.pond?.present) lines.push(`- pond: footprint ${s.pond.footprint}% · mean ΔL* ${s.pond.meanDeltaL} · p95 ΔL* ${s.pond.p95DeltaL} · mean Δchroma ${s.pond.meanDeltaChroma} → ${s.pond.pass ? "colour without value ✓" : "✗"}`);
+    const p = s.pond;
+    if (p?.metrics) lines.push(`- pond (§3.1, ${p.judged ? "judged in the margins" : p.metrics.region === "margins" ? "margins, reported only" : "whole frame, reported only"}${p.margins ? `, ${p.margins} px gutters` : ""}): coverage ${p.metrics.coverage}% (ΔC > ${POND_BAND.chromaStep}) · p95 |ΔL| ${p.metrics.p95DeltaL} · mean |ΔL| ${p.metrics.meanDeltaL} · footprint ${p.metrics.footprint}% · under text ${p.underText} → ${p.verdict.pass ? "ok" : p.verdict.reasons.join("; ")}`);
+    const h = s.header;
+    if (h?.present) lines.push(`- header at scroll 0 (§3.6): background alpha ${h.backgroundAlpha}, box-shadow ${h.boxShadow}, band opacity ${h.band.opacity}${h.strip ? `, capture without the layer: ${h.strip.stray} of ${h.strip.sampled} px off the canvas` : h.modal ? ", pixels not checked under a dialog" : ""} → ${s.checks.header?.pass ? "ok" : h.problems.concat(h.strip?.stray ? [`${h.strip.stray} stray px (worst ${h.strip.worst}/255)`] : []).join("; ")}`);
     lines.push(`- screenshot: ${s.screenshot}`, "");
   }
   const leakScreens = report.screens.filter((s) => s.locale.leaks.length);
@@ -494,6 +543,35 @@ function markdown(report) {
   const dusk = report.screens.filter((s) => s.theme === "dusk" && s.lang === "en" && s.contrast.failures.length);
   for (const s of dusk) lines.push(`- ${s.id}: ${s.contrast.failures.slice(0, 6).map((f) => `${f.ratio}:1 ${f.where}`).join("; ")}`);
   if (!dusk.length) lines.push("- none");
+  lines.push("", "## Pond acceptance (§3.1), judged screens", "");
+  lines.push("| Screen | Theme | Lang | gutters | coverage | p95 \|ΔL\| | mean \|ΔL\| | under text | verdict |", "|---|---|---|---|---|---|---|---|---|");
+  for (const s of report.screens.filter((x) => x.pond?.judged)) {
+    const p = s.pond;
+    lines.push(`| ${s.id} | ${s.theme} | ${s.lang} | ${p.margins} px | ${p.metrics.coverage}% | ${p.metrics.p95DeltaL} | ${p.metrics.meanDeltaL} | ${p.underText} | ${p.verdict.pass ? "ok" : p.verdict.reasons.join("; ")} |`);
+  }
+  const underTextScreens = report.screens.filter((s) => s.pond?.underText);
+  lines.push("", `Pond under text: ${underTextScreens.length ? underTextScreens.map((s) => `${s.id} · ${s.theme} · ${s.lang}: ${s.contrast.pondUnderText.slice(0, 4).map((u) => `${u.where} (α ${u.pondAlpha})`).join(", ")}`).join("; ") : "none on any screen"}.`);
+  lines.push("", "## Pond seed sweep (§3.1)", "");
+  const sweeps = report.screens.filter((s) => s.pond?.sweep?.seeds);
+  if (sweeps.length) {
+    const first = sweeps[0].pond.sweep;
+    lines.push(`The shipped module's layer for ${first.seeds.length} seeds on ${SWEEP_SCREEN} (${first.width} × ${first.height}, margins x < ${first.margins.left} and x ≥ ${first.margins.right}), unmasked, English; the audit's pinned seed is first, the reference script's second. Masking takes the feather's share off these numbers; the judged table above has the pinned seed as seen.`, "");
+    lines.push(`| Seed | ${sweeps.map((s) => `${s.theme} coverage`).join(" | ")} | ${sweeps.map((s) => `${s.theme} p95 \|ΔL\|`).join(" | ")} |`, `|---|${sweeps.map(() => "---").join("|")}|${sweeps.map(() => "---").join("|")}|`);
+    first.seeds.forEach((entry, index) => {
+      const cells = sweeps.map((s) => s.pond.sweep.seeds[index]);
+      lines.push(`| ${hexSeed(entry.seed)} | ${cells.map((c) => `${c.coverage}%${c.coverage < POND_BAND.coverageMin || c.coverage > POND_BAND.coverageMax ? " ✗" : ""}`).join(" | ")} | ${cells.map((c, i) => `${c.p95DeltaL}${c.p95DeltaL > (POND_BAND.p95[sweeps[i].theme] ?? 1) ? " ✗" : ""}`).join(" | ")} |`);
+    });
+    for (const s of sweeps) {
+      const inBand = s.pond.sweep.seeds.filter((c) => c.coverage >= POND_BAND.coverageMin && c.coverage <= POND_BAND.coverageMax).length;
+      lines.push("", `- ${s.theme}: ${inBand} of ${s.pond.sweep.seeds.length} seeds inside the band unmasked.`);
+    }
+  } else {
+    lines.push(`- not run (${SWEEP_SCREEN} in English was not in this run${sweeps.length === 0 && report.screens.some((s) => s.pond?.sweep?.error) ? `: ${report.screens.find((s) => s.pond?.sweep?.error).pond.sweep.error}` : ""}).`);
+  }
+  lines.push("", "## Header at scroll 0 (§3.6)", "");
+  const headerFails = report.screens.filter((s) => s.checks.header && !s.checks.header.pass);
+  for (const s of headerFails) lines.push(`- ${s.id} · ${s.theme} · ${s.lang}: ${s.header.problems.concat(s.header.strip?.stray ? [`${s.header.strip.stray} stray px`] : []).join("; ")}`);
+  if (!headerFails.length) lines.push(`- every screen with a top bar passes (${report.screens.filter((s) => s.checks.header).length} screens).`);
   lines.push("", "## Colour literals outside the token files (h)", "");
   const byFile = new Map();
   for (const f of report.literals) byFile.set(f.file, [...(byFile.get(f.file) || []), f]);
@@ -503,14 +581,49 @@ function markdown(report) {
   return lines.join("\n");
 }
 
+function publish(report) {
+  const target = path.resolve(ROOT, PUBLISH);
+  fs.mkdirSync(target, { recursive: true });
+  fs.writeFileSync(path.join(target, `${report.label}.md`), markdown(report));
+  const slim = { ...report, screens: report.screens.map(({ textStyles, edges, trailingRightEdges, ...rest }) => ({ ...rest, textStyles: textStyles.map(({ samples, ...t }) => t), edges })) };
+  fs.writeFileSync(path.join(target, `${report.label}.json`), JSON.stringify(slim, null, 2));
+}
+
+function summarise(report) {
+  const appWideMax = Math.max(0, ...Object.values(report.appWidePerLanguage || {}));
+  const allPass = report.screens.every((s) => Object.values(s.checks).every((c) => c.pass)) && appWideMax <= BUDGETS.stylesAppWide && report.literals.length === 0;
+  console.log(`app-wide styles per language ${JSON.stringify(report.appWidePerLanguage)} (budget ${BUDGETS.stylesAppWide}) · colour literals ${report.literals.length} · ${allPass ? "ALL BUDGETS MET" : "budgets not met"}`);
+  return allPass;
+}
+
+// Re-run only the verdicts of an earlier run against the current acceptance.
+function rejudge(label) {
+  const dir = path.join(ROOT, "tools", "live", "out", "design-audit", label);
+  const file = path.join(dir, "report.json");
+  const report = JSON.parse(fs.readFileSync(file, "utf8"));
+  for (const screen of report.screens) {
+    if (screen.pond?.metrics) screen.pond.verdict = pondVerdict(screen.pond.metrics, { theme: screen.theme, judged: screen.pond.judged, underText: screen.pond.underText || 0 });
+    screen.checks = judge(screen);
+  }
+  report.budgets = { ...report.budgets, pond: POND_BAND };
+  report.rejudgedAt = new Date().toISOString();
+  fs.writeFileSync(file, JSON.stringify(report, null, 2));
+  fs.writeFileSync(path.join(dir, "report.md"), markdown(report));
+  if (PUBLISH) publish(report);
+  console.log(`rejudged ${label}: ${report.screens.filter((s) => Object.values(s.checks).every((c) => c.pass)).length} of ${report.screens.length} screens meet every budget`);
+  process.exitCode = summarise(report) ? 0 : 1;
+}
+
 async function main() {
+  if (REJUDGE) return rejudge(REJUDGE);
   const awake = keepDisplayAwake();
   process.on("exit", () => { try { awake?.kill(); } catch { /* gone */ } });
   fs.rmSync(OUT, { recursive: true, force: true });
   fs.mkdirSync(path.join(OUT, "shots"), { recursive: true });
   const startedAt = new Date().toISOString();
-  let commit = "unknown";
-  try { commit = fs.readFileSync(path.join(ROOT, ".git", "HEAD"), "utf8").trim(); if (commit.startsWith("ref:")) commit = fs.readFileSync(path.join(ROOT, ".git", commit.slice(5).trim()), "utf8").trim().slice(0, 7); } catch { /* not a checkout */ }
+  // The same identity the e2e matrix stamps (v3 §3.7): short hash, or "uncommitted".
+  const identity = buildIdentity(ROOT);
+  const commit = identity.commit;
   const screens = SCREENS.filter((s) => SURFACES.includes(s.surface) && (!SCREEN_FILTER || SCREEN_FILTER.includes(s.id)));
   const results = [];
   const fixture = screens.some((s) => s.fixture) ? await startMediaFixture() : null;
@@ -535,11 +648,11 @@ async function main() {
         if (profileKind !== "empty") {
           // The worker reads history once at startup: seed, then start a fresh session.
           await session({ profile, extensionDir, lang: chromeLang, args: fixture?.chromeArgs || [] }, async (ctx) => {
-            await seed(ctx.browser, ctx.http, ctx.pageUrl, { "downloadHistory.v1": historyFixture(), "fluxcatch.uiLanguage.v1": lang });
+            await seed(ctx.browser, ctx.http, ctx.pageUrl, { "downloadHistory.v1": historyFixture(), "fluxcatch.uiLanguage.v1": lang, "fluxcatch.pondSeed.v1": POND_SEED });
           });
         }
         await session({ profile, extensionDir, lang: chromeLang, args: fixture?.chromeArgs || [] }, async (ctx) => {
-          if (profileKind === "empty") await seed(ctx.browser, ctx.http, ctx.pageUrl, { "fluxcatch.uiLanguage.v1": lang });
+          if (profileKind === "empty") await seed(ctx.browser, ctx.http, ctx.pageUrl, { "fluxcatch.uiLanguage.v1": lang, "fluxcatch.pondSeed.v1": POND_SEED });
           let control = null;
           let fixtureTab = null;
           let blankTab = null;
@@ -612,25 +725,16 @@ async function main() {
   }
   const appWidePerLanguage = Object.fromEntries(Object.entries(perLanguage).map(([lang, keys]) => [lang, keys.size]));
   const report = {
-    label: LABEL, startedAt, commit, budgets: BUDGETS, appWidePerLanguage,
+    label: LABEL, startedAt, commit, extensionDir: identity.extensionDir, packaged: identity.packaged, budgets: { ...BUDGETS, pond: POND_BAND }, pondSeed: POND_SEED, appWidePerLanguage,
     appWideStyles: [...appWide.values()].sort((x, y) => y.screens - x.screens).map(({ samples, n, ...rest }) => rest),
     literals: scanColourLiterals(),
     screens: results
   };
   fs.writeFileSync(path.join(OUT, "report.json"), JSON.stringify(report, null, 2));
   fs.writeFileSync(path.join(OUT, "report.md"), markdown(report));
-  if (PUBLISH) {
-    const target = path.resolve(ROOT, PUBLISH);
-    fs.mkdirSync(target, { recursive: true });
-    fs.writeFileSync(path.join(target, `${LABEL}.md`), markdown(report));
-    const slim = { ...report, screens: report.screens.map(({ textStyles, edges, trailingRightEdges, ...rest }) => ({ ...rest, textStyles: textStyles.map(({ samples, ...t }) => t), edges })) };
-    fs.writeFileSync(path.join(target, `${LABEL}.json`), JSON.stringify(slim, null, 2));
-  }
-  const appWideMax = Math.max(0, ...Object.values(appWidePerLanguage));
-  const allPass = results.every((s) => Object.values(s.checks).every((c) => c.pass)) && appWideMax <= BUDGETS.stylesAppWide && report.literals.length === 0;
+  if (PUBLISH) publish(report);
   console.log(`\nreport: ${path.relative(ROOT, path.join(OUT, "report.md"))}`);
-  console.log(`app-wide styles per language ${JSON.stringify(appWidePerLanguage)} (budget ${BUDGETS.stylesAppWide}) · colour literals ${report.literals.length} · ${allPass ? "ALL BUDGETS MET" : "budgets not met"}`);
-  process.exitCode = allPass ? 0 : 1;
+  process.exitCode = summarise(report) ? 0 : 1;
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

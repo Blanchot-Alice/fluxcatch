@@ -18,9 +18,23 @@ import { msg } from "../ui/v2/messages.js";
 import { brandMark, button, createMenus, createToaster, emptyState, filename, groupLabel, iconButton, listHeader, setStatusLine, status, statusLine } from "../ui/v2/components.js";
 import { dialogShell, fieldStack, markSaved, nav, numberField, segmented, select, setOptions, setSettingError, settingRow, switchControl, textField, controlOf } from "../ui/v2/controls.js";
 import { completedMeta, historyRow, liveRow, updateLiveRow } from "../ui/v2/rows.js";
-import { applyStaticCopy, bindMist, defaultFilename, defaultFormat, engineLine, formatOptions, isStreamKind, mediaRow, openEngineSetup, openMediaMenu, pondZones, replaceFilenameExtension, setPondOpening, urlItem, variantLabel } from "../ui/v2/media.js";
+import {
+  applyStaticCopy,
+  bindMist,
+  defaultFilename,
+  defaultFormat,
+  engineLine,
+  formatOptions,
+  isStreamKind,
+  mediaRow,
+  openEngineSetup,
+  openMediaMenu,
+  replaceFilenameExtension,
+  urlItem,
+  variantLabel
+} from "../ui/v2/media.js";
 import { errorText } from "../ui/v2/errors.js";
-import { mountPond } from "../ui/v2/pond.js";
+import { contentBoxes, mountPondLayer } from "../ui/v2/pond.js";
 // Settings' own limits, defaults and file-name tokens (a logic module, no UI),
 // so the setting-row specimens show the product rows exactly.
 import { DEFAULT_FORM_STATE, FILENAME_TOKENS, FORM_LIMITS, TOKEN_LABELS, insertTemplateToken } from "../options/form-state.js";
@@ -108,7 +122,6 @@ const TICK_MS = 250;
 const SETTLE_MS = 1200;
 const HOLD_MS = 600;
 // The empty state's pond zone on a full page (the Downloads page uses 560).
-const FULL_PAGE_POND_WIDTH = 560;
 const STATIC_WAVE = [0.2, 0.42, 0.55, 0.63, 0.7, 0.66, 0.74, 0.8, 0.78, 0.86, 0.9, 0.84, 0.88, 0.95, 0.92, 0.97, 0.93, 0.9, 0.96, 1, 0.94, 0.9, 0.95, 0.97];
 const demo = { fraction: 0.62, paused: false, samples: STATIC_WAVE.map((value) => DEMO_SPEED * value), finishing: null, view: null, run: 0 };
 
@@ -125,8 +138,6 @@ const scratchToast = createToaster(scratchRegion);
 let switcher = null;
 let navigation = null;
 let pond = null;
-// The empty-state sentence of the feedback view: the pond opens around it there.
-let emptySentence = null;
 // The Download dialog specimen ({ setMode }), rebuilt with each render.
 let dialogSpecimenApi = null;
 
@@ -134,8 +145,10 @@ $("#topbarInner").prepend(brandMark({ size: "m" }));
 bindMist($("#topbar"));
 render();
 onLocaleChange(render);
-// A full page: the empty state's zone is as wide as on Downloads, not popup-sized.
-mountPond({ element: $("[data-pond]"), getZones: () => pondZones($("#page"), openSentence(), { width: FULL_PAGE_POND_WIDTH }) }).then((mounted) => { pond = mounted; }).catch(() => {});
+// Every content box of the shown view (v3 §3.1): the header, the title, the
+// view switch, each block of the view and each text block of its empty state.
+const PREVIEW_BOXES = ["#topbarInner", "#previewTitle", "#viewSwitch", "[data-view-panel]:not([hidden]) > :not(.empty-state)", "[data-view-panel]:not([hidden]) .empty-state > *"];
+mountPondLayer({ element: $("[data-pond]"), getContentBoxes: () => contentBoxes(PREVIEW_BOXES) }).then((mounted) => { pond = mounted; }).catch(() => {});
 // The demo's timer: none under ?demo=static until a confirmed Cancel restarts the demo.
 let timer = STATIC ? 0 : setInterval(tick, TICK_MS);
 
@@ -178,17 +191,12 @@ function writeUrl() {
   for (const link of navigation?.element.querySelectorAll("[data-nav-id]") || []) link.href = query(link.dataset.navId);
 }
 
-/** The sentence the pond opens around: the empty state's, on the feedback view only. */
-function openSentence() {
-  return prefs.view === "feedback" ? emptySentence : null;
-}
-
 function showView(id, { write = true, focusTab = false } = {}) {
   prefs.view = VIEWS.includes(id) ? id : VIEWS[0];
   for (const panel of document.querySelectorAll("[data-view-panel]")) panel.hidden = panel.dataset.viewPanel !== prefs.view;
   switcher?.select(prefs.view, { focus: focusTab });
   navigation?.setCurrent(prefs.view);
-  setPondOpening($("[data-pond]"), pond, openSentence());
+  pond?.refresh();
   if (write) writeUrl();
 }
 
@@ -617,7 +625,6 @@ function buildFeedback(panel) {
     body: msg("media.empty.noneBody"),
     action: { label: msg("media.rescan"), kind: "primary", run: () => toast(msg("media.scanDone")) }
   });
-  emptySentence = empty.sentence;
   // The empty state first, with the pond open around its sentence (§6.10).
   // In the gallery it sits under its group label like any other specimen
   // (preview.css drops the page padding a real surface gives it).
