@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// FluxCatch design audit (design review §10.2). Loads the unpacked extension in
+// Havre design audit (design review §10.2). Loads the unpacked extension in
 // Chrome for Testing, opens every surface in Morning and Dusk, in English and
 // Chinese, at the §0 viewports and device-pixel-ratio 2, and measures:
 //   a  distinct text styles      ≤ 6 per screen, ≤ 8 app-wide
@@ -8,7 +8,7 @@
 //   d  text contrast             ≥ 4.5:1 (≥ 3:1 at ≥ 24 px or ≥ 18.66 px bold)
 //   e  clipped / covered         0
 //   f  locale leaks              0
-//   g  1px borders and rules     0
+//   g  1px borders and rules     0 (hr.section-rule between Settings sections exempt, v3.1 §3.2)
 //   h  colour literals outside the token files   0 (static scan)
 // plus: Display face used at most twice per screen outside the BrandMark,
 // filenames keep their extension when truncated, the pond layer meets v3 §3.1
@@ -128,7 +128,7 @@ export function historyFixture(now = Date.now()) {
       filename, size, bytes: size, total: size, media, sourceUrl, sourceTitle, pageTitle: sourceTitle,
       createdAt: endedAt - 120_000, startedAt: endedAt - 118_000, finishedAt: endedAt,
       sourceHost: new URL(sourceUrl).hostname, elapsedMs: 118_000,
-      path: status === "completed" ? `/Users/you/Downloads/FluxCatch/${filename}` : null,
+      path: status === "completed" ? `/Users/you/Downloads/Havre/${filename}` : null,
       message: message || null, error: status === "failed" ? message : null, retryable: status !== "completed"
     };
   };
@@ -173,7 +173,7 @@ const PAGE_CONFIG = {
   userContentSelector: "[data-user-content], [translate=no]",
   filenameSelector: "[data-filename], .job-title, .media-title",
   latinAllowlist: [
-    "FluxCatch", "Finder", "Chrome", "Mac", "macOS", "Windows", "Linux", "MP4", "MKV", "WebM", "MP3", "M4A", "AAC", "FLAC", "WAV", "OGG", "Opus",
+    "Havre", "Finder", "Chrome", "Mac", "macOS", "Windows", "Linux", "MP4", "MKV", "WebM", "MP3", "M4A", "AAC", "FLAC", "WAV", "OGG", "Opus",
     "HLS", "DASH", "MPD", "MOV", "TS", "HTTP", "KB", "MB", "GB", "TB", "Instagram", "YouTube", "Bilibili", "Vimeo", "Twitter", "X", "yt-dlp"
   ]
 };
@@ -490,11 +490,11 @@ const hexSeed = (seed) => `0x${(Number(seed) >>> 0).toString(16).toUpperCase()}`
 export function markdown(report) {
   const lines = [];
   const mark = (c) => (c ? (c.pass ? `${c.value}` : `**${c.value} ✗**`) : "–");
-  lines.push(`# FluxCatch design audit — ${report.label}`, "");
+  lines.push(`# Havre design audit — ${report.label}`, "");
   lines.push(`Run ${report.startedAt} · commit ${report.commit} · extension ${report.extensionDir} · Chrome for Testing · DPR 2 · pond seed ${hexSeed(report.pondSeed)}`, "");
   if (report.rejudgedAt) lines.push(`Verdicts recomputed ${report.rejudgedAt} with the acceptance in force then (captures and measurements unchanged).`, "");
   lines.push(`Pond (v3 §3.1): seed ${hexSeed(report.pondSeed)} stored before each run; margins of full pages with ≥ ${JUDGED_MARGIN_MIN} px gutters: chroma coverage ${POND_BAND.coverageMin}% to ${POND_BAND.coverageMax}% (ΔC > ${POND_BAND.chromaStep} in OKLCH against the capture without the layer), p95 |ΔL| ≤ ${POND_BAND.p95.morning} Morning / ${POND_BAND.p95.dusk} Dusk; no pond pixel under any text run on any screen. Cells read "coverage · p95", in parentheses where the screen is reported but not judged (popup, side panel, 960 wide). Header (v3 §3.6): at scroll 0 the top bar is the canvas (background alpha 0, no shadow, band at opacity 0, and the capture without the layer is canvas pixel for pixel outside the content box). Contrast (d) is measured against the composited background: the pond's pixels over the canvas.`, "");
-  lines.push("Budgets: a ≤ 6 text styles per screen (≤ 8 app-wide) · Display ≤ 2 per screen outside the BrandMark · b ≤ 3 left edges · c 0 nested containers · d 0 contrast failures · e 0 clipped/covered · f 0 locale leaks · g 0 rules · names 0 end-truncated filenames · h 0 colour literals.", "");
+  lines.push("Budgets: a ≤ 6 text styles per screen (≤ 8 app-wide) · Display ≤ 2 per screen outside the BrandMark · b ≤ 3 left edges · c 0 nested containers · d 0 contrast failures · e 0 clipped/covered · f 0 locale leaks · g 0 rules (hr.section-rule between Settings sections exempt) · names 0 end-truncated filenames · h 0 colour literals.", "");
   lines.push(`## Summary`, "");
   lines.push(`- Screens audited: ${report.screens.length}; screens meeting every budget: ${report.screens.filter((s) => Object.values(s.checks).every((c) => c.pass)).length}.`);
   const perLang = Object.entries(report.appWidePerLanguage || {}).map(([lang, n]) => `${lang} ${n}${n > BUDGETS.stylesAppWide ? " ✗" : ""}`).join(", ");
@@ -632,8 +632,8 @@ async function main() {
     for (const profileKind of ["history", "empty", "active"]) {
       const group = screens.filter((s) => (s.profile || "history") === profileKind);
       if (!group.length) continue;
-      const profile = fs.mkdtempSync(path.join(os.tmpdir(), `fluxcatch-audit-${lang}-${profileKind}-`));
-      const work = fs.mkdtempSync(path.join(os.tmpdir(), `fluxcatch-audit-work-`));
+      const profile = fs.mkdtempSync(path.join(os.tmpdir(), `havre-audit-${lang}-${profileKind}-`));
+      const work = fs.mkdtempSync(path.join(os.tmpdir(), `havre-audit-work-`));
       let extensionDir = EXTENSION_DIR;
       let expectedId = null;
       try {
@@ -641,18 +641,18 @@ async function main() {
           // A copy with the engine permission granted, plus a stand-in engine registered in this profile only.
           extensionDir = prepareActiveExtension(EXTENSION_DIR, path.join(work, "extension"));
           const manifest = JSON.parse(fs.readFileSync(path.join(extensionDir, "manifest.json"), "utf8"));
-          const launcher = writeFakeHostLauncher(path.join(work, "host"), { scenario: ACTIVE_SCENARIO, extensionDir, downloadDir: "/Users/you/Downloads/FluxCatch", logFile: path.join(work, "fake-host.log") });
+          const launcher = writeFakeHostLauncher(path.join(work, "host"), { scenario: ACTIVE_SCENARIO, extensionDir, downloadDir: "/Users/you/Downloads/Havre", logFile: path.join(work, "fake-host.log") });
           expectedId = extensionIdFromKey(manifest.key);
           registerFakeHost(profile, launcher, expectedId);
         }
         if (profileKind !== "empty") {
           // The worker reads history once at startup: seed, then start a fresh session.
           await session({ profile, extensionDir, lang: chromeLang, args: fixture?.chromeArgs || [] }, async (ctx) => {
-            await seed(ctx.browser, ctx.http, ctx.pageUrl, { "downloadHistory.v1": historyFixture(), "fluxcatch.uiLanguage.v1": lang, "fluxcatch.pondSeed.v1": POND_SEED });
+            await seed(ctx.browser, ctx.http, ctx.pageUrl, { "downloadHistory.v1": historyFixture(), "havre.uiLanguage.v1": lang, "havre.pondSeed.v1": POND_SEED });
           });
         }
         await session({ profile, extensionDir, lang: chromeLang, args: fixture?.chromeArgs || [] }, async (ctx) => {
-          if (profileKind === "empty") await seed(ctx.browser, ctx.http, ctx.pageUrl, { "fluxcatch.uiLanguage.v1": lang, "fluxcatch.pondSeed.v1": POND_SEED });
+          if (profileKind === "empty") await seed(ctx.browser, ctx.http, ctx.pageUrl, { "havre.uiLanguage.v1": lang, "havre.pondSeed.v1": POND_SEED });
           let control = null;
           let fixtureTab = null;
           let blankTab = null;

@@ -242,22 +242,29 @@ test("the toolbar popup keeps an intrinsic Chrome action size and scrolls only i
   assert.doesNotMatch(popupCss, /scrollbar-width:\s*none/, "the scroll affordance stays visible");
 });
 
-test("all exported PNG icons preserve transparency and the celadon lily pad", () => {
+test("all exported PNG icons preserve transparency, the indigo arrow and the pond water (design review v3.2)", () => {
   for (const size of [16, 32, 48, 128]) {
     const png = decodeRgbaPng(readFileSync(new URL(`../extension/icons/icon${size}.png`, import.meta.url)));
     assert.equal(png.width, size);
     assert.equal(png.height, size);
-    assert.ok(png.pixels.some((_, index) => index % 4 === 3 && png.pixels[index] === 0), `icon${size} has transparent pixels`);
+    // The disc is clipped: every corner is transparent, the disc itself opaque.
+    for (const [x, y] of [[0, 0], [size - 1, 0], [0, size - 1], [size - 1, size - 1]]) {
+      assert.equal(png.pixels[(y * size + x) * 4 + 3], 0, `icon${size} corner ${x},${y} is transparent`);
+    }
     assert.ok(png.pixels.some((_, index) => index % 4 === 3 && png.pixels[index] === 255), `icon${size} has opaque pixels`);
-    let hasLilyPad = false;
+    let hasArrow = false;
+    let hasWater = false;
     for (let index = 0; index < png.pixels.length; index += 4) {
       const [r, g, b, a] = png.pixels.slice(index, index + 4);
-      if (a > 150 && Math.abs(r - 143) < 20 && Math.abs(g - 184) < 20 && Math.abs(b - 163) < 20) {
-        hasLilyPad = true;
-        break;
-      }
+      if (a <= 150) continue;
+      // The arrow: the review's indigo (#2B2E4A), antialiased edges allowed.
+      if (r < 70 && g < 70 && b < 100 && b > r) hasArrow = true;
+      // The water: pond blue, from #9DBBD1 at the waterline to #4E7FA2 at the foot.
+      if (b > r + 30 && b > 120 && g > r) hasWater = true;
+      if (hasArrow && hasWater) break;
     }
-    assert.equal(hasLilyPad, true, `icon${size} retains the celadon lily pad`);
+    assert.equal(hasArrow, true, `icon${size} carries the indigo arrow`);
+    assert.equal(hasWater, true, `icon${size} carries the pond water`);
   }
 });
 

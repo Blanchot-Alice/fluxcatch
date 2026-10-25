@@ -31,7 +31,7 @@ test("the summary still counts completed records only", () => {
 test("the empty state uses the popup's sentence and says where the button is in both languages", () => {
   setUiLanguage("en");
   assert.equal(msg("downloads.empty.none"), msg("media.downloads.empty"), "one empty sentence for 'no downloads' across surfaces");
-  assert.equal(msg("downloads.empty.noneBody"), "On a video page, click the FluxCatch button in the toolbar, or paste a link above.");
+  assert.equal(msg("downloads.empty.noneBody"), "On a video page, click the Havre button in the toolbar, or paste a link above.");
   setUiLanguage("zh");
   assert.match(msg("downloads.empty.noneBody"), /工具栏/);
   setUiLanguage("en");

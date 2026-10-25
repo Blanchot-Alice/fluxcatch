@@ -6,7 +6,7 @@
 import { plural, formatCount } from "../locale.js";
 
 const en = {
-  "brand.name": "FluxCatch",
+  "brand.name": "Havre",
 
   "action.settings": "Settings",
   "action.download": "Download",
@@ -82,7 +82,7 @@ const en = {
 };
 
 const zh = {
-  "brand.name": "FluxCatch",
+  "brand.name": "Havre",
 
   "action.settings": "设置",
   "action.download": "下载",

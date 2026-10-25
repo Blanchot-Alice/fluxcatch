@@ -12,7 +12,7 @@ const manifest = JSON.parse(fs.readFileSync(new URL("../extension/manifest.json"
 function loadSiteExtract() {
   const context = vm.createContext({ URL });
   vm.runInContext(siteExtractSource, context, { filename: "site-extract.js" });
-  return context.__fluxcatchSiteExtract;
+  return context.__havreSiteExtract;
 }
 
 test("site payload extraction is top-frame and hostname gated", () => {
@@ -146,7 +146,7 @@ test("Instagram MAIN-world response capture emits only the current reel's best c
 
   assert.equal(messages.length, 1);
   assert.equal(messages[0].origin, "https://www.instagram.com");
-  assert.equal(messages[0].message.type, "FLUXCATCH_INSTAGRAM_MEDIA_V1");
+  assert.equal(messages[0].message.type, "HAVRE_INSTAGRAM_MEDIA_V1");
   assert.equal(messages[0].message.video.url, currentHigh);
   assert.notEqual(messages[0].message.video.url, recommendation);
   assert.doesNotMatch(messages[0].message.video.url, /bytestart|byteend/);
@@ -196,7 +196,7 @@ test("Instagram SPA observer is MAIN-world and crosses an origin-checked isolate
   assert.equal(entry?.all_frames, false);
   assert.deepEqual(entry?.matches, ["https://*.instagram.com/*"]);
   assert.match(contentSource, /event\.source !== window \|\| event\.origin !== location\.origin/);
-  assert.match(contentSource, /FLUXCATCH_INSTAGRAM_MEDIA_V1/);
+  assert.match(contentSource, /HAVRE_INSTAGRAM_MEDIA_V1/);
   assert.match(contentSource, /source: "instagram-api-response"/);
   assert.match(contentSource, /GET_CACHED_SITE_MEDIA/);
 });

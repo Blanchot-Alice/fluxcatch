@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify FluxCatch release archives after local build or CI artifact download."""
+"""Verify Havre release archives after local build or CI artifact download."""
 
 from __future__ import annotations
 
@@ -113,7 +113,7 @@ def verify_extension(path: pathlib.Path, expected_commit: str | None):
     version = manifest.get("version")
     if not valid_chrome_version(version):
         raise SystemExit("packaged extension has an invalid version")
-    if path.name != f"fluxcatch-extension-{version}.zip":
+    if path.name != f"havre-extension-{version}.zip":
         raise SystemExit("extension archive filename does not match manifest version")
     if manifest.get("default_locale") != "zh_CN":
         raise SystemExit("packaged extension default_locale is not zh_CN")
@@ -122,9 +122,9 @@ def verify_extension(path: pathlib.Path, expected_commit: str | None):
         if locale_path not in entries:
             raise SystemExit(f"packaged extension lacks locale: {locale}")
         messages = json.loads(entries[locale_path][1].decode("utf-8"))
-        if resolve_message(manifest.get("name"), messages, "name") != "FluxCatch":
+        if resolve_message(manifest.get("name"), messages, "name") != "Havre":
             raise SystemExit(f"packaged extension name differs in locale {locale}")
-        if resolve_message(manifest.get("action", {}).get("default_title"), messages, "action.default_title") != "FluxCatch":
+        if resolve_message(manifest.get("action", {}).get("default_title"), messages, "action.default_title") != "Havre":
             raise SystemExit(f"packaged extension action title differs in locale {locale}")
         description = resolve_message(manifest.get("description"), messages, "description")
         if not 1 <= len(description) <= 132:
@@ -156,7 +156,7 @@ def verify_extension(path: pathlib.Path, expected_commit: str | None):
             raise SystemExit("dirty extension tree digest does not cover the complete payload")
     elif not re.fullmatch(r"[0-9a-f]{12}", commit):
         raise SystemExit(f"unsupported packaged identity: {commit}")
-    with tempfile.TemporaryDirectory(prefix="fluxcatch-verify-extension-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="havre-verify-extension-") as temporary:
         current_source = stage_extension(pathlib.Path(temporary))
     if normalized != current_source:
         raise SystemExit("extension archive does not match the current canonical source tree")
@@ -191,14 +191,14 @@ def verify_native(path: pathlib.Path, expected_version: str, expected_timestamp)
         "install-macos.sh",
         "uninstall-macos.sh",
         "native-host/host.py",
-        "native-host/fluxcatch_network_policy.py",
+        "native-host/havre_network_policy.py",
         "native-host/install-macos.sh",
         "native-host/uninstall-macos.sh",
-        "native-host/io.github.blanchot_alice.fluxcatch.json.in",
+        "native-host/io.github.blanchot_alice.havre.json.in",
     }
     if set(entries) != required:
         raise SystemExit(f"native package entry set differs: {sorted(set(entries) ^ required)}")
-    if path.name != f"fluxcatch-native-host-macos-{expected_version}.zip":
+    if path.name != f"havre-native-host-macos-{expected_version}.zip":
         raise SystemExit("native archive filename does not match extension version")
     verify_markdown_links(entries)
     for name in {
@@ -226,7 +226,7 @@ def verify_native(path: pathlib.Path, expected_version: str, expected_timestamp)
     wrapper = entries["install-macos.sh"][1].decode("utf-8")
     if "sys.version_info < required" not in wrapper or "(3, 9)" not in wrapper:
         raise SystemExit("packaged installer lacks the Python 3.9+ preflight")
-    with tempfile.TemporaryDirectory(prefix="fluxcatch-verify-native-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="havre-verify-native-") as temporary:
         current_source, _ = stage_native(pathlib.Path(temporary))
     if entries != current_source:
         raise SystemExit("native archive does not match the current canonical source tree")
@@ -237,8 +237,8 @@ def main() -> int:
     arguments = parse_arguments()
     dist = arguments.dist.resolve()
     checksums = checksum_manifest(dist)
-    extension_name = one_archive(checksums, "fluxcatch-extension-")
-    native_name = one_archive(checksums, "fluxcatch-native-host-")
+    extension_name = one_archive(checksums, "havre-extension-")
+    native_name = one_archive(checksums, "havre-native-host-")
     extension, archive_timestamp = verify_extension(dist / extension_name, arguments.expected_commit)
     result = {
         "status": "valid",

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// FluxCatch stand-in local engine for screenshots and design audits.
+// Havre stand-in local engine for screenshots and design audits.
 //
 // Chrome starts this script as the native messaging host of a disposable
 // profile (see scripts/lib/active-profile.mjs). It speaks the same subset of
@@ -13,11 +13,11 @@
 // Nothing else is ever written to stdout.
 //
 // Environment (all optional):
-//   FLUXCATCH_FAKE_HOST_SCENARIO       JSON, see DEFAULT_SCENARIO below
-//   FLUXCATCH_FAKE_HOST_DOWNLOAD_DIR   absolute folder reported in pong
-//   FLUXCATCH_FAKE_HOST_EXTENSION_DIR  extension copy whose build identity
+//   HAVRE_FAKE_HOST_SCENARIO       JSON, see DEFAULT_SCENARIO below
+//   HAVRE_FAKE_HOST_DOWNLOAD_DIR   absolute folder reported in pong
+//   HAVRE_FAKE_HOST_EXTENSION_DIR  extension copy whose build identity
 //                                      the pong must match
-//   FLUXCATCH_FAKE_HOST_LOG            file to append a protocol log to
+//   HAVRE_FAKE_HOST_LOG            file to append a protocol log to
 //
 // Scenario keys: total (the job's size in bytes; 0 reports an unknown size),
 // hold (0..1, the fraction to ramp to and then keep), rampMs, intervalMs (tick
@@ -39,7 +39,7 @@ import { fileURLToPath } from "node:url";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_EXTENSION_DIR = path.resolve(HERE, "..", "..", "extension");
 
-export const DEFAULT_DOWNLOAD_DIR = "/Users/you/Downloads/FluxCatch";
+export const DEFAULT_DOWNLOAD_DIR = "/Users/you/Downloads/Havre";
 export const DEFAULT_SCENARIO = Object.freeze({
   total: 812_000_000,
   hold: 0.62,
@@ -141,7 +141,7 @@ function normalizePlan(input, base, label) {
   return plan;
 }
 
-/** Parses FLUXCATCH_FAKE_HOST_SCENARIO (a JSON string or an object). */
+/** Parses HAVRE_FAKE_HOST_SCENARIO (a JSON string or an object). */
 export function resolveScenario(raw) {
   let input = raw;
   if (typeof raw === "string") input = raw.trim() ? JSON.parse(raw) : {};
@@ -446,22 +446,22 @@ function createLogger(file) {
 }
 
 async function main() {
-  const log = createLogger(process.env.FLUXCATCH_FAKE_HOST_LOG);
+  const log = createLogger(process.env.HAVRE_FAKE_HOST_LOG);
   log(`start argv=${JSON.stringify(process.argv.slice(2))}`);
   let scenario;
   try {
-    scenario = resolveScenario(process.env.FLUXCATCH_FAKE_HOST_SCENARIO);
+    scenario = resolveScenario(process.env.HAVRE_FAKE_HOST_SCENARIO);
   } catch (error) {
     log(`invalid scenario: ${error.message}`);
     // stderr is safe here (Chrome only reads stdout) and ends up in Chrome's
     // own stderr, where a harness can find it.
-    process.stderr.write(`fluxcatch fake engine: invalid scenario: ${error.message}\n`);
+    process.stderr.write(`havre fake engine: invalid scenario: ${error.message}\n`);
     process.exitCode = 1;
     return;
   }
-  const extensionDir = process.env.FLUXCATCH_FAKE_HOST_EXTENSION_DIR || DEFAULT_EXTENSION_DIR;
+  const extensionDir = process.env.HAVRE_FAKE_HOST_EXTENSION_DIR || DEFAULT_EXTENSION_DIR;
   const identity = await engineIdentity(extensionDir, log);
-  const downloadDir = process.env.FLUXCATCH_FAKE_HOST_DOWNLOAD_DIR || DEFAULT_DOWNLOAD_DIR;
+  const downloadDir = process.env.HAVRE_FAKE_HOST_DOWNLOAD_DIR || DEFAULT_DOWNLOAD_DIR;
   log(`identity ${JSON.stringify(identity)} downloadDir=${downloadDir} scenario=${JSON.stringify(scenario)}`);
 
   let stdoutOpen = true;

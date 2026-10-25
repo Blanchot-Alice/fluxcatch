@@ -5,7 +5,8 @@
 // §3.7, §5 step 4). The e2e visual matrix of the "after" build follows.
 //
 //   node scripts/design-atlas.mjs --before run --after v3-step4 [--out tools/live/out/design-atlas/v3-step4]
-//        [--langs en,zh] [--e2e-before <dir of DPR-1 matrix captures>] [--chunk 6] [--html-only] [--keep-chunks]
+//        [--langs en,zh] [--surfaces settings,popup] [--no-e2e]
+//        [--e2e-before <dir of DPR-1 matrix captures>] [--chunk 6] [--html-only] [--keep-chunks]
 //
 // Reads tools/live/out/design-audit/<label>/report.json and shots/ of both
 // runs, writes atlas.html next to the images, then prints it to atlas.pdf with
@@ -29,6 +30,9 @@ const BEFORE = option("before", "run");
 const AFTER = option("after", null);
 if (!AFTER) { console.error("--after <audit label> is required"); process.exit(2); }
 const LANGS = option("langs", "en,zh").split(",").map((s) => s.trim()).filter(Boolean);
+// --surfaces limits the atlas to those sections; --no-e2e leaves the e2e matrix out.
+const SURFACES = option("surfaces", null) ? option("surfaces", null).split(",").map((s) => s.trim()).filter(Boolean) : null;
+const WITH_E2E = !flag("no-e2e");
 const OUT = path.resolve(option("out", path.join(ROOT, "tools", "live", "out", "design-atlas", AFTER)));
 const AUDITS = path.join(ROOT, "tools", "live", "out", "design-audit");
 const MATRIX = path.join(ROOT, "e2e", "artifacts", "phase-b-matrix");
@@ -111,7 +115,7 @@ function build(before, after) {
   let e2e = null;
   try { e2e = JSON.parse(fs.readFileSync(E2E_LATEST, "utf8")); } catch { e2e = null; }
   pages.push(`<section class="cover">
-    <h1>FluxCatch design atlas <span class="zh">FluxCatch 设计图集</span></h1>
+    <h1>Havre design atlas <span class="zh">Havre 设计图集</span></h1>
     ${line(`Every audited screen, Morning and Dusk, English and Chinese: the capture before the v3 work beside the capture after it. ${date}.`, `每一屏审计过的界面，清晨与黄昏、英文与中文：v3 改动前的截图与改动后的截图并排。${date}。`)}
     <dl>
       <dt>${line("Before", "改动前")}</dt><dd>${esc(identity(before))}</dd>
@@ -123,6 +127,7 @@ function build(before, after) {
     ${line("Captions name the run, the viewport, and the audit's verdict for that capture; the pond numbers are chroma coverage and p95 |ΔL| in the measured region (v3 §3.1).", "每张图的说明写明运行标签、视口和审计对这张截图的判定；池塘两个数字是度量区域里的色度覆盖率和 p95 |ΔL|（v3 第 3.1 节）。")}
   </section>`);
   for (const section of SECTIONS) {
+    if (SURFACES && !SURFACES.includes(section.surface)) continue;
     const ids = section.screens.filter(([id]) => after.report.screens.some((s) => s.id === id));
     if (!ids.length) continue;
     pages.push(`<section class="divider"><h2>${esc(section.en)} <span class="zh">${esc(section.zh)}</span></h2><ol>${ids.map(([, en, zh]) => `<li>${esc(en)} <span class="zh">${esc(zh)}</span></li>`).join("")}</ol></section>`);
@@ -140,7 +145,7 @@ function build(before, after) {
       }
     }
   }
-  const states = E2E_STATES.filter(([name]) => fs.existsSync(path.join(MATRIX, `${name}.png`)));
+  const states = WITH_E2E ? E2E_STATES.filter(([name]) => fs.existsSync(path.join(MATRIX, `${name}.png`))) : [];
   if (states.length) {
     const beforeNote = E2E_BEFORE
       ? line("The states the e2e suite captures. Before: the matrix of 2026-10-23 at device pixel ratio 1, recovered from that day's atlas. After: the matrix of this build at device pixel ratio 2.", "e2e 套件截下的状态。改动前：2026-10-23 的矩阵，设备像素比 1，从当天的图集里恢复。改动后：本构建的矩阵，设备像素比 2。")
@@ -184,8 +189,8 @@ function build(before, after) {
     .missing .none { border: 1px dashed #CDCCC8; padding: 24px; color: #5B5B60; }
     .folio { position: absolute; left: 64px; right: 64px; bottom: 28px; font-size: 13px; color: #5B5B60; display: flex; justify-content: space-between; }
   `;
-  const numbered = pages.map((page, index) => page.replace(/<\/section>$/, `<div class="folio"><span>FluxCatch design atlas · ${esc(date)} · before ${esc(before.label)} / after ${esc(after.label)}</span><span>${index + 1}</span></div></section>`));
-  return { css, pages: numbered, title: `FluxCatch design atlas ${esc(date)}` };
+  const numbered = pages.map((page, index) => page.replace(/<\/section>$/, `<div class="folio"><span>Havre design atlas · ${esc(date)} · before ${esc(before.label)} / after ${esc(after.label)}</span><span>${index + 1}</span></div></section>`));
+  return { css, pages: numbered, title: `Havre design atlas ${esc(date)}` };
 }
 
 const document = ({ css, title }, pages) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${title}</title><style>${css}</style></head><body>${pages.join("\n")}</body></html>`;

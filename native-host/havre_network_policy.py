@@ -277,7 +277,7 @@ class NetworkPolicy:
 
 
 _CURRENT_POLICY: contextvars.ContextVar[NetworkPolicy] = contextvars.ContextVar(
-    "fluxcatch_network_policy",
+    "havre_network_policy",
     default=NetworkPolicy(),
 )
 

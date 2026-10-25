@@ -34,7 +34,7 @@ const BACKGROUND = fs.readFileSync(path.join(EXTENSION_DIR, "background.js"), "u
 const JOB_STATUSES = new Set(["queued", "downloading", "remuxing", "pausing", "paused", "completed", "failed", "cancelled", "interrupted"]);
 
 function tempDir(t, label) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), `fluxcatch-${label}-`));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), `havre-${label}-`));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   return dir;
 }
@@ -131,10 +131,10 @@ test("extension id, host name and the prepared copy match the repository", (t) =
   const script = fs.readFileSync(launcher, "utf8");
   assert.match(script, /^#!\/bin\/sh\n/);
   assert.ok(script.includes(`exec '${process.execPath}' '${path.join(ROOT, "scripts", "lib", "fake-native-host.mjs")}' "$@"`));
-  assert.ok(script.includes(`export FLUXCATCH_FAKE_HOST_SCENARIO='{"hold":0.5}'`));
+  assert.ok(script.includes(`export HAVRE_FAKE_HOST_SCENARIO='{"hold":0.5}'`));
   assert.ok(fs.statSync(launcher).mode & 0o100, "the launcher is executable");
   const bare = fs.readFileSync(writeFakeHostLauncher(path.join(work, "bare")), "utf8");
-  for (const name of ["SCENARIO", "DOWNLOAD_DIR", "EXTENSION_DIR", "LOG"]) assert.match(bare, new RegExp(`^unset FLUXCATCH_FAKE_HOST_${name}$`, "m"));
+  for (const name of ["SCENARIO", "DOWNLOAD_DIR", "EXTENSION_DIR", "LOG"]) assert.match(bare, new RegExp(`^unset HAVRE_FAKE_HOST_${name}$`, "m"));
   assert.match(bare, /^unset NODE_OPTIONS$/m, "a --require in NODE_OPTIONS could print to stdout");
   assert.throws(() => writeFakeHostLauncher(work, { scenario: "{oops" }));
   // A scenario the engine would reject must fail here: inside Chrome the
@@ -143,14 +143,14 @@ test("extension id, host name and the prepared copy match the repository", (t) =
   assert.throws(() => writeFakeHostLauncher(path.join(work, "bad"), { scenario: { jobs: [{ segments: -1 }] } }), /scenario\.segments/);
   assert.ok(!fs.existsSync(path.join(work, "bad")), "nothing is written for a rejected scenario");
   assert.throws(() => writeFakeHostLauncher(work, { downloadDir: "Downloads" }), /absolute/);
-  assert.match(fs.readFileSync(writeFakeHostLauncher(path.join(work, "null-dir"), { downloadDir: null }), "utf8"), /^unset FLUXCATCH_FAKE_HOST_DOWNLOAD_DIR$/m, "null means the default folder");
+  assert.match(fs.readFileSync(writeFakeHostLauncher(path.join(work, "null-dir"), { downloadDir: null }), "utf8"), /^unset HAVRE_FAKE_HOST_DOWNLOAD_DIR$/m, "null means the default folder");
 
   const profile = path.join(work, "profile");
   const registration = registerFakeHost(profile, launcher, id);
   assert.equal(registration, path.join(profile, "NativeMessagingHosts", `${NATIVE_HOST_NAME}.json`));
   assert.deepEqual(JSON.parse(fs.readFileSync(registration, "utf8")), {
     name: NATIVE_HOST_NAME,
-    description: "FluxCatch stand-in engine (design audit)",
+    description: "Havre stand-in engine (design audit)",
     path: launcher,
     type: "stdio",
     allowed_origins: [`chrome-extension://${id}/`]
@@ -166,7 +166,7 @@ test("the stand-in engine answers with the shapes background.js consumes", async
     total: 40_000_000, hold: 0.5, rampMs: 400, intervalMs: 50, holdIntervalMs: 100, segments: 8, pauseDelayMs: 60,
     jobs: [{}, { segments: 0, hold: 0.25, speeds: [1_000_000, 2_000_000, 3_000_000] }]
   };
-  const launcher = writeFakeHostLauncher(work, { scenario, downloadDir: "/Users/you/Movies/FluxCatch", extensionDir: EXTENSION_DIR, logFile });
+  const launcher = writeFakeHostLauncher(work, { scenario, downloadDir: "/Users/you/Movies/Havre", extensionDir: EXTENSION_DIR, logFile });
   const host = spawnHost(t, launcher, id);
 
   // ping -> pong. background.js openNativePort() copies version,
@@ -176,7 +176,7 @@ test("the stand-in engine answers with the shapes background.js consumes", async
   const pong = await host.next((message) => message.type === "pong", "pong");
   assert.equal(pong.requestId, "ping-1", "resolveHostPing matches the requestId");
   assert.equal(pong.version, BUILD_IDENTITY.extensionVersion, "hostCompatibility compares with BUILD_IDENTITY, not manifest.json");
-  assert.equal(pong.downloadDir, "/Users/you/Movies/FluxCatch");
+  assert.equal(pong.downloadDir, "/Users/you/Movies/Havre");
   assert.equal(pong.ffmpeg, true);
   const status = { connected: true, ...pong };
   assert.equal(hostCompatibility(status).compatible, true);
@@ -193,9 +193,9 @@ test("the stand-in engine answers with the shapes background.js consumes", async
 
   // stat -> file_action_result with every path present (verifyHistoryFiles
   // reads items[].path and items[].exists).
-  host.send({ type: "stat", requestId: "stat-1", paths: ["/Users/you/Movies/FluxCatch/a.mp4", 7] });
+  host.send({ type: "stat", requestId: "stat-1", paths: ["/Users/you/Movies/Havre/a.mp4", 7] });
   const stat = await host.next((message) => message.requestId === "stat-1", "stat");
-  assert.deepEqual(stat, { type: "file_action_result", requestId: "stat-1", action: "stat", ok: true, items: [{ path: "/Users/you/Movies/FluxCatch/a.mp4", exists: true }, { path: "", exists: false }] });
+  assert.deepEqual(stat, { type: "file_action_result", requestId: "stat-1", action: "stat", ok: true, items: [{ path: "/Users/you/Movies/Havre/a.mp4", exists: true }, { path: "", exists: false }] });
 
   // download -> progress stream (handleNativeHostMessage reads jobId, status,
   // filename, progress, speed, bytes, total, message).
@@ -256,11 +256,11 @@ test("the stand-in engine answers with the shapes background.js consumes", async
   // File actions resolve resolveHostFileAction(); choose_folder must carry
   // downloadDir (chooseDownloadFolder throws without it).
   for (const type of ["open_folder", "reveal", "open", "trash", "future_action"]) {
-    host.send({ type, requestId: `${type}-1`, path: "/Users/you/Movies/FluxCatch/a.mp4" });
+    host.send({ type, requestId: `${type}-1`, path: "/Users/you/Movies/Havre/a.mp4" });
     assert.deepEqual(await host.next((message) => message.requestId === `${type}-1`, type), { type: "file_action_result", requestId: `${type}-1`, action: type, ok: true });
   }
   host.send({ type: "choose_folder", requestId: "folder-1" });
-  assert.equal((await host.next((message) => message.requestId === "folder-1", "choose_folder")).downloadDir, "/Users/you/Movies/FluxCatch");
+  assert.equal((await host.next((message) => message.requestId === "folder-1", "choose_folder")).downloadDir, "/Users/you/Movies/Havre");
   host.send({ type: "inspect_hls", requestId: "inspect-1", url: "https://example.com/a.m3u8" });
   assert.equal((await host.next((message) => message.requestId === "inspect-1", "inspect")).type, "inspect_hls_result");
   host.send({ type: "mystery" });
@@ -282,7 +282,7 @@ test("an inherited environment does not leak into the launcher", async (t) => {
   // to stdout would corrupt the message stream.
   const noisy = path.join(work, "noisy.cjs");
   fs.writeFileSync(noisy, "process.stdout.write('noise from a preload\\n');\n");
-  const env = { ...process.env, FLUXCATCH_FAKE_HOST_DOWNLOAD_DIR: "/Users/somebody/Elsewhere", NODE_OPTIONS: `--require ${noisy}` };
+  const env = { ...process.env, HAVRE_FAKE_HOST_DOWNLOAD_DIR: "/Users/somebody/Elsewhere", NODE_OPTIONS: `--require ${noisy}` };
   const id = extensionIdFromKey(MANIFEST.key);
 
   // Control: the same preload on a bare node really does break the framing.
@@ -312,7 +312,7 @@ function event() {
 test("the real worker runs DOWNLOAD_URL, pause, resume, cancel and file actions through the stand-in engine", async (t) => {
   const work = tempDir(t, "fake-host-worker");
   const extensionId = extensionIdFromKey(MANIFEST.key);
-  const downloadDir = "/Users/you/Downloads/FluxCatch";
+  const downloadDir = "/Users/you/Downloads/Havre";
   const launcher = writeFakeHostLauncher(work, {
     // jobs[1] is a direct file with host.py's empty message; jobs[2] sets
     // its own message.
@@ -332,8 +332,8 @@ test("the real worker runs DOWNLOAD_URL, pause, resume, cancel and file actions 
   };
   const session = {};
   const tabs = new Map([
-    [7, { id: 7, title: "FluxCatch 设置", url: `${origin}options/options.html` }],
-    [8, { id: 8, title: "FluxCatch 下载记录", url: `${origin}downloads/downloads.html` }]
+    [7, { id: 7, title: "Havre 设置", url: `${origin}options/options.html` }],
+    [8, { id: 8, title: "Havre 下载记录", url: `${origin}downloads/downloads.html` }]
   ]);
   const onMessage = event();
   const onConnect = event();
@@ -422,7 +422,7 @@ test("the real worker runs DOWNLOAD_URL, pause, resume, cancel and file actions 
   const jobNamed = async (filename) => (await jobsNow()).find((job) => job.filename === filename);
 
   // The Downloads page listens on this port for JOB_UPDATED.
-  const uiPort = { name: "fluxcatch-downloads", sender: senderFor(8), postMessage: (message) => uiMessages.push(message), onDisconnect: event(), onMessage: event() };
+  const uiPort = { name: "havre-downloads", sender: senderFor(8), postMessage: (message) => uiMessages.push(message), onDisconnect: event(), onMessage: event() };
   onConnect.listeners[0](uiPort);
 
   const ping = await send({ type: "PING_HOST" });
@@ -534,7 +534,7 @@ test("the real worker runs DOWNLOAD_URL, pause, resume, cancel and file actions 
   // not after the URL.
   const unnamed = await send({ type: "DOWNLOAD_URL", url: "https://example.com/talks/lecture-12-pharmacokinetics.mp4", options: {} }, 8);
   assert.equal(unnamed.ok, true, unnamed.error);
-  assert.equal(outgoing.filter((message) => message.type === "download").at(-1).filename, "FluxCatch 下载记录.mp4");
+  assert.equal(outgoing.filter((message) => message.type === "download").at(-1).filename, "Havre 下载记录.mp4");
   // A scenario message replaces the empty one.
   const unnamedJob = await poll(async () => {
     const job = (await jobsNow()).find((item) => item.jobId === unnamed.jobId);

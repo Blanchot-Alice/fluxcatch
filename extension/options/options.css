@@ -1,4 +1,4 @@
-/* FluxCatch Settings (design review §5, §6.13) on the v2 system.
+/* Havre Settings (design review §5, §6.13) on the v2 system.
    One 880 column, as on Downloads: the page title and the nav share the
    column edge; the setting rows start on the content column (nav 200 + gap 48)
    and end on the column's right edge. Three left edges in all: column edge,
@@ -90,8 +90,23 @@ a.btn {
   padding-top: 0;
 }
 
-.settings-section:nth-child(2) {
+.settings-section:nth-of-type(2) {
   margin-top: var(--settings-first-gap, 0px);
+}
+
+/* ---------- section rule (design review v3.1 §2.2): a mist line between top-level sections ----------
+   The one place in the product where a rule is allowed: a 1px element whose
+   background fades over the outer 10% at each end; no border, no shadow.
+   The rhythm is last row, 28px, the rule, 24px, the next section's title. */
+.section-rule {
+  height: 1px;
+  margin: 28px 0 24px;
+  border: 0;
+  background: linear-gradient(90deg, transparent 0, var(--rule-section) 10%, var(--rule-section) 90%, transparent 100%);
+}
+
+.section-rule + .settings-section {
+  padding-top: 0;
 }
 
 .section-title {

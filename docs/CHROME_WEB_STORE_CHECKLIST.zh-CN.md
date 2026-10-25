@@ -1,21 +1,21 @@
-# FluxCatch Chrome Web Store 发布检查单
+# Havre Chrome Web Store 发布检查单
 
-> 当前 `0.2.5` 是可测试的开发候选包，不是可直接提交的商店终稿。`npm run package` 当前只生成 GitHub/开发身份产物；正式 Item ID、公钥、独立 store build 和签名安装器尚待完成。Native Messaging 名称已固定为 `io.github.blanchot_alice.fluxcatch`。
+> 当前 `0.3.0` 是可测试的开发候选包，不是可直接提交的商店终稿。`npm run package` 当前只生成 GitHub/开发身份产物；正式 Item ID、公钥、独立 store build 和签名安装器尚待完成。Native Messaging 名称已固定为 `io.github.blanchot_alice.havre`。
 
 ## 1. 商店身份（发布阻塞）
 
-- [ ] 在 Chrome Web Store 后台创建 FluxCatch 草稿并记录正式 Item ID。
+- [ ] 在 Chrome Web Store 后台创建 Havre 草稿并记录正式 Item ID。
 - [ ] 获取与该条目对应的公开 key；签名私钥始终留在仓库之外。
 - [ ] 建立独立 store identity，由正式公开 key 生成 store manifest，并确认其推导 ID 等于 Item ID；不得覆盖开发 identity。
 - [ ] 用 Store identity 生成最终 ZIP，并让 CI 对解包后的该 ZIP 跑完整 Chrome E2E；不得把 GitHub/开发 identity 的包直接提交。
-- [x] Native Messaging host 使用开发者自有的反向域名 `io.github.blanchot_alice.fluxcatch`。
+- [x] Native Messaging host 使用开发者自有的反向域名 `io.github.blanchot_alice.havre`。
 - [ ] 同步修改以下影响面：
   - 生成后的 extension manifest 与 native manifest 的 `allowed_origins`；
   - native manifest 的文件名与 `name`；
   - macOS 安装/卸载脚本和已安装注册文件；
   - validator、native 测试、安装文档与打包清单；
   - 商店安装后的 `ping`/下载回归。
-- [ ] 再次安装最终 native host；确认扩展能连接 `io.github.blanchot_alice.fluxcatch`。
+- [ ] 再次安装最终 native host；确认扩展能连接 `io.github.blanchot_alice.havre`。
 
 Native Messaging 的 `allowed_origins` 不支持通配符。正式发布身份必须作为一个整体完成校验，避免扩展 ID、host 名和白名单只更新其中一部分。
 
@@ -34,8 +34,8 @@ Native Messaging 的 `allowed_origins` 不支持通配符。正式发布身份�
 
 ## 3. 功能与证据
 
-- [ ] 记录 0.2.5 最终 Node 测试数量、命令、日期与 commit；覆盖率门槛至少为 line/branch 65%、function 70%。
-- [ ] 记录 0.2.5 最终 Native-host 测试数量、命令、日期与 commit。
+- [ ] 记录 0.3.0 最终 Node 测试数量、命令、日期与 commit；覆盖率门槛至少为 line/branch 65%、function 70%。
+- [ ] 记录 0.3.0 最终 Native-host 测试数量、命令、日期与 commit。
 - [ ] 对最终 clean commit 记录 Validator `valid` 输出、commit 与 Actions run。
 - [ ] Chrome for Testing 对 **CI 生成并留存的 extension ZIP** 完成 Options、Popup、Side Panel、direct/HLS/DASH、3 个交互流与 13 个视觉状态断言。
 - [ ] 通用 observed direct 在未授权 Native 的新 profile 中停在权限预检，不创建任务且不写入浏览器文件；结果记录在同一个 packaged-E2E report。

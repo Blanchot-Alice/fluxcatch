@@ -1,4 +1,4 @@
-// FluxCatch toolbar popup (design review §6.14) on the v2 system. Top bar:
+// Havre toolbar popup (design review §6.14) on the v2 system. Top bar:
 // BrandMark S, "Download a link" and Settings. A Media | Downloads segmented
 // control with the type filter, which filters whichever list is shown. Media:
 // the list header (Rescan, and an overflow with Download all and the confirmed
@@ -60,7 +60,7 @@ const state = {
 // drops the port; the page reconnects and resyncs, and says "stopped
 // responding" only when the worker does not come back.
 connectWorkerPort({
-  name: "fluxcatch-popup",
+  name: "havre-popup",
   onMessage: (message) => onPortMessage(message),
   onReconnect: async () => {
     if (!jobList) return true;

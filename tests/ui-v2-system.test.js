@@ -250,7 +250,7 @@ test("connectWorkerPort reconnects with backoff, resyncs, keeps one live port, a
     return port;
   };
   let fail = false;
-  globalThis.chrome = { runtime: { connect: ({ name }) => { if (fail) throw new Error("Extension context invalidated."); assert.equal(name, "fluxcatch-downloads"); return makePort(); } } };
+  globalThis.chrome = { runtime: { connect: ({ name }) => { if (fail) throw new Error("Extension context invalidated."); assert.equal(name, "havre-downloads"); return makePort(); } } };
   mock.timers.enable({ apis: ["setTimeout"] });
   const flush = async () => { for (let i = 0; i < 5; i += 1) await Promise.resolve(); };
   try {
@@ -259,7 +259,7 @@ test("connectWorkerPort reconnects with backoff, resyncs, keeps one live port, a
     let resyncs = 0;
     let lost = 0;
     connectWorkerPort({
-      name: "fluxcatch-downloads",
+      name: "havre-downloads",
       onMessage: (message) => received.push(message.type),
       onReconnect: async () => { resyncs += 1; return answers.shift() ?? false; },
       onLost: () => { lost += 1; },
@@ -299,7 +299,7 @@ test("connectWorkerPort reconnects with backoff, resyncs, keeps one live port, a
 
     fail = true;
     let lostAtOnce = 0;
-    connectWorkerPort({ name: "fluxcatch-downloads", onMessage() {}, onLost: () => { lostAtOnce += 1; } });
+    connectWorkerPort({ name: "havre-downloads", onMessage() {}, onLost: () => { lostAtOnce += 1; } });
     assert.equal(lostAtOnce, 1, "a page that cannot connect at all says so straight away");
   } finally {
     mock.timers.reset();
@@ -309,7 +309,7 @@ test("connectWorkerPort reconnects with backoff, resyncs, keeps one live port, a
 
 test("the Downloads page keeps its port through connectWorkerPort and resyncs the history", () => {
   const source = stripComments(read("extension/downloads/downloads.js"));
-  assert.match(source, /connectWorkerPort\(\{\s*name: "fluxcatch-downloads"/);
+  assert.match(source, /connectWorkerPort\(\{\s*name: "havre-downloads"/);
   assert.match(source, /onReconnect: \(\) => \(initStarted \? refreshHistory\(\{ quiet: true, keepOnError: true \}\) : true\)/);
   assert.doesNotMatch(source, /chrome\.runtime\.connect\(/, "no one-shot port");
   assert.match(source, /options\/options\.html#local-engine/, "Set up opens Settings at the local engine");

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build deterministic FluxCatch extension and native-host release archives."""
+"""Build deterministic Havre extension and native-host release archives."""
 
 from __future__ import annotations
 
@@ -96,7 +96,7 @@ def staged_entries(stage: pathlib.Path, executable_paths: set[str]) -> dict[str,
 
 def canonical_tree_digest(entries: dict[str, tuple[int, bytes]]) -> str:
     digest = hashlib.sha256()
-    digest.update(b"fluxcatch-extension-tree-v1\0")
+    digest.update(b"havre-extension-tree-v1\0")
     for name in sorted(entries):
         mode, payload = entries[name]
         digest.update(name.encode("utf-8"))
@@ -212,8 +212,8 @@ def build_extension(
     archive_timestamp: tuple[int, int, int, int, int, int],
     dirty: bool,
 ) -> pathlib.Path:
-    output = DIST / f"fluxcatch-extension-{manifest['version']}.zip"
-    with tempfile.TemporaryDirectory(prefix="fluxcatch-extension-package-") as temporary:
+    output = DIST / f"havre-extension-{manifest['version']}.zip"
+    with tempfile.TemporaryDirectory(prefix="havre-extension-package-") as temporary:
         stage = pathlib.Path(temporary)
         source_entries = stage_extension(stage)
         source_tree_digest = canonical_tree_digest(source_entries)
@@ -263,11 +263,11 @@ def stage_native(stage: pathlib.Path) -> tuple[dict[str, tuple[int, bytes]], set
         "PRIVACY.md": "PRIVACY.md",
         "ACCEPTABLE_USE.md": "ACCEPTABLE_USE.md",
         "native-host/host.py": "native-host/host.py",
-        "native-host/fluxcatch_network_policy.py": "native-host/fluxcatch_network_policy.py",
+        "native-host/havre_network_policy.py": "native-host/havre_network_policy.py",
         "native-host/install-macos.sh": "native-host/install-macos.sh",
         "native-host/uninstall-macos.sh": "native-host/uninstall-macos.sh",
-        "native-host/io.github.blanchot_alice.fluxcatch.json.in":
-            "native-host/io.github.blanchot_alice.fluxcatch.json.in",
+        "native-host/io.github.blanchot_alice.havre.json.in":
+            "native-host/io.github.blanchot_alice.havre.json.in",
     }
     for source, target in files.items():
         copy_file(ROOT / source, stage, target)
@@ -298,8 +298,8 @@ def stage_native(stage: pathlib.Path) -> tuple[dict[str, tuple[int, bytes]], set
 def build_native(
     manifest: dict, archive_timestamp: tuple[int, int, int, int, int, int]
 ) -> pathlib.Path:
-    output = DIST / f"fluxcatch-native-host-macos-{manifest['version']}.zip"
-    with tempfile.TemporaryDirectory(prefix="fluxcatch-native-package-") as temporary:
+    output = DIST / f"havre-native-host-macos-{manifest['version']}.zip"
+    with tempfile.TemporaryDirectory(prefix="havre-native-package-") as temporary:
         stage = pathlib.Path(temporary)
         entries, _ = stage_native(stage)
         write_deterministic_zip(output, entries, archive_timestamp)
@@ -336,7 +336,7 @@ def main() -> int:
 
     # Compute the dirty identity from the complete canonical extension tree.
     if dirty:
-        with tempfile.TemporaryDirectory(prefix="fluxcatch-identity-") as temporary:
+        with tempfile.TemporaryDirectory(prefix="havre-identity-") as temporary:
             identity_entries = stage_extension(pathlib.Path(temporary))
             identity = f"{TREE_DIGEST_PREFIX}{canonical_tree_digest(identity_entries)}"
     else:

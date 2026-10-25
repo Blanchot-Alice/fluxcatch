@@ -20,7 +20,7 @@ const bare = (value) => text(value).replace(/…$/, "");
 const en = {
   // ---------- page ----------
   "settings.title": "Settings",
-  "settings.subtitle": "Choose where and how FluxCatch saves your downloads.",
+  "settings.subtitle": "Choose where and how Havre saves your downloads.",
   "settings.skip": "Skip to settings",
   "settings.navLabel": "Settings sections",
   "settings.loading": "Loading settings…",
@@ -36,7 +36,7 @@ const en = {
   "settings.section.notifications": "Notifications",
   "settings.section.general": "Language & shortcuts",
   "settings.section.lab": "Lab",
-  "settings.section.capabilities": "What FluxCatch can save",
+  "settings.section.capabilities": "What Havre can save",
 
   // ---------- shared values ----------
   "settings.yes": "Yes",
@@ -58,8 +58,8 @@ const en = {
   "settings.engine.noConnection": "Couldn’t connect",
   "settings.engine.updateNeeded": "Update needed",
   "settings.engine.descNotSetUp": "Chrome will ask you to allow it.",
-  "settings.engine.descFinishing": "FluxCatch tries again by itself.",
-  "settings.engine.descSelfHealing": "FluxCatch reloads to finish setup.",
+  "settings.engine.descFinishing": "Havre tries again by itself.",
+  "settings.engine.descSelfHealing": "Havre reloads to finish setup.",
   "settings.engine.descRetryIn": ({ seconds }) => `Trying again in ${formatCount(seconds)} ${plural(seconds, { one: "second", other: "seconds" })}…`,
   "settings.engine.descRestart": "Quit Chrome completely, open it again, then choose Retry.",
   "settings.engine.descNotInstalled": "Install it with the steps below, then choose Retry.",
@@ -95,7 +95,7 @@ const en = {
   "settings.location.changed": "Save location updated",
   "settings.location.resetDone": "Back to the default location",
   "settings.format.name": "Format",
-  "settings.format.description": "Used when FluxCatch joins or converts video.",
+  "settings.format.description": "Used when Havre joins or converts video.",
   "settings.filename.name": "File names",
   "settings.filename.description": "Choose a field to add it at the cursor.",
   "settings.filename.fields": "Fields you can add",
@@ -132,14 +132,14 @@ const en = {
   "settings.minimum.name": "Ignore files smaller than",
   "settings.minimum.description": ({ min, max }) => `${formatCount(min)} to ${formatCount(max)}. Skips icons and tiny clips.`,
   "settings.blocked.name": "Ignored sites",
-  "settings.blocked.description": "One site per line. FluxCatch won’t look for media there.",
+  "settings.blocked.description": "One site per line. Havre won’t look for media there.",
 
   // ---------- privacy & network ----------
   "settings.enrich.name": "Find more qualities on Bilibili",
   "settings.enrich.description": "Uses your Bilibili sign-in on that page. Nothing is uploaded.",
   "settings.lan.name": "Allow downloads from my home network",
   "settings.lan.description": "Router and system addresses stay blocked.",
-  "settings.lan.confirm": "Allow FluxCatch to download from devices on your home network?",
+  "settings.lan.confirm": "Allow Havre to download from devices on your home network?",
   "settings.lan.allow": "Allow",
   "settings.signin.name": "Sign-in info",
   "settings.signin.description": "Used only for the site it came from.",
@@ -156,7 +156,7 @@ const en = {
   "settings.language.auto": "Auto",
   "settings.language.endonym": "English",
   "settings.shortcuts.name": "Keyboard shortcuts",
-  "settings.shortcuts.popup": "Open FluxCatch",
+  "settings.shortcuts.popup": "Open Havre",
   "settings.shortcuts.downloads": "All downloads",
   "settings.shortcuts.workspace": "Open workspace",
   "settings.shortcuts.none": "No shortcuts set",
@@ -223,7 +223,7 @@ const en = {
   "settings.designer.export": "Export",
   "settings.designer.imported": "Imported into the preview. Save to apply.",
   "settings.designer.exported": "Exported.",
-  "settings.designer.invalidFile": "That isn’t a FluxCatch layout file.",
+  "settings.designer.invalidFile": "That isn’t a Havre layout file.",
   "settings.designer.readFailed": "Couldn’t read that file.",
   "settings.designer.previewHeading": "Preview"
 };
@@ -231,7 +231,7 @@ const en = {
 const zh = {
   // ---------- page ----------
   "settings.title": "设置",
-  "settings.subtitle": "设置 FluxCatch 保存下载的位置与方式。",
+  "settings.subtitle": "设置 Havre 保存下载的位置与方式。",
   "settings.skip": "跳到设置内容",
   "settings.navLabel": "设置分区",
   "settings.loading": "正在读取设置…",
@@ -247,7 +247,7 @@ const zh = {
   "settings.section.notifications": "通知",
   "settings.section.general": "语言与快捷键",
   "settings.section.lab": "实验室",
-  "settings.section.capabilities": "FluxCatch 能保存什么",
+  "settings.section.capabilities": "Havre 能保存什么",
 
   // ---------- shared values ----------
   "settings.yes": "支持",
@@ -269,8 +269,8 @@ const zh = {
   "settings.engine.noConnection": "连接失败",
   "settings.engine.updateNeeded": "需要更新",
   "settings.engine.descNotSetUp": "Chrome 会弹出授权请求，点“允许”即可。",
-  "settings.engine.descFinishing": "FluxCatch 会自动重试。",
-  "settings.engine.descSelfHealing": "FluxCatch 将重新载入以完成设置。",
+  "settings.engine.descFinishing": "Havre 会自动重试。",
+  "settings.engine.descSelfHealing": "Havre 将重新载入以完成设置。",
   "settings.engine.descRetryIn": ({ seconds }) => `${formatCount(seconds)} 秒后自动重试…`,
   "settings.engine.descRestart": "请完全退出 Chrome 再重新打开，然后点“重试”。",
   "settings.engine.descNotInstalled": "按下面的步骤装好后，点“重试”。",
@@ -278,7 +278,7 @@ const zh = {
   "settings.engine.descUpdate": "请重新安装本地引擎，让它与当前版本一致。",
   "settings.engine.removed": "权限已被撤销，点“设置”可重新允许。",
   "settings.install.summary": "安装方法",
-  "settings.install.source": "使用源码时，在“终端”中进入 FluxCatch 文件夹，运行：",
+  "settings.install.source": "使用源码时，在“终端”中进入 Havre 文件夹，运行：",
   "settings.install.zip": "使用压缩包时，解压后在“终端”中进入该文件夹，运行：",
   "settings.install.browsers": "安装器会自动为本机的 Chrome 完成登记。",
   "settings.install.done": "完成后回到本页，点“设置”或“重试”。",
@@ -343,14 +343,14 @@ const zh = {
   "settings.minimum.name": "忽略小于此大小的文件",
   "settings.minimum.description": ({ min, max }) => `${formatCount(min)} 到 ${formatCount(max)}，跳过图标和零碎的小片段。`,
   "settings.blocked.name": "忽略的网站",
-  "settings.blocked.description": "每行一个网站，FluxCatch 不会在这些网站上查找媒体。",
+  "settings.blocked.description": "每行一个网站，Havre 不会在这些网站上查找媒体。",
 
   // ---------- privacy & network ----------
   "settings.enrich.name": "在哔哩哔哩上查找更多清晰度",
   "settings.enrich.description": "使用你在该页面的哔哩哔哩登录状态，不上传任何内容。",
   "settings.lan.name": "允许从家庭网络下载",
   "settings.lan.description": "路由器与系统地址仍会被拦截。",
-  "settings.lan.confirm": "允许 FluxCatch 从家庭网络中的设备下载？",
+  "settings.lan.confirm": "允许 Havre 从家庭网络中的设备下载？",
   "settings.lan.allow": "允许",
   "settings.signin.name": "登录信息",
   "settings.signin.description": "只用于它所属的网站。",
@@ -367,7 +367,7 @@ const zh = {
   "settings.language.auto": "自动",
   "settings.language.endonym": "中文",
   "settings.shortcuts.name": "键盘快捷键",
-  "settings.shortcuts.popup": "打开 FluxCatch",
+  "settings.shortcuts.popup": "打开 Havre",
   "settings.shortcuts.downloads": "全部下载记录",
   "settings.shortcuts.workspace": "打开工作台",
   "settings.shortcuts.none": "尚未设置快捷键",
@@ -434,7 +434,7 @@ const zh = {
   "settings.designer.export": "导出",
   "settings.designer.imported": "已导入预览，保存后生效。",
   "settings.designer.exported": "已导出。",
-  "settings.designer.invalidFile": "这不是有效的 FluxCatch 配置文件。",
+  "settings.designer.invalidFile": "这不是有效的 Havre 配置文件。",
   "settings.designer.readFailed": "无法读取这个文件。",
   "settings.designer.previewHeading": "预览"
 };

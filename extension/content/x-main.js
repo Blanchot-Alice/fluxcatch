@@ -1,5 +1,5 @@
 /*
- * FluxCatch X response observer (MAIN world).
+ * Havre X response observer (MAIN world).
  *
  * X's SPA receives progressive MP4 renditions inside GraphQL JSON responses,
  * but normally plays only the HLS rendition.  The isolated content script
@@ -10,7 +10,7 @@
 (() => {
   "use strict";
 
-  const CHANNEL = "fluxcatch-x-progressive-v1";
+  const CHANNEL = "havre-x-progressive-v1";
   const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
   const MAX_VISITED_OBJECTS = 60_000;
   const MAX_RESULTS = 32;
@@ -235,7 +235,7 @@
 
   if (typeof window.fetch === "function") {
     const originalFetch = window.fetch;
-    window.fetch = function fluxCatchObservedFetch(...args) {
+    window.fetch = function havreObservedFetch(...args) {
       const statusId = statusIdForPath(location.pathname);
       const result = Reflect.apply(originalFetch, this, args);
       if (statusId) Promise.resolve(result).then((response) => inspectFetchResponse(response, statusId)).catch(() => {});
@@ -248,11 +248,11 @@
     const observed = new WeakSet();
     const originalOpen = window.XMLHttpRequest.prototype.open;
     const originalSend = window.XMLHttpRequest.prototype.send;
-    window.XMLHttpRequest.prototype.open = function fluxCatchObservedOpen(method, url, ...args) {
+    window.XMLHttpRequest.prototype.open = function havreObservedOpen(method, url, ...args) {
       metadata.set(this, { url: String(url || ""), statusId: statusIdForPath(location.pathname) });
       return Reflect.apply(originalOpen, this, [method, url, ...args]);
     };
-    window.XMLHttpRequest.prototype.send = function fluxCatchObservedSend(...args) {
+    window.XMLHttpRequest.prototype.send = function havreObservedSend(...args) {
       if (!observed.has(this)) {
         observed.add(this);
         this.addEventListener("loadend", () => {

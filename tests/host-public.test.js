@@ -5,7 +5,7 @@ import { hostEventForUi, hostStatusForUi } from "../extension/lib/host-public.js
 test("host status exposes capabilities without executable paths, probe errors or future fields", () => {
   const status = hostStatusForUi({
     connected: true,
-    version: "0.2.5",
+    version: "0.3.0",
     protocolVersion: 1,
     capabilityProfileVersion: 1,
     ffmpeg: true,
@@ -40,8 +40,8 @@ test("host status exposes capabilities without executable paths, probe errors or
   assert.equal(hostStatusForUi({ connected: true, capabilities: { pause: "resume-v1" } }).capabilities.pause, "resume-v1");
   assert.equal(hostStatusForUi({ connected: true, capabilities: { pause: "/usr/bin/pause" } }).capabilities.pause, null);
   assert.equal(status.downloadDir, null, "a host without a reported folder exposes no path");
-  assert.equal(hostStatusForUi({ connected: true, downloadDir: "/Users/private/Downloads/FluxCatch" }).downloadDir, "/Users/private/Downloads/FluxCatch");
-  assert.equal(hostStatusForUi({ connected: true, downloadDir: "relative/FluxCatch" }).downloadDir, null, "only absolute folders are shown");
+  assert.equal(hostStatusForUi({ connected: true, downloadDir: "/Users/private/Downloads/Havre" }).downloadDir, "/Users/private/Downloads/Havre");
+  assert.equal(hostStatusForUi({ connected: true, downloadDir: "relative/Havre" }).downloadDir, null, "only absolute folders are shown");
   assert.equal(hostStatusForUi({ connected: true, capabilities: { fileActions: "finder-v1" } }).capabilities.fileActions, "finder-v1");
   assert.equal(hostStatusForUi({ connected: true, capabilities: { fileActions: "/usr/bin/open" } }).capabilities.fileActions, null);
   assert.deepEqual(Object.keys(status.capabilities.ffmpeg).sort(), ["available", "demuxers", "encoders", "networkInput", "version"].sort());
@@ -77,7 +77,7 @@ test("host status does not turn an unknown network gate into explicit permission
 });
 
 test("host compatibility requires exact extension, protocol and profile versions", () => {
-  const base = { connected: true, version: "0.2.5", protocolVersion: 1, capabilityProfileVersion: 1 };
+  const base = { connected: true, version: "0.3.0", protocolVersion: 1, capabilityProfileVersion: 1 };
   assert.equal(hostStatusForUi(base).compatible, true);
   assert.equal(hostStatusForUi({ ...base, version: "0.2.3" }).versionCompatible, false);
   assert.equal(hostStatusForUi({ ...base, protocolVersion: 2 }).protocolCompatible, false);

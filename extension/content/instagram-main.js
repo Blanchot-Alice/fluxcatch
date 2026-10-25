@@ -1,10 +1,10 @@
 (() => {
   "use strict";
 
-  if (window !== window.top || globalThis.__fluxcatchInstagramMainInstalled) return;
+  if (window !== window.top || globalThis.__havreInstagramMainInstalled) return;
   const pageHost = String(location.hostname || "").toLowerCase().replace(/\.$/, "");
   if (!/(?:^|\.)instagram\.com$/.test(pageHost)) return;
-  globalThis.__fluxcatchInstagramMainInstalled = true;
+  globalThis.__havreInstagramMainInstalled = true;
 
   const MAX_RESPONSE_BYTES = 4_000_000;
   const MAX_VISITED_NODES = 50_000;
@@ -110,7 +110,7 @@
       for (const [entry, at] of emitted) if (now - at > 60_000) emitted.delete(entry);
     }
     window.postMessage({
-      type: "FLUXCATCH_INSTAGRAM_MEDIA_V1",
+      type: "HAVRE_INSTAGRAM_MEDIA_V1",
       video: { ...video, contentType: "video/mp4" }
     }, location.origin);
   }
@@ -164,7 +164,7 @@
 
   const originalFetch = window.fetch;
   if (typeof originalFetch === "function") {
-    window.fetch = function fluxcatchObservedFetch(...args) {
+    window.fetch = function havreObservedFetch(...args) {
       const result = Reflect.apply(originalFetch, this, args);
       Promise.resolve(result).then((response) => void inspectFetchResponse(response)).catch(() => {});
       return result;
@@ -192,7 +192,7 @@
   const xhrPrototype = window.XMLHttpRequest?.prototype;
   const originalSend = xhrPrototype?.send;
   if (typeof originalSend === "function") {
-    xhrPrototype.send = function fluxcatchObservedSend(...args) {
+    xhrPrototype.send = function havreObservedSend(...args) {
       const requestedCode = currentPageCode();
       this.addEventListener("load", () => {
         let inspectionStarted = false;

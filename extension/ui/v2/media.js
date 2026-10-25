@@ -1,4 +1,4 @@
-// FluxCatch v2: what the toolbar popup and the side-panel workspace share
+// Havre v2: what the toolbar popup and the side-panel workspace share
 // (design review P2: one skeleton, the same components). Detected media rows,
 // the per-item download dialog (§6.12), the local-engine status line (§7: one
 // line with "Set up", never an explanation), the downloads list built from

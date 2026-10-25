@@ -69,14 +69,14 @@ const POPUP_MIN_HEIGHT = 440;
 const ARTIFACT_PATH = path.join(HERE, "artifacts", "latest.json");
 const SCREENSHOT_DIR = path.join(HERE, "artifacts", "screenshots");
 const PHASE_B_ARTIFACT_DIR = path.join(HERE, "artifacts", "phase-b-matrix");
-const FIXTURE_RESULT_KEY = "__FLUXCATCH_E2E_RESULT__";
+const FIXTURE_RESULT_KEY = "__HAVRE_E2E_RESULT__";
 const POLL_INTERVAL_MS = 100;
 const START_TIMEOUT_MS = 20_000;
 const CASE_TIMEOUT_MS = 15_000;
 const BADGE_APPEAR_TIMEOUT_MS = 3_000;
 const HLS_DISPLAY_TITLE = "Volume of Distribution Interactive | Pharmacokinetics - Part 1";
 const HLS_INTERNAL_ASSET_TOKEN = "an_PHRM_PK1_2CM_v04_comp_v01_wm_cr_cc03";
-const UI_DIRECT_FILENAME = "FluxCatch arrayBuffer fixture.mp4";
+const UI_DIRECT_FILENAME = "Havre arrayBuffer fixture.mp4";
 const HLS_RENDITIONS = [
   { slug: "q360-13b7ae81273bc61a0691de6bfa56425760148d79", bandwidth: 450000, width: 640, height: 360, codecs: "avc1.42E01E,mp4a.40.2" },
   { slug: "q480-8ba84504ee32e31dd44f9dd3462a250ae9438a37", bandwidth: 800000, width: 854, height: 480, codecs: "avc1.4D401E,mp4a.40.2" },
@@ -130,10 +130,10 @@ const defaultMessages = JSON.parse(fs.readFileSync(
 const EXPECTED_MANIFEST_NAME = resolveManifestMessage(manifest.name, defaultMessages);
 const EXPECTED_EXTENSION_ID = extensionIdFromManifestKey(manifest.key);
 const E2E_SOURCE_COMMIT = sourceCommit(ROOT);
-const EXPECTED_RUNTIME_COMMIT = process.env.FLUXCATCH_EXPECTED_BUILD_COMMIT || "development";
+const EXPECTED_RUNTIME_COMMIT = process.env.HAVRE_EXPECTED_BUILD_COMMIT || "development";
 const PACKAGED_EXTENSION_RUN = EXPECTED_RUNTIME_COMMIT !== "development";
-const E2E_WINDOW_SIZE = parseE2eWindowSize(process.env.FLUXCATCH_E2E_WINDOW_SIZE || "1280x900");
-const EXPECT_RESTRICTED_ACTION_POPUP = process.env.FLUXCATCH_EXPECT_RESTRICTED_POPUP === "1";
+const E2E_WINDOW_SIZE = parseE2eWindowSize(process.env.HAVRE_E2E_WINDOW_SIZE || "1280x900");
+const EXPECT_RESTRICTED_ACTION_POPUP = process.env.HAVRE_EXPECT_RESTRICTED_POPUP === "1";
 const runId = `${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
 const report = {
   schemaVersion: 4,
@@ -145,7 +145,7 @@ const report = {
     expectedId: EXPECTED_EXTENSION_ID,
     expectedManifest: { name: EXPECTED_MANIFEST_NAME, version: manifest.version },
     extensionDir: path.relative(ROOT, EXTENSION_DIR) || ".",
-    packaged: Boolean(process.env.FLUXCATCH_EXTENSION_DIR)
+    packaged: Boolean(process.env.HAVRE_EXTENSION_DIR)
   },
   cases: [],
   ui: [],
@@ -177,7 +177,7 @@ try {
   report.server = { origin: serverOrigin };
 
   const chromePath = discoverChromeForTesting();
-  chromeProfile = fs.mkdtempSync(path.join(os.tmpdir(), "fluxcatch-e2e-"));
+  chromeProfile = fs.mkdtempSync(path.join(os.tmpdir(), "havre-e2e-"));
   report.chrome.executable = path.basename(chromePath);
   report.chrome.profile = chromeProfile;
 
@@ -194,7 +194,7 @@ try {
     launched.httpOrigin,
     (target) => target.type === "service_worker" && target.url === `chrome-extension://${EXPECTED_EXTENSION_ID}/background.js`,
     START_TIMEOUT_MS,
-    "FluxCatch service worker"
+    "Havre service worker"
   );
   const discoveredExtensionId = extensionIdFromUrl(workerTarget.url);
   assert.equal(discoveredExtensionId, EXPECTED_EXTENSION_ID, "loaded extension ID mismatch");
@@ -554,6 +554,10 @@ async function runCase(definition, devtoolsOrigin) {
     // GET_TAB_MEDIA call. Reading extension UI state must not be what causes
     // the toolbar badge to appear.
     const badgeSamples = [];
+    // background.js updateBadge writes the badge text first and the title a
+    // moment later, so the badge count can read "1" while the title is still
+    // the previous one; wait for both within the same budget.
+    const expectedFoundTitle = workerCopy["worker.action.found"]({ count: 1 });
     let badgeBeforeRead;
     try {
       badgeBeforeRead = await poll(async () => {
@@ -564,9 +568,9 @@ async function runCase(definition, devtoolsOrigin) {
           ]);
           return { text, title };
         }`);
-        badgeSamples.push({ at: Date.now() - startedAt, text: value?.text ?? null });
-        return value?.text === "1" ? value : null;
-      }, BADGE_APPEAR_TIMEOUT_MS, `${definition.name} automatic toolbar badge before media UI read`);
+        badgeSamples.push({ at: Date.now() - startedAt, text: value?.text ?? null, title: value?.title ?? null });
+        return value?.text === "1" && value?.title === expectedFoundTitle ? value : null;
+      }, BADGE_APPEAR_TIMEOUT_MS, `${definition.name} automatic toolbar badge and title before media UI read`);
     } catch (error) {
       // Keep what the worker had when the budget ran out: the badge values
       // seen and the tab's candidate list, so a slow machine and a missing
@@ -580,7 +584,7 @@ async function runCase(definition, devtoolsOrigin) {
     }
     assert.equal(badgeBeforeRead.text, "1", `${definition.name} toolbar badge count mismatch`);
     // background.js updateBadge: workerText("worker.action.found", { count }) from ui/v2/messages/worker.js.
-    assert.equal(badgeBeforeRead.title, workerCopy["worker.action.found"]({ count: 1 }),
+    assert.equal(badgeBeforeRead.title, expectedFoundTitle,
       `${definition.name} toolbar title did not describe the detected media`);
     item.badgeBeforeRead = badgeBeforeRead;
 
@@ -678,7 +682,7 @@ async function runCase(definition, devtoolsOrigin) {
         "HLS master must expose one opaque selector per rendition");
       assert.equal(new Set(actualVariants).size, definition.expectedVariants.length,
         "HLS variants unexpectedly share an opaque selector");
-      assert.ok(actualVariants.every((value) => /^https:\/\/fluxcatch\.invalid\/manifest\/[a-f0-9-]{36}\/[a-f0-9-]{36}$/.test(value)),
+      assert.ok(actualVariants.every((value) => /^https:\/\/havre\.invalid\/manifest\/[a-f0-9-]{36}\/[a-f0-9-]{36}$/.test(value)),
         "HLS variants exposed a media URL instead of an opaque selector");
       assert.doesNotMatch(JSON.stringify(actualVariants), /run=|token=|signature=|\/deliveries\//i,
         "HLS variant selectors leaked internal media URLs or queries");
@@ -720,7 +724,7 @@ async function auditSiteAdapterCase(definition, tabId, candidate, expectedPublic
     }, CASE_TIMEOUT_MS, `${definition.name} adapter ladder`);
     assert.equal(ladder.card.site, definition.site, "the card names its adapter");
     assert.equal(ladder.card.title, definition.expectedTitle, "the card is named after the page's readable title");
-    assert.ok(ladder.card.variants.every((variant) => /^https:\/\/fluxcatch\.invalid\/manifest\/[a-f0-9-]{36}\/[a-f0-9-]{36}$/.test(variant.url)),
+    assert.ok(ladder.card.variants.every((variant) => /^https:\/\/havre\.invalid\/manifest\/[a-f0-9-]{36}\/[a-f0-9-]{36}$/.test(variant.url)),
       "ladder qualities are opaque selectors");
     item.ladder = { visibleCandidates: ladder.visible.length, heights: definition.expectedLadder, site: ladder.card.site };
   } else if (definition.expectedTitle) {
@@ -945,7 +949,7 @@ function youtubeFixturePage() {
 // Settings sections in page order (options/options.js SECTIONS); ids are the
 // nav anchors and deep links, and "local-engine" is where every Set up goes
 // (ui/v2/media.js ENGINE_SETUP_PATH). Every heading is a section the nav
-// lists: "What FluxCatch can save" (#capabilities) is its own section after
+// lists: "What Havre can save" (#capabilities) is its own section after
 // the local engine's explanation, ten in all.
 const SETTINGS_SECTIONS = Object.freeze([
   ["status", "settings.section.status"],
@@ -1000,7 +1004,7 @@ const ENGINE_FIXTURES = Object.freeze({
   ready: {
     connected: true,
     compatible: true,
-    version: "0.2.5",
+    version: "0.3.0",
     protocolVersion: 1,
     capabilityProfileVersion: 1,
     ffmpeg: true,
@@ -1371,7 +1375,7 @@ async function auditPhaseBOptionsMatrix(devtoolsOrigin) {
     // aria-invalid and editable with the typed value, nothing is stored.
     const failureHook = await evaluate(client, `(async () => {
       const original = chrome.runtime.sendMessage.bind(chrome.runtime);
-      globalThis.__fluxcatchOriginalSendMessage = original;
+      globalThis.__havreOriginalSendMessage = original;
       try {
         const wrapped = (...args) => args[0]?.type === "SAVE_SETTINGS"
           ? Promise.resolve({ ok: false, error: "确定性保存失败" })
@@ -1426,7 +1430,7 @@ async function auditPhaseBOptionsMatrix(devtoolsOrigin) {
     // Restore messaging, then put the stored value back so nothing is left
     // unsaved (options.js would otherwise hold the reload with beforeunload).
     await evaluate(client, `(() => {
-      Object.defineProperty(chrome.runtime, "sendMessage", { configurable: true, writable: true, value: globalThis.__fluxcatchOriginalSendMessage });
+      Object.defineProperty(chrome.runtime, "sendMessage", { configurable: true, writable: true, value: globalThis.__havreOriginalSendMessage });
       const input = document.querySelector("#field-minimumKB");
       input.value = ${JSON.stringify(String(storedMinimumKB))};
       input.dispatchEvent(new Event("input", { bubbles: true }));
@@ -1731,7 +1735,7 @@ async function auditPhaseBOptionsMatrix(devtoolsOrigin) {
 async function installEngineFixtureStubs(client) {
   const installed = await evaluate(client, `(() => {
     const permissions = chrome.permissions;
-    globalThis.__fluxcatchEngineOriginals = {
+    globalThis.__havreEngineOriginals = {
       send: chrome.runtime.sendMessage,
       contains: permissions.contains,
       request: permissions.request
@@ -1741,13 +1745,13 @@ async function installEngineFixtureStubs(client) {
       contains: permissions.contains.bind(permissions),
       request: permissions.request.bind(permissions)
     };
-    globalThis.__fluxcatchHostFixture = null;
+    globalThis.__havreHostFixture = null;
     const nativeOnly = (query) => Array.isArray(query?.permissions) && query.permissions.length > 0
       && query.permissions.every((name) => name === "nativeMessaging");
     const send = (...args) => {
       const type = args[0]?.type;
-      if (type === "PING_HOST") return Promise.resolve({ ok: true, hostStatus: globalThis.__fluxcatchHostFixture });
-      if (type === "RECOVER_NATIVE_API") return Promise.resolve({ ok: true, hostStatus: globalThis.__fluxcatchHostFixture, retryAfterMs: 0 });
+      if (type === "PING_HOST") return Promise.resolve({ ok: true, hostStatus: globalThis.__havreHostFixture });
+      if (type === "RECOVER_NATIVE_API") return Promise.resolve({ ok: true, hostStatus: globalThis.__havreHostFixture, retryAfterMs: 0 });
       return originals.send(...args);
     };
     const contains = (query) => (nativeOnly(query) ? Promise.resolve(true) : originals.contains(query));
@@ -1762,12 +1766,12 @@ async function installEngineFixtureStubs(client) {
 
 async function removeEngineFixtureStubs(client) {
   await evaluate(client, `(() => {
-    const originals = globalThis.__fluxcatchEngineOriginals;
+    const originals = globalThis.__havreEngineOriginals;
     if (!originals) return false;
     Object.defineProperty(chrome.runtime, "sendMessage", { configurable: true, writable: true, value: originals.send });
     Object.defineProperty(chrome.permissions, "contains", { configurable: true, writable: true, value: originals.contains });
     Object.defineProperty(chrome.permissions, "request", { configurable: true, writable: true, value: originals.request });
-    delete globalThis.__fluxcatchEngineOriginals;
+    delete globalThis.__havreEngineOriginals;
     return true;
   })()`);
 }
@@ -1776,7 +1780,7 @@ async function removeEngineFixtureStubs(client) {
  *  (Set up, then Retry) and read the rendered rows once they show `expected`. */
 async function renderEngineFixture(client, host, expected) {
   await evaluate(client, `(() => {
-    globalThis.__fluxcatchHostFixture = ${JSON.stringify(host)};
+    globalThis.__havreHostFixture = ${JSON.stringify(host)};
     document.querySelector("#engine-action").click();
     return true;
   })()`);
@@ -2469,7 +2473,7 @@ async function auditHlsDownloadDialog(tabId, expectedUrl, expectedTitle, expecte
       assert.ok(result.qualityOptions.some((option) => new RegExp(`^${rendition.height}p(?:\\s·\\s|$)`).test(option.text)),
         `${rendition.height}p rendition is missing`);
     }
-    assert.ok(result.qualityOptions.slice(1).every((option) => /^https:\/\/fluxcatch\.invalid\/manifest\/[a-f0-9-]{36}\/[a-f0-9-]{36}$/.test(option.value)),
+    assert.ok(result.qualityOptions.slice(1).every((option) => /^https:\/\/havre\.invalid\/manifest\/[a-f0-9-]{36}\/[a-f0-9-]{36}$/.test(option.value)),
       "quality choices carry media URLs instead of opaque selectors");
     // v1 showed a helper note about segments; v2 has no helper paragraphs
     // (ui/v2/README.md rules) and its one dialog line states the engine
@@ -2780,7 +2784,7 @@ async function auditExtensionPage(name, client, width, height, expression, close
     item.result = result;
     await delay(250);
     const screenshot = await client.send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false }, CASE_TIMEOUT_MS * 2);
-    assert.equal(result?.title?.includes("FluxCatch"), true, `${name} title does not contain FluxCatch`);
+    assert.equal(result?.title?.includes("Havre"), true, `${name} title does not contain Havre`);
     assert.ok(Number(result?.overflow) <= 1, `${name} has horizontal overflow: ${result?.overflow}px`);
     if (name === "options") {
       assert.equal(result.title, `${T("settings.title")} · ${T("brand.name")}`);
@@ -3504,7 +3508,7 @@ function fixturePage(resourcePath, reader, posterPath) {
   const resultKey = JSON.stringify(FIXTURE_RESULT_KEY);
   return `<!doctype html>
 <meta charset="utf-8">
-<title>FluxCatch ${reader} fixture</title>
+<title>Havre ${reader} fixture</title>
 <meta property="og:image" content=${JSON.stringify(posterPath)}>
 <video poster=${JSON.stringify(posterPath)} hidden></video>
 <script>
@@ -3764,7 +3768,7 @@ function resolveManifestMessage(value, messages) {
 
 function parseE2eWindowSize(value) {
   const match = String(value || "").match(/^(\d{3,4})[x,](\d{3,4})$/i);
-  assert.ok(match, `FLUXCATCH_E2E_WINDOW_SIZE must look like 1280x900, got ${JSON.stringify(value)}`);
+  assert.ok(match, `HAVRE_E2E_WINDOW_SIZE must look like 1280x900, got ${JSON.stringify(value)}`);
   const width = Number(match[1]);
   const height = Number(match[2]);
   assert.ok(width >= 800 && height >= 400, "E2E Chrome window is too small for stable extension setup");

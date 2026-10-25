@@ -1,6 +1,6 @@
 {
-  "name": "fluxcatch",
-  "version": "0.2.5",
+  "name": "havre",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "scripts": {

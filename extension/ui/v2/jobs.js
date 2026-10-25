@@ -1,4 +1,4 @@
-// FluxCatch v2: job logic shared by the Downloads page, the popup and the side
+// Havre v2: job logic shared by the Downloads page, the popup and the side
 // panel (no DOM). Ordering, terminal states, the speed-sample ring and the
 // finished-file actions.
 import { callWorker } from "./runtime.js";

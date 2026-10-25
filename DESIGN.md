@@ -1,12 +1,12 @@
-# FluxCatch design
+# Havre design
 
-FluxCatch's interface is the v2 design system: Monet's structure translated
+Havre's interface is the v2 design system: Monet's structure translated
 into one continuous surface per view, in two hours of light (Morning and Dusk).
 This file is a short orientation. The rules come from the design review
-(`fluxcatch-design-review.md`, "Design Review and Corrective Spec (v1 → v2)",
+(`havre-design-review.md`, "Design Review and Corrective Spec (v1 → v2)",
 which wins over the original brief). Both reviews and the original brief are
-in [`docs/design-review/`](docs/design-review/): `fluxcatch-design-review.md`
-(v1 to v2), `fluxcatch-design-review-v3.md` (v2 to v3, which supersedes §6.7,
+in [`docs/design-review/`](docs/design-review/): `havre-design-review.md`
+(v1 to v2), `havre-design-review-v3.md` (v2 to v3, which supersedes §6.7,
 §6.10 and part of §5 of the first, with its rendered pond reference under
 `pond-reference/`) and `monet-download-manager-design-brief.md`. What they
 decided is recorded here, in
@@ -29,7 +29,7 @@ and the per-step notes).
   implementation), `options/` (Settings), `designer/` (the UI editor behind
   Settings → Developer) and `preview/` (the component gallery,
   `preview/preview.html?view=type|text|controls|rows|feedback|overlays`).
-- `extension/icons/`: `fluxcatch-mark.svg` (the mark) and `fluxcatch-mark-16.svg`
+- `extension/icons/`: `havre-mark.svg` (the mark) and `havre-mark-16.svg`
   (the pad and the blossom only, for 16 px); `scripts/build-icons.mjs` renders
   the PNGs from them with Chrome for Testing.
 - `docs/design-review/`: the approved rename table and the per-step notes.
@@ -53,7 +53,9 @@ and the per-step notes).
    (`pond.js`) appears in empty space only, and text keeps its value contrast.
 5. Decentred, left-anchored composition; empty states sit in the upper third
    on the text column.
-6. Soft separation: spacing and value steps, never 1px rules. The top bar
+6. Soft separation: spacing and value steps, never 1px rules, with one
+   exception: `hr.section-rule`, the mist line between top-level sections of
+   the Settings page (design review v3.1 §2.2). The top bar
    gains a mist only once the page has scrolled.
 
 ## What the audit holds every screen to

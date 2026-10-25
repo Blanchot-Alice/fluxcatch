@@ -1,6 +1,6 @@
-# FluxCatch native engine for macOS
+# Havre native engine for macOS
 
-This archive is the local engine for the matching FluxCatch extension version.
+This archive is the local engine for the matching Havre extension version.
 Detection works without it, but most save actions use its policy-controlled
 transfer path. HLS/DASH processing, parallel Range transfers, remuxing, and MP3
 extraction also use this engine. Only the extension's narrow, provenance-checked
@@ -25,9 +25,9 @@ Extract the complete archive, open Terminal in the extracted directory, and run:
 
 Do not move individual files out of the extracted directory before installation.
 The wrapper verifies Python and then installs the versioned files under
-`~/Library/Application Support/FluxCatch/`.
+`~/Library/Application Support/Havre/`.
 
-After installation, reload FluxCatch from `chrome://extensions`, open Settings,
+After installation, reload Havre from `chrome://extensions`, open Settings,
 authorize the optional local download engine, and choose **Recheck**.
 
 ## Uninstall

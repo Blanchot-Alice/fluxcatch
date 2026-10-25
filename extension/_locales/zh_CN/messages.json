@@ -1,12 +1,12 @@
 {
   "extensionName": {
-    "message": "FluxCatch"
+    "message": "Havre"
   },
   "extensionDescription": {
     "message": "找出当前页面上的视频与音频，把你选中的保存到这台电脑，不上传任何内容。"
   },
   "commandOpenPopup": {
-    "message": "打开 FluxCatch"
+    "message": "打开 Havre"
   },
   "commandOpenDownloads": {
     "message": "全部下载记录"

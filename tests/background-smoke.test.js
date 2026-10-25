@@ -45,6 +45,9 @@ test("MV3 worker registers network and message listeners during module load", as
   let blockAutomaticTabRead = false;
   let automaticTabReadEntered = null;
   let releaseAutomaticTabRead = null;
+  // Tabs whose chrome.tabs.get answers a macrotask late, the way a busy
+  // browser does; used to interleave two writers of one candidate key.
+  const slowTabLookups = new Set();
   let revokeNativePermissionAfterRecoveryWrite = false;
   let cancelEmitsInterrupted = false;
   let cancelRejects = false;
@@ -165,10 +168,10 @@ test("MV3 worker registers network and message listeners during module load", as
     [25, { id: 25, title: "SPA generation fixture", url: "https://www.bilibili.com/video/av11223/" }],
     [26, { id: 26, title: "Discovery generation fixture", url: biliPageUrl }],
     [27, { id: 27, title: "Strict TTL fixture", url: "https://www.bilibili.com/video/av77889/" }],
-    [28, { id: 28, title: "YouTube Fixture - FluxCatch", url: `${youtubeWatchUrl}&t=42s` }],
+    [28, { id: 28, title: "YouTube Fixture - Havre", url: `${youtubeWatchUrl}&t=42s` }],
     [29, { id: 29, title: "Auto Badge Fixture - 哔哩哔哩", url: biliAvPageUrl }],
     [30, { id: 30, title: "Instagram Fixture", url: "https://www.instagram.com/reel/Cxyz1234567/" }],
-    [31, { id: 31, title: "X Fixture", url: "https://x.com/fluxcatch/status/1899999999999999999" }],
+    [31, { id: 31, title: "X Fixture", url: "https://x.com/havre/status/1899999999999999999" }],
     [32, { id: 32, title: "Opt-in Bilibili Fixture", url: biliOptInPageUrl }],
     [33, { id: 33, title: "Generic page title", url: "https://page.example.test/direct" }],
     [34, { id: 34, title: "Unobserved redirect hint", url: "https://page.example.test/hint" }],
@@ -176,13 +179,14 @@ test("MV3 worker registers network and message listeners during module load", as
     [36, { id: 36, title: "Automatic discovery generation fixture", url: biliAvPageUrl }],
     [37, { id: 37, title: "Automatic discovery fallback-budget fixture", url: biliAvPageUrl }],
     [38, { id: 38, title: "Disabled automatic discovery fixture", url: biliOptInPageUrl }],
-    [39, { id: 39, title: "Recovered X Fixture", url: "https://x.com/fluxcatch/status/1899999999999999999" }],
+    [39, { id: 39, title: "Recovered X Fixture", url: "https://x.com/havre/status/1899999999999999999" }],
     [40, { id: 40, title: "WebRequest route fixture", url: "https://page.example.test/old-route" }],
     [41, { id: 41, title: "Content route fixture", url: "https://page.example.test/content-old" }],
     [42, { id: 42, title: "Manifest identity fixture", url: "https://page.example.test/manifest-assets" }],
     [43, { id: 43, title: "Document binding fixture", url: "https://page.example.test/document-binding" }],
     [44, { id: 44, title: "Fixture Clip: Studio Walk - Pornhub.com", url: "https://www.pornhub.com/view_video.php?viewkey=645ab8c01b680" }],
     [45, { id: 45, title: "Pasted link fixture", url: "https://page.example.test/paste" }],
+    [49, { id: 49, title: "Fixture Clip: Studio Walk - Pornhub.com", url: "https://www.pornhub.com/view_video.php?viewkey=645ab8c01b680" }],
     [146, { id: 146, title: "An interview with Fixture | The Economist Insider", url: "https://www.economist.com/insider/the-insider/an-interview-with-fixture" }]
   ]);
   // The Economist Insider: the episode API and the site-proxied playlists.
@@ -360,7 +364,7 @@ test("MV3 worker registers network and message listeners during module load", as
     runtime: {
       id: extensionId,
       getURL: (path = "") => `chrome-extension://${extensionId}/${path}`,
-      getManifest: () => ({ name: "FluxCatch", version: "0.2.5" }),
+      getManifest: () => ({ name: "Havre", version: "0.3.0" }),
       onConnect,
       onMessage,
       lastError: null,
@@ -390,12 +394,12 @@ test("MV3 worker registers network and message listeners during module load", as
             requestId: message.requestId,
             action: "choose_folder",
             ok: true,
-            downloadDir: message.reset ? "/Users/private/Downloads/FluxCatch" : "/Users/private/Movies/FluxCatch"
+            downloadDir: message.reset ? "/Users/private/Downloads/Havre" : "/Users/private/Movies/Havre"
           }));
           if (message.type === "ping") queueMicrotask(() => nativeOnMessage.listeners[0]?.fn({
             type: "pong",
             requestId: message.requestId,
-            version: "0.2.5",
+            version: "0.3.0",
             protocolVersion: 1,
             capabilityProfileVersion: 1,
             ffmpeg: true,
@@ -433,6 +437,7 @@ test("MV3 worker registers network and message listeners during module load", as
           automaticTabReadEntered?.();
           await new Promise((resolve) => { releaseAutomaticTabRead = resolve; });
         }
+        if (slowTabLookups.has(tabId)) await new Promise((resolve) => setTimeout(resolve, 20));
         return tabFixtures.get(tabId) || {};
       },
       sendMessage: async (tabId, message) => {
@@ -463,7 +468,7 @@ test("MV3 worker registers network and message listeners during module load", as
           onDownloadChanged.listeners[0]?.fn({
             id,
             state: { current: "interrupted" },
-            filename: { current: "/Users/private/FluxCatch/task.mp4" }
+            filename: { current: "/Users/private/Havre/task.mp4" }
           });
         }
       },
@@ -479,7 +484,7 @@ test("MV3 worker registers network and message listeners during module load", as
           paused: false,
           bytesReceived: id === 42 ? 2_000_000 : [43, 44].includes(id) ? 256_000 : 1000,
           totalBytes: id === 42 ? 2_000_000 : [43, 44].includes(id) ? 2_000_000 : 1000,
-          filename: id === 42 ? "/Users/private/FluxCatch/browser.mp4" : id === 43 ? "/Users/private/FluxCatch/cancel-race.mp4" : id === 44 ? "/Users/private/FluxCatch/cancel-rejected.mp4" : "/Users/private/restored-browser.mp4"
+          filename: id === 42 ? "/Users/private/Havre/browser.mp4" : id === 43 ? "/Users/private/Havre/cancel-race.mp4" : id === 44 ? "/Users/private/Havre/cancel-rejected.mp4" : "/Users/private/restored-browser.mp4"
         }] : [];
       }
     },
@@ -550,7 +555,7 @@ test("MV3 worker registers network and message listeners during module load", as
   );
   const uiDisconnect = event();
   onConnect.listeners[0].fn({
-    name: "fluxcatch-sidepanel",
+    name: "havre-sidepanel",
     sender: extensionSender,
     onDisconnect: uiDisconnect,
     postMessage: (message) => uiMessages.push(structuredClone(message))
@@ -766,7 +771,7 @@ test("MV3 worker registers network and message listeners during module load", as
   });
   assert.equal(biliApiProbe.ok, true);
   assert.deepEqual(biliApiProbe.probe.variants.map((track) => track.height), [480, 360], "duplicate codec renditions collapse to one compatible choice per quality");
-  assert.ok(biliApiProbe.probe.variants.every((track) => track.url.startsWith("https://fluxcatch.invalid/dash/")));
+  assert.ok(biliApiProbe.probe.variants.every((track) => track.url.startsWith("https://havre.invalid/dash/")));
   assert.match(biliApiProbe.probe.variants[0].codecs, /avc1/i, "AVC wins the equal-quality compatibility tie");
   assert.doesNotMatch(JSON.stringify(biliApiProbe), biliSecrets);
 
@@ -774,7 +779,7 @@ test("MV3 worker registers network and message listeners during module load", as
     type: "DOWNLOAD",
     tabId: 21,
     candidate: biliApiCandidate,
-    options: { filename: "forged.mp4", variantUrl: "https://fluxcatch.invalid/dash/forged/track" }
+    options: { filename: "forged.mp4", variantUrl: "https://havre.invalid/dash/forged/track" }
   });
   assert.equal(forgedBiliVariant.ok, false);
   assert.match(forgedBiliVariant.error, /清晰度/);
@@ -807,7 +812,7 @@ test("MV3 worker registers network and message listeners during module load", as
         { name: "Cookie", value: "SESSDATA=COOKIE_MUST_NOT_ESCAPE" },
         { name: "Authorization", value: "Bearer AUTH_MUST_NOT_ESCAPE" },
         { name: "Referer", value: "https://www.bilibili.com/video/av12345/?vd_source=PRIVATE" },
-        { name: "User-Agent", value: "FluxCatch fixture UA" },
+        { name: "User-Agent", value: "Havre fixture UA" },
         { name: "Accept", value: "*/*" }
       ]
     });
@@ -1496,7 +1501,7 @@ test("MV3 worker registers network and message listeners during module load", as
     data: { url: twitterCdnUrl, mime: "video/mp4", source: "x-api-response", width: 1280, height: 720 }
   }, {
     id: extensionId,
-    url: "https://x.com/fluxcatch/status/1899999999999999999",
+    url: "https://x.com/havre/status/1899999999999999999",
     frameId: 0,
     tab: tabFixtures.get(31)
   });
@@ -1532,7 +1537,7 @@ test("MV3 worker registers network and message listeners during module load", as
     state: { current: "complete" },
     bytesReceived: { current: 2_000_000 },
     totalBytes: { current: 2_000_000 },
-    filename: { current: "/Users/private/FluxCatch/browser.mp4" }
+    filename: { current: "/Users/private/Havre/browser.mp4" }
   });
   releaseBrowserPersist();
   await browserSearchReached;
@@ -1551,7 +1556,7 @@ test("MV3 worker registers network and message listeners during module load", as
     state: { current: "complete" },
     bytesReceived: { current: 2_000_000 },
     totalBytes: { current: 2_000_000 },
-    filename: { current: "/Users/private/FluxCatch/browser.mp4" }
+    filename: { current: "/Users/private/Havre/browser.mp4" }
   });
   const browserStart = await browserStartPromise;
   assert.equal(browserStart.ok, true);
@@ -1628,7 +1633,7 @@ test("MV3 worker registers network and message listeners during module load", as
   assert.equal(unavailableNativeApi.hostStatus.failureReason, "api_unavailable");
   assert.match(unavailableNativeApi.hostStatus.lastError, /自动重试/);
   assert.match(unavailableNativeApi.hostStatus.lastError, /正在初始化连接接口/);
-  assert.doesNotMatch(unavailableNativeApi.hostStatus.lastError, /重新加载 FluxCatch|完全退出/);
+  assert.doesNotMatch(unavailableNativeApi.hostStatus.lastError, /重新加载 Havre|完全退出/);
   assert.doesNotMatch(JSON.stringify(unavailableNativeApi), /TypeError|connectNative is not a function/i);
   assert.equal(nativeConnectCalls, connectCallsBeforeApiAbsence, "an absent nativeMessaging API never attempts a native connection");
 
@@ -1659,7 +1664,7 @@ test("MV3 worker registers network and message listeners during module load", as
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(settingsState.nativeApiRecovery, undefined, "a successful native pong clears recovery state");
   const diagnosticsResponse = await sendRuntimeMessage({ type: "GET_DIAGNOSTICS" });
-  assert.equal(diagnosticsResponse.diagnostics.extension.version, "0.2.5");
+  assert.equal(diagnosticsResponse.diagnostics.extension.version, "0.3.0");
   assert.equal(diagnosticsResponse.diagnostics.extension.id, extensionId);
   assert.equal(diagnosticsResponse.diagnostics.native.compatible, true);
   assert.doesNotMatch(JSON.stringify(diagnosticsResponse),
@@ -1695,7 +1700,7 @@ test("MV3 worker registers network and message listeners during module load", as
   nativeOnMessage.listeners[0].fn({
     type: "pong",
     requestId: "compatible-reset",
-    version: "0.2.5",
+    version: "0.3.0",
     protocolVersion: 1,
     capabilityProfileVersion: 1,
     ffmpeg: true,
@@ -1871,7 +1876,7 @@ test("MV3 worker registers network and message listeners during module load", as
       initiator: "https://stream.example.test",
       requestHeaders: [
         { name: "Referer", value: "https://stream.example.test/watch/45" },
-        { name: "User-Agent", value: "FluxCatch fixture UA" },
+        { name: "User-Agent", value: "Havre fixture UA" },
         ...(requestRange ? [{ name: "Range", value: "bytes=0-" }] : [])
       ]
     });
@@ -2185,7 +2190,7 @@ test("MV3 worker registers network and message listeners during module load", as
   assert.equal(mpdProbe.probe.kind, "dash");
   assert.deepEqual(mpdProbe.probe.variants.map((variant) => variant.height), [1080, 720],
     "the DASH probe exposes the representation ladder to the dialog's quality dropdown");
-  assert.ok(mpdProbe.probe.variants.every((variant) => variant.url.startsWith("https://fluxcatch.invalid/manifest/") || variant.url.startsWith("https://fluxcatch.invalid/dash/")),
+  assert.ok(mpdProbe.probe.variants.every((variant) => variant.url.startsWith("https://havre.invalid/manifest/") || variant.url.startsWith("https://havre.invalid/dash/")),
     "DASH quality choices use opaque selectors (never signed BaseURLs) like HLS");
   const mpdDownload720 = await sendRuntimeMessage({
     type: "DOWNLOAD",
@@ -2206,8 +2211,8 @@ test("MV3 worker registers network and message listeners during module load", as
     status: "completed",
     progress: 1,
     size: 1_000_000,
-    path: "/Users/private/Downloads/FluxCatch/mpd-720.mp4",
-    downloadDir: "/Users/private/Downloads/FluxCatch",
+    path: "/Users/private/Downloads/Havre/mpd-720.mp4",
+    downloadDir: "/Users/private/Downloads/Havre",
     media: { duration: 93.5, width: 1280, height: 720, container: "mov", videoCodec: "h264", audioCodec: "aac", probeError: "SECRET" },
     thumbnail: "data:image/jpeg;base64,/9j/4AAQ",
     elapsedMs: 4200
@@ -2230,28 +2235,28 @@ test("MV3 worker registers network and message listeners during module load", as
   assert.deepEqual(mpdRecord.media, { duration: 93.5, width: 1280, height: 720, container: "mov", videoCodec: "h264", audioCodec: "aac" }, "unknown media fields are dropped");
   assert.equal(mpdRecord.thumbnail, "data:image/jpeg;base64,/9j/4AAQ");
   assert.equal(mpdRecord.sourceHost, "mpd.example.test");
-  assert.equal(mpdRecord.message, "已保存到 FluxCatch 文件夹", "completion carries a user-facing message instead of a stale progress line");
+  assert.equal(mpdRecord.message, "已保存到 Havre 文件夹", "completion carries a user-facing message instead of a stale progress line");
   assert.doesNotMatch(JSON.stringify(historyAfterMpd.items), /\/Users\/private/, "local file paths never reach UI records");
-  assert.equal(historyAfterMpd.downloadDir, "/Users/private/Downloads/FluxCatch", "only the engine's folder itself is shown, as the user's own setting");
+  assert.equal(historyAfterMpd.downloadDir, "/Users/private/Downloads/Havre", "only the engine's folder itself is shown, as the user's own setting");
   assert.doesNotMatch(JSON.stringify(await sendRuntimeMessage({ type: "GET_JOBS" })), /\/Users\/private/, "job rows never carry the published path either");
   const storedHistory = settingsState["downloadHistory.v1"];
-  assert.ok(Array.isArray(storedHistory) && storedHistory.some((item) => item.jobId === mpdDownload720.jobId && item.path === "/Users/private/Downloads/FluxCatch/mpd-720.mp4"),
+  assert.ok(Array.isArray(storedHistory) && storedHistory.some((item) => item.jobId === mpdDownload720.jobId && item.path === "/Users/private/Downloads/Havre/mpd-720.mp4"),
     "the path is persisted in extension-private storage so Finder actions work after a restart");
   const mpdJobRow = (await sendRuntimeMessage({ type: "GET_JOBS" })).jobs.find((job) => job.jobId === mpdDownload720.jobId);
   assert.equal(mpdJobRow.hasFile, true);
   assert.equal(mpdJobRow.thumbnail, "data:image/jpeg;base64,/9j/4AAQ", "the popup row shows the poster frame");
   const openWithoutPermission = await sendRuntimeMessage({ type: "FILE_ACTION", action: "open", jobId: mpdDownload720.jobId });
   assert.equal(openWithoutPermission.ok, true, "with native permission granted the file action is forwarded to the engine");
-  assert.ok(nativeOutgoing.some((message) => message.type === "open" && message.path === "/Users/private/Downloads/FluxCatch/mpd-720.mp4"),
+  assert.ok(nativeOutgoing.some((message) => message.type === "open" && message.path === "/Users/private/Downloads/Havre/mpd-720.mp4"),
     "the engine receives the exact published path");
   const chosenFolder = await sendRuntimeMessage({ type: "CHOOSE_DOWNLOAD_FOLDER" });
   assert.equal(chosenFolder.ok, true, chosenFolder.error);
-  assert.equal(chosenFolder.downloadDir, "/Users/private/Movies/FluxCatch", "the engine's picker result becomes the save location");
+  assert.equal(chosenFolder.downloadDir, "/Users/private/Movies/Havre", "the engine's picker result becomes the save location");
   assert.ok(nativeOutgoing.some((message) => message.type === "choose_folder" && !message.reset));
-  assert.equal(chosenFolder.hostStatus.downloadDir, "/Users/private/Movies/FluxCatch",
+  assert.equal(chosenFolder.hostStatus.downloadDir, "/Users/private/Movies/Havre",
     "the public host status mirrors the new folder without waiting for the next pong");
   const resetFolder = await sendRuntimeMessage({ type: "CHOOSE_DOWNLOAD_FOLDER", reset: true });
-  assert.equal(resetFolder.downloadDir, "/Users/private/Downloads/FluxCatch");
+  assert.equal(resetFolder.downloadDir, "/Users/private/Downloads/Havre");
   assert.ok(nativeOutgoing.some((message) => message.type === "choose_folder" && message.reset === true));
   const removed = await sendRuntimeMessage({ type: "REMOVE_HISTORY", jobId: mpdDownload720.jobId });
   assert.equal(removed.ok, true);
@@ -2572,7 +2577,7 @@ test("MV3 worker registers network and message listeners during module load", as
   assert.equal(youtubeCandidate.kind, "youtube");
   assert.equal(youtubeCandidate.displayUrl, youtubeWatchUrl, "the candidate is the canonical watch URL without tracking parameters");
   assert.equal(youtubeCandidate.site, "youtube");
-  assert.equal(youtubeCandidate.title, "YouTube Fixture - FluxCatch");
+  assert.equal(youtubeCandidate.title, "YouTube Fixture - Havre");
   assert.equal(badgeUpdates.filter((item) => item.tabId === 28).at(-1)?.text, "1", "the YouTube row counts on the badge");
   const youtubeProbeRequest = sendRuntimeMessage({ type: "PROBE_MANIFEST", tabId: 28, candidate: youtubeCandidate });
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -2597,7 +2602,7 @@ test("MV3 worker registers network and message listeners during module load", as
   assert.equal(youtubeProbe.ok, true, youtubeProbe.error);
   assert.equal(youtubeProbe.probe.kind, "youtube");
   assert.deepEqual(youtubeProbe.probe.variants.map((variant) => variant.height), [1080, 720]);
-  assert.ok(youtubeProbe.probe.variants.every((variant) => /^https:\/\/fluxcatch\.invalid\/manifest\//.test(variant.url)), "qualities are opaque selectors");
+  assert.ok(youtubeProbe.probe.variants.every((variant) => /^https:\/\/havre\.invalid\/manifest\//.test(variant.url)), "qualities are opaque selectors");
   assert.doesNotMatch(JSON.stringify(youtubeProbe), /YT_SECRET|googlevideo/, "no format URL crosses to the UI");
   const probedYoutube = (await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 28 })).items[0];
   assert.equal(probedYoutube.title, "Fixture Clip", "yt-dlp's title replaces the tab title");
@@ -2632,7 +2637,7 @@ test("MV3 worker registers network and message listeners during module load", as
     type: "DOWNLOAD",
     tabId: 28,
     candidate: probedYoutube,
-    options: { variantUrl: "https://fluxcatch.invalid/manifest/forged/forged" }
+    options: { variantUrl: "https://havre.invalid/manifest/forged/forged" }
   });
   assert.equal(forgedYoutubeQuality.ok, false);
   assert.equal(forgedYoutubeQuality.code, "quality_unavailable");
@@ -2640,7 +2645,7 @@ test("MV3 worker registers network and message listeners during module load", as
   nativeOnMessage.listeners[0].fn({
     type: "pong",
     requestId: "ytdlp-missing-audit",
-    version: "0.2.5",
+    version: "0.3.0",
     protocolVersion: 1,
     capabilityProfileVersion: 1,
     ffmpeg: true,
@@ -2658,7 +2663,7 @@ test("MV3 worker registers network and message listeners during module load", as
   nativeOnMessage.listeners[0].fn({
     type: "pong",
     requestId: "ytdlp-restored",
-    version: "0.2.5",
+    version: "0.3.0",
     protocolVersion: 1,
     capabilityProfileVersion: 1,
     ffmpeg: true,
@@ -2707,7 +2712,7 @@ test("MV3 worker registers network and message listeners during module load", as
   assert.equal(ladderCard.height, 1080, "the best rendition leads");
   assert.equal(ladderCard.duration, 4352);
   assert.deepEqual(ladderCard.variants.map((variant) => variant.height), [1080, 480]);
-  assert.ok(ladderCard.variants.every((variant) => variant.url.startsWith("https://fluxcatch.invalid/manifest/")));
+  assert.ok(ladderCard.variants.every((variant) => variant.url.startsWith("https://havre.invalid/manifest/")));
   assert.doesNotMatch(JSON.stringify(ladderMedia), /SIG_1080|SIG_480/, "signed playlist addresses never reach the UI");
   const ladderProbe = await sendRuntimeMessage({ type: "PROBE_MANIFEST", tabId: 44, candidate: ladderCard });
   assert.equal(ladderProbe.ok, true, ladderProbe.error);
@@ -2776,6 +2781,44 @@ test("MV3 worker registers network and message listeners during module load", as
   assert.ok(forgedLadder, "the playlist itself is still a candidate");
   assert.deepEqual(forgedLadder.variants, [], "but it claims no ladder");
   assert.equal(forgedLadder.site, "", "and no adapter");
+  // The player's own request for a rendition and the payload scan that names
+  // it can describe the same playlist in the same instant. The observation
+  // carries no page title, so addCandidate looks the tab up after reading the
+  // (still empty) entry; the scan's rendition written during that lookup must
+  // be merged into, not overwritten, or it loses its ladder membership and
+  // shows as a twin card (seen on a slow CI runner).
+  const racedSender = {
+    id: extensionId,
+    url: "https://www.pornhub.com/view_video.php?viewkey=645ab8c01b680",
+    frameId: 0,
+    tab: { id: 49, url: "https://www.pornhub.com/view_video.php?viewkey=645ab8c01b680", title: "Fixture Clip: Studio Walk - Pornhub.com" }
+  };
+  slowTabLookups.add(49);
+  const racedScan = Promise.all([[phMaster1080, 1080, 1920], [phMaster480, 480, 854]].map(([url, height, width]) => sendRuntimeMessage({
+    type: "CONTENT_MEDIA",
+    data: { url, mime: "application/vnd.apple.mpegurl", source: "site-payload", width, height, duration: 4352, title: "Fixture Clip: Studio Walk", ladderKey: "pornhub:431238401", ladderRank: height }
+  }, racedSender)));
+  onBeforeSendHeaders.listeners[0].fn({
+    requestId: "ph-raced", tabId: 49, url: phMaster1080, type: "xmlhttprequest", documentId: "ph-raced-document", frameId: 0,
+    requestHeaders: [{ name: "Referer", value: "https://www.pornhub.com/" }, { name: "Origin", value: "https://www.pornhub.com" }]
+  });
+  onHeadersReceived.listeners[0].fn({
+    requestId: "ph-raced", tabId: 49, url: phMaster1080, type: "xmlhttprequest", documentId: "ph-raced-document", frameId: 0,
+    responseHeaders: [{ name: "content-type", value: "application/vnd.apple.mpegurl" }, { name: "content-length", value: "512" }]
+  });
+  assert.ok((await racedScan).every((response) => response.accepted === true), "both renditions of the scan are accepted");
+  let racedLadder = null;
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    racedLadder = await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 49 });
+    if (racedLadder.items.length === 1 && (racedLadder.items[0].sources || []).includes("webRequest")) break;
+  }
+  slowTabLookups.delete(49);
+  assert.equal(racedLadder.items.length, 1, "the observed rendition merges into the entry the scan wrote during the tab lookup");
+  assert.deepEqual(racedLadder.items[0].sources.slice().sort(), ["site-payload", "webRequest"]);
+  assert.deepEqual(racedLadder.items[0].variants.map((variant) => variant.height), [1080, 480], "and keeps its ladder");
+  assert.equal(racedLadder.items[0].title, "Fixture Clip: Studio Walk");
+  assert.equal(racedLadder.items[0].provenance, "observed_response", "the player's own response is the stronger provenance");
 
   // ===== The Economist Insider: the session-authenticated episode API names
   // a site-proxied Brightcove master; the worker preloads what the engine
@@ -2805,7 +2848,7 @@ test("MV3 worker registers network and message listeners during module load", as
   assert.equal(econProbe.ok, true, econProbe.error);
   assert.deepEqual(econProbe.probe.variants.map((variant) => variant.height), [1080, 540]);
   assert.equal(econProbe.probe.audioTrackCount, 1, "the separate audio rendition is known");
-  assert.ok(econProbe.probe.variants.every((variant) => variant.url.startsWith("https://fluxcatch.invalid/manifest/")));
+  assert.ok(econProbe.probe.variants.every((variant) => variant.url.startsWith("https://havre.invalid/manifest/")));
   const econStart = await sendRuntimeMessage({
     type: "DOWNLOAD",
     tabId: 146,
@@ -2844,7 +2887,7 @@ test("MV3 worker registers network and message listeners during module load", as
       requestHeaders: [
         { name: "Cookie", value: "sessionid=IG_PRIVATE_COOKIE" },
         { name: "Referer", value: "https://www.instagram.com/reel/Cxyz1234567/" },
-        { name: "User-Agent", value: "FluxCatch fixture UA" }
+        { name: "User-Agent", value: "Havre fixture UA" }
       ]
     });
   };
@@ -2939,12 +2982,12 @@ test("MV3 worker registers network and message listeners during module load", as
   onDownloadChanged.listeners[0].fn({
     id: instagramStart.downloadId,
     state: { current: "complete" },
-    filename: { current: "/Users/private/FluxCatch/Instagram Reel.mp4" },
+    filename: { current: "/Users/private/Havre/Instagram Reel.mp4" },
     bytesReceived: { current: 2_000_000 },
     totalBytes: { current: 2_000_000 }
   });
   await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.ok(notificationRequests.some((entry) => entry.id === `fluxcatch:${instagramStart.jobId}:completed`),
+  assert.ok(notificationRequests.some((entry) => entry.id === `havre:${instagramStart.jobId}:completed`),
     "browser completions honor the same notification setting as native jobs");
   assert.equal(nativeOutgoing.filter((message) => message.type === "download").length, instagramNativeCount,
     "the default fixed-site path keeps Instagram progressive MP4 on Chrome's working network path");
@@ -2965,9 +3008,9 @@ test("MV3 worker registers network and message listeners during module load", as
     data: { url: twitterCdnUrl, mime: "video/mp4", source: "site-payload", width: 1280, height: 720, title: "X Fixture" }
   }, {
     id: extensionId,
-    url: "https://x.com/fluxcatch/status/1899999999999999999",
+    url: "https://x.com/havre/status/1899999999999999999",
     frameId: 0,
-    tab: { id: 31, url: "https://x.com/fluxcatch/status/1899999999999999999", title: "X Fixture" }
+    tab: { id: 31, url: "https://x.com/havre/status/1899999999999999999", title: "X Fixture" }
   });
   assert.equal(xPayload.accepted, true);
   let xMedia = null;
@@ -2985,9 +3028,9 @@ test("MV3 worker registers network and message listeners during module load", as
     data: { url: twitterCdnUrl, mime: "video/mp4", source: "x-api-response", width: 1280, height: 720, title: "X Fixture" }
   }, {
     id: extensionId,
-    url: "https://x.com/fluxcatch/status/1899999999999999999",
+    url: "https://x.com/havre/status/1899999999999999999",
     frameId: 0,
-    tab: { id: 31, url: "https://x.com/fluxcatch/status/1899999999999999999", title: "X Fixture" }
+    tab: { id: 31, url: "https://x.com/havre/status/1899999999999999999", title: "X Fixture" }
   });
   assert.equal(xApiResponse.accepted, true);
   xMedia = await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 31 });
@@ -3061,9 +3104,9 @@ test("MV3 worker registers network and message listeners during module load", as
     data: { url: twitterCdnUrl, mime: "video/mp4", source: "x-api-response" }
   }, {
     id: extensionId,
-    url: "https://x.com/fluxcatch/status/1899999999999999999",
+    url: "https://x.com/havre/status/1899999999999999999",
     frameId: 2,
-    tab: { id: 32, url: "https://x.com/fluxcatch/status/1899999999999999999", title: "X Fixture" }
+    tab: { id: 32, url: "https://x.com/havre/status/1899999999999999999", title: "X Fixture" }
   });
   assert.equal(rejectedXMainFrame.ignored, true, "subframes cannot mint X API candidates");
 
@@ -3072,9 +3115,9 @@ test("MV3 worker registers network and message listeners during module load", as
     data: { url: "https://video.twimg.com.evil.test/file.mp4", mime: "video/mp4", source: "x-api-response" }
   }, {
     id: extensionId,
-    url: "https://x.com/fluxcatch/status/1899999999999999999",
+    url: "https://x.com/havre/status/1899999999999999999",
     frameId: 0,
-    tab: { id: 33, url: "https://x.com/fluxcatch/status/1899999999999999999", title: "X Fixture" }
+    tab: { id: 33, url: "https://x.com/havre/status/1899999999999999999", title: "X Fixture" }
   });
   assert.equal(rejectedXHost.ignored, true, "lookalike X CDN hosts are rejected");
 
@@ -3119,7 +3162,7 @@ test("MV3 worker registers network and message listeners during module load", as
   });
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal((await getJobs()).jobs.find((job) => job.jobId === nativeStart.jobId)?.status, "completed");
-  assert.ok(notificationRequests.some((entry) => entry.id === `fluxcatch:${nativeStart.jobId}:completed`),
+  assert.ok(notificationRequests.some((entry) => entry.id === `havre:${nativeStart.jobId}:completed`),
     "native completions remain covered by the shared notification path");
 
   rejectNextNativeDownload = true;
@@ -3200,7 +3243,7 @@ test("MV3 worker registers network and message listeners during module load", as
   const popupDisconnect = event();
   const badgeEventsBeforePopupLifecycle = badgeCountFor(29);
   onConnect.listeners[0].fn({
-    name: "fluxcatch-popup",
+    name: "havre-popup",
     sender: { id: extensionId, url: `chrome-extension://${extensionId}/popup/popup.html` },
     onDisconnect: popupDisconnect,
     postMessage() {}
@@ -3321,7 +3364,7 @@ test("MV3 worker registers network and message listeners during module load", as
   assert.equal(settingsState.nativeApiRecovery?.phase, "restart_required");
   assert.equal(settingsState.nativeApiRecovery?.resumeCount, 2);
   assert.match(restartedResponse.hostStatus.lastError, /完全退出并重新启动 Chrome/);
-  assert.doesNotMatch(restartedResponse.hostStatus.lastError, /重新加载 FluxCatch/);
+  assert.doesNotMatch(restartedResponse.hostStatus.lastError, /重新加载 Havre/);
 
   settingsState.nativeApiRecovery = {
     phase: "resumed",
@@ -3356,7 +3399,7 @@ test("MV3 worker registers network and message listeners during module load", as
         queueMicrotask(() => recoveredOnMessage.listeners[0]?.fn({
           type: "pong",
           requestId: message.requestId,
-          version: "0.2.5",
+          version: "0.3.0",
           protocolVersion: 1,
           capabilityProfileVersion: 1,
           ffmpeg: true,
@@ -3404,7 +3447,7 @@ test("MV3 worker registers network and message listeners during module load", as
         queueMicrotask(() => healedOnMessage.listeners[0]?.fn({
           type: "pong",
           requestId: message.requestId,
-          version: "0.2.5",
+          version: "0.3.0",
           protocolVersion: 1,
           capabilityProfileVersion: 1,
           ffmpeg: true,

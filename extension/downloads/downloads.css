@@ -1,4 +1,4 @@
-/* FluxCatch Downloads page (design review §6.15) on the v2 system.
+/* Havre Downloads page (design review §6.15) on the v2 system.
    One column of max 880 px. The lead column (56) holds only the BrandMark logo
    and the row glyphs (v3 §3.4): the title, the link field, the filter row and
    the search all start on the text column (lead 56 + gap 16), as every row's

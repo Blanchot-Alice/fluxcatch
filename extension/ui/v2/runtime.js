@@ -29,7 +29,7 @@ export function workerError(response) {
  * report the loss (onLost), e.g. after the extension was reloaded or updated.
  * Call it before anything awaits, so no broadcast is missed.
  * @param {object} o
- * @param {string} o.name                       "fluxcatch-popup" | "fluxcatch-sidepanel" | "fluxcatch-downloads"
+ * @param {string} o.name                       "havre-popup" | "havre-sidepanel" | "havre-downloads"
  * @param {(message) => void} o.onMessage
  * @param {() => Promise<boolean>} [o.onReconnect] resync; false when the worker did not answer
  * @param {() => void} [o.onLost]

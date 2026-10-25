@@ -195,7 +195,7 @@ const until = async (condition, timeout = 2000) => {
 // ---------- helpers ----------
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 const CJK = /[㐀-鿿　-〿＀-￯]/;
-const LATIN_OK = new Set(["fluxcatch", "finder", "chrome", "mp4", "mkv", "webm", "mp3", "m4a", "hls", "dash", "mb", "gb", "kb", "http", "https", "youtube", "instagram", "x"]);
+const LATIN_OK = new Set(["havre", "finder", "chrome", "mp4", "mkv", "webm", "mp3", "m4a", "hls", "dash", "mb", "gb", "kb", "http", "https", "youtube", "instagram", "x"]);
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => document.querySelectorAll(selector);
 const click = (element) => element.dispatchEvent(new Event("click", { bubbles: true }));
@@ -420,7 +420,7 @@ test("locale: no CJK in the English panel and no stray Latin words in the Chines
   await bootPanel({ lang: "zh-CN", items: [FILE, AUDIO], jobs: [LIVE_A, DONE], native: false });
   const words = visibleTexts().flatMap((text) => (text.replace(/\b\d+(\.\d+)?\s?(k|m|g|t)?i?b(\/s)?\b/gi, " ").replace(/\b\d+p\b/gi, " ").match(/[A-Za-z][A-Za-z0-9]+/g) || []).filter((word) => !LATIN_OK.has(word.toLowerCase())));
   assert.deepEqual(words, []);
-  assert.equal(document.title, "工作台 · FluxCatch");
+  assert.equal(document.title, "工作台 · Havre");
 });
 
 test("a finished download holds its celadon fill, then takes its history form (§6.7)", async () => {
@@ -487,7 +487,7 @@ test("the panel reconnects after an idle worker drops its port, and resyncs down
   await until(() => env.ports.length === 2
     && env.sent.filter((message) => message.type === "GET_JOBS").length > before.jobs
     && env.sent.filter((message) => message.type === "GET_TAB_MEDIA").length > before.media);
-  assert.notEqual(lineText("#engineLine"), "FluxCatch stopped responding");
+  assert.notEqual(lineText("#engineLine"), "Havre stopped responding");
   const send = (message) => { for (const listener of env.ports[1].onMessage.listeners) listener(message); };
   send({ type: "JOB_UPDATED", job: { jobId: "jx", status: "downloading", method: "native", filename: "After.mp4", progress: 0.1, createdAt: Date.now(), updatedAt: Date.now() } });
   assert.equal($("#focusSlot .focus-panel").dataset.jobId, "jx", "live updates flow again");

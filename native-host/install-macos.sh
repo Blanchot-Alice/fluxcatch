@@ -3,13 +3,13 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 HOST="$ROOT/host.py"
-NETWORK_POLICY="$ROOT/fluxcatch_network_policy.py"
+NETWORK_POLICY="$ROOT/havre_network_policy.py"
 APP_SUPPORT="$HOME/Library/Application Support"
-HOST_NAME="io.github.blanchot_alice.fluxcatch"
-RUNTIME_DIR="$APP_SUPPORT/FluxCatch"
+HOST_NAME="io.github.blanchot_alice.havre"
+RUNTIME_DIR="$APP_SUPPORT/Havre"
 HOST_DIR="$RUNTIME_DIR/native-host"
 INSTALLED_HOST="$HOST_DIR/host.py"
-INSTALLED_NETWORK_POLICY="$HOST_DIR/fluxcatch_network_policy.py"
+INSTALLED_NETWORK_POLICY="$HOST_DIR/havre_network_policy.py"
 LAUNCHER="$HOST_DIR/launcher"
 PYTHON_COMMAND="$(command -v python3 || true)"
 FFMPEG_COMMAND="$(command -v ffmpeg || true)"
@@ -51,10 +51,29 @@ mkdir -p "$HOST_DIR"
 chmod 700 "$RUNTIME_DIR"
 chmod 700 "$HOST_DIR"
 
+# The 0.2.5 install lived under the old product name (design review v3.3):
+# carry the chosen save folder over once (the old file stays for the old
+# uninstaller), drop the old runtime copy of the host, and unregister the old
+# host id wherever this installer registers the new one.
+LEGACY_HOST_NAME="io.github.blanchot_alice.fluxcatch"
+LEGACY_RUNTIME_DIR="$APP_SUPPORT/FluxCatch"
+if [[ ! -e "$RUNTIME_DIR/config.json" && -f "$LEGACY_RUNTIME_DIR/config.json" && ! -L "$LEGACY_RUNTIME_DIR/config.json" ]]; then
+  cp -p "$LEGACY_RUNTIME_DIR/config.json" "$RUNTIME_DIR/config.json"
+  echo "Carried the saved download folder over from $LEGACY_RUNTIME_DIR/config.json"
+fi
+if [[ -d "$LEGACY_RUNTIME_DIR/native-host" ]]; then
+  rm -rf "$LEGACY_RUNTIME_DIR/native-host"
+  rmdir "$LEGACY_RUNTIME_DIR" 2>/dev/null || true
+fi
+
 DEST_ARGS=()
 for destination in "${DESTINATIONS[@]}"; do
   mkdir -p "$destination"
   DEST_ARGS+=("$destination/$HOST_NAME.json")
+  if [[ -f "$destination/$LEGACY_HOST_NAME.json" ]]; then
+    rm -f "$destination/$LEGACY_HOST_NAME.json"
+    echo "Removed the old native host manifest: $destination/$LEGACY_HOST_NAME.json"
+  fi
 done
 
 "$PYTHON_EXECUTABLE" - "$ROOT/$HOST_NAME.json.in" "$HOST" "$NETWORK_POLICY" "$INSTALLED_HOST" "$INSTALLED_NETWORK_POLICY" "$LAUNCHER" "$PYTHON_COMMAND" "$FFMPEG_COMMAND" "${DEST_ARGS[@]}" <<'PY'
@@ -77,7 +96,7 @@ for source, destination in ((source_host, installed_host), (source_policy, insta
 # the versioned Cellar paths they resolve to: upgrades such as python@3.14
 # 3.14.6 -> 3.14.7 would otherwise orphan the pinned paths the next time
 # `brew cleanup` removes an old Cellar version.
-environment = f"export FLUXCATCH_FFMPEG={shlex.quote(str(ffmpeg))}\n" if ffmpeg else ""
+environment = f"export HAVRE_FFMPEG={shlex.quote(str(ffmpeg))}\n" if ffmpeg else ""
 launcher_text = f"#!/bin/sh\n{environment}exec {shlex.quote(str(python))} {shlex.quote(str(installed_host.resolve()))} \"$@\"\n"
 launcher_tmp = launcher.with_name(f".{launcher.name}.tmp")
 launcher_tmp.write_text(launcher_text, "utf-8")
@@ -109,4 +128,4 @@ echo ""
 echo "Extension ID: gpnojfocoanelgibidlhholjobljefab"
 echo "This package registers the current development build only."
 echo "A future Chrome Web Store build must ship a manifest generated for its official Item ID."
-echo "Reload FluxCatch at chrome://extensions after installation."
+echo "Reload Havre at chrome://extensions after installation."

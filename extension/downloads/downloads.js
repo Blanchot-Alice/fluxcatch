@@ -1,4 +1,4 @@
-// FluxCatch Downloads page (design review §6.15) on the v2 system: the live
+// Havre Downloads page (design review §6.15) on the v2 system: the live
 // download as the one focus panel, then the durable history grouped by day,
 // with the file actions Chrome's own list cannot offer for engine-saved files.
 // All copy comes from ui/v2/messages.js; all formatting follows the one UI
@@ -40,7 +40,7 @@ let initStarted = false;
 // drops the port; the page reconnects and resyncs the history, and says
 // "stopped responding" only when the worker does not come back.
 connectWorkerPort({
-  name: "fluxcatch-downloads",
+  name: "havre-downloads",
   onMessage: (message) => onPortMessage(message),
   onReconnect: () => (initStarted ? refreshHistory({ quiet: true, keepOnError: true }) : true),
   onLost: () => {
@@ -68,7 +68,7 @@ async function init() {
   await Promise.all([readPermissions(), readSettings()]);
   renderStatusLine();
   await refreshHistory();
-  // Files can be moved or deleted outside FluxCatch: ask the engine which
+  // Files can be moved or deleted outside Havre: ask the engine which
   // records still point at a real file, then redraw with the answer.
   void call({ type: "VERIFY_HISTORY" }).then((result) => (result?.checked ? refreshHistory({ quiet: true }) : undefined)).catch(() => {});
 }

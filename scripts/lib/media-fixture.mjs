@@ -2,7 +2,7 @@
 // captured with real detection results instead of their empty states.
 //
 // The server listens on 127.0.0.1 and Chrome reaches it under a public-style
-// name through --host-resolver-rules (see MEDIA_FIXTURE_HOST). FluxCatch's
+// name through --host-resolver-rules (see MEDIA_FIXTURE_HOST). Havre's
 // network policy judges hostnames, so the page is treated like any website;
 // nothing leaves the machine.
 //
@@ -15,7 +15,7 @@
 import http from "node:http";
 
 export const MEDIA_FIXTURE_HOST = "lectures.example.org";
-// The direct MP4 comes from another site, as from a CDN: FluxCatch hides a
+// The direct MP4 comes from another site, as from a CDN: Havre hides a
 // same-site direct MP4 when a stream ladder exists (suppressRedundantVideoCandidates).
 export const MEDIA_FIXTURE_CDN_HOST = "media.example.net";
 export const MEDIA_FIXTURE_PATH = "/watch/lecture-12";

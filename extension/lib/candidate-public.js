@@ -20,7 +20,7 @@ const JWT_PATH_SEGMENT = /^[A-Za-z0-9_-]{12,}\.[A-Za-z0-9_-]{12,}\.[A-Za-z0-9_-]
 // tokens minted by the background worker under this reserved origin. Real
 // playlist URLs never cross the worker -> extension-page boundary, in memory
 // or into storage.session.
-const MANIFEST_SELECTOR_PREFIX = "https://fluxcatch.invalid/manifest/";
+const MANIFEST_SELECTOR_PREFIX = "https://havre.invalid/manifest/";
 const MAX_UI_GROUP_VARIANTS = 16;
 
 function publicTrackHints(hints) {

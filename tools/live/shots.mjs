@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// FluxCatch visual check: open every extension surface in Chrome for Testing
+// Havre visual check: open every extension surface in Chrome for Testing
 // (headless, fresh profile, no network fixtures) in light and dark mode and
 // write PNGs to tools/live/out/shots/. The downloads page is seeded with a few
 // history records through the extension's own storage so rows render.
@@ -67,7 +67,7 @@ function record(id, status, filename, size, media, sourceUrl, sourceTitle, daysA
     finishedAt: endedAt,
     sourceHost: new URL(sourceUrl).hostname,
     elapsedMs: 118_000,
-    path: status === "completed" ? `/Users/you/Downloads/FluxCatch/${filename}` : null,
+    path: status === "completed" ? `/Users/you/Downloads/Havre/${filename}` : null,
     message: message || null,
     error: status === "failed" ? message : null,
     retryable: status !== "completed"
@@ -201,7 +201,7 @@ async function openPage(browser, http, url) {
 async function main() {
   fs.rmSync(OUT, { recursive: true, force: true });
   fs.mkdirSync(OUT, { recursive: true });
-  const profile = fs.mkdtempSync(path.join(os.tmpdir(), "fluxcatch-shots-"));
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), "havre-shots-"));
   try {
     // Session 1 seeds history through a trusted extension page. The worker
     // reads history once at startup, so session 2 starts fresh on the same

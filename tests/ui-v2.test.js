@@ -80,7 +80,7 @@ test("v2 copy exists in both languages, with no locale leaks inside either table
   assert.deepEqual(zh, en, "zh and en tables have the same keys");
   assert.equal(en.length, Object.values(MODULES).reduce((sum, module) => sum + Object.keys(module.en).length, 0), "the merged table holds every module's keys");
   const sample = { name: "clip.mp4", count: 3, size: "3 GB", done: 31, total: 50, time: "0:05", now: "5 MB/s", peak: "6 MB/s" };
-  const LATIN_OK = new Set(["FluxCatch", "Finder", "Mac", "Chrome", "http", "https", "GB", "MB", "clip", "mp4", "yt", "dlp"]);
+  const LATIN_OK = new Set(["Havre", "Finder", "Mac", "Chrome", "http", "https", "GB", "MB", "clip", "mp4", "yt", "dlp"]);
   for (const key of en) {
     setUiLanguage("en");
     const english = typeof MESSAGES.en[key] === "function" ? MESSAGES.en[key](sample) : MESSAGES.en[key];

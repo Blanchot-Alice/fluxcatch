@@ -1,11 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 APP_SUPPORT="$HOME/Library/Application Support"
-HOST_NAME="io.github.blanchot_alice.fluxcatch"
+HOST_NAME="io.github.blanchot_alice.havre"
+# The 0.2.5 host id and runtime folder are removed too (design review v3.3).
+LEGACY_HOST_NAME="io.github.blanchot_alice.fluxcatch"
 DESTINATIONS=(
   "$APP_SUPPORT/Google/Chrome/NativeMessagingHosts/$HOST_NAME.json"
   "$APP_SUPPORT/Google/Chrome for Testing/NativeMessagingHosts/$HOST_NAME.json"
   "$APP_SUPPORT/Chromium/NativeMessagingHosts/$HOST_NAME.json"
+  "$APP_SUPPORT/Google/Chrome/NativeMessagingHosts/$LEGACY_HOST_NAME.json"
+  "$APP_SUPPORT/Google/Chrome for Testing/NativeMessagingHosts/$LEGACY_HOST_NAME.json"
+  "$APP_SUPPORT/Chromium/NativeMessagingHosts/$LEGACY_HOST_NAME.json"
 )
 for destination in "${DESTINATIONS[@]}"; do
   rm -f "$destination"
@@ -16,11 +21,13 @@ clean_runtime() {
   local host_dir="$runtime_dir/native-host"
   rm -f "$host_dir/launcher"
   rm -f "$host_dir/host.py"
+  rm -f "$host_dir/havre_network_policy.py"
   rm -f "$host_dir/fluxcatch_network_policy.py"
   rmdir "$host_dir" 2>/dev/null || true
   rmdir "$runtime_dir" 2>/dev/null || true
 }
 
+clean_runtime "$HOME/Library/Application Support/Havre"
 clean_runtime "$HOME/Library/Application Support/FluxCatch"
 
 printf 'Removed native host registration: %s\n' "${DESTINATIONS[@]}"

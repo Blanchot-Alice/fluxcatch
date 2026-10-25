@@ -1,9 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
-  <!-- FluxCatch mark at 16 px (design review v3 §3.10): the pad and the blossom
-       on the cream disc only. The ring and the two ripples of fluxcatch-mark.svg
-       collapse into a blob at this size, so they are left out here.
-       Colours are the Morning tokens (celadon, rose). -->
-  <circle cx="64" cy="64" r="60" fill="#FAF7F2"/>
-  <path d="M52.4 26A34 34 0 1 1 32 46.4L64 58Z" fill="#8FB8A3"/>
-  <circle cx="92" cy="36" r="9" fill="#E3AFB4"/>
-</svg>

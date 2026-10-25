@@ -1,5 +1,5 @@
 /*
- * FluxCatch site payload extraction (Instagram / X / Pornhub / MissAV / Jable).
+ * Havre site payload extraction (Instagram / X / Pornhub / MissAV / Jable).
  *
  * Loaded as a classic content script before content.js, and imported for unit
  * tests via its globalThis side effect. Pure string parsing: no network, no
@@ -469,6 +469,6 @@
     scriptMayCarryLadder,
     unpackPackedScripts
   };
-  globalThis.__fluxcatchSiteExtract = api;
+  globalThis.__havreSiteExtract = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })();

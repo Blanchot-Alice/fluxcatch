@@ -147,6 +147,9 @@ test("pageAudit stays self-contained and carries the pond and header measurement
   assert.match(source, /pondUnderText/);
   assert.match(source, /result\.header = \{/);
   assert.match(source, /getComputedStyle\(topbar, name\)/);
+  // Rule g exempts the Settings section rule and nothing else (v3.1 §3.2).
+  assert.equal((source.match(/"hr\.section-rule"/g) || []).length, 1, "one selector, one place");
+  assert.match(source, /!el\.matches\("hr\.section-rule"\)/);
   // No reference to module scope: every identifier the function uses it defines or gets from the page.
   assert.doesNotMatch(source, /\bPOND_BAND\b|\bJUDGED_MARGIN_MIN\b|\bimport\(/);
 });

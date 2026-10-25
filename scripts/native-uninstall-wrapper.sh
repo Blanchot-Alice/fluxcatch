@@ -7,7 +7,7 @@ if [[ -x "$SCRIPT_DIR/native-host/uninstall-macos.sh" ]]; then
 elif [[ -x "$SCRIPT_DIR/../native-host/uninstall-macos.sh" ]]; then
   BUNDLE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 else
-  echo "FluxCatch native-host uninstaller was not found beside this wrapper." >&2
+  echo "Havre native-host uninstaller was not found beside this wrapper." >&2
   exit 1
 fi
 

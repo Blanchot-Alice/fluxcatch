@@ -12,10 +12,10 @@ from html.parser import HTMLParser
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 EXT = ROOT / "extension"
-PUBLIC_NAME = "FluxCatch"
-PACKAGE_NAME = "fluxcatch"
+PUBLIC_NAME = "Havre"
+PACKAGE_NAME = "havre"
 LEGACY_SLUG = "mux" + "sift"
-NATIVE_HOST_NAME = "io.github.blanchot_alice.fluxcatch"
+NATIVE_HOST_NAME = "io.github.blanchot_alice.havre"
 HOST_TEMPLATE = ROOT / "native-host" / f"{NATIVE_HOST_NAME}.json.in"
 PUBLIC_TEXT_SUFFIXES = {
     "", ".css", ".html", ".in", ".js", ".json", ".md", ".mjs", ".py", ".sh", ".txt", ".yml", ".yaml"
@@ -144,7 +144,7 @@ def main() -> int:
             manifest.get("description"), messages, "description"
         )
         if localized_name != PUBLIC_NAME or localized_title != PUBLIC_NAME:
-            raise SystemExit(f"Manifest public name does not match FluxCatch in locale {locale}")
+            raise SystemExit(f"Manifest public name does not match Havre in locale {locale}")
         if not localized_description or len(localized_description) > 132:
             raise SystemExit(f"Manifest description must contain 1-132 characters in locale {locale}")
     host_source = (ROOT / "native-host/host.py").read_text("utf-8")

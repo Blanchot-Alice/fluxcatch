@@ -1,4 +1,4 @@
-// FluxCatch v2 component builders (design review §6). Pure DOM, no framework.
+// Havre v2 component builders (design review §6). Pure DOM, no framework.
 // Every builder returns elements that use only the classes in system.css.
 import { msg } from "./messages.js";
 import { formatCount } from "./locale.js";
@@ -35,20 +35,25 @@ export function icon(name) {
   return svg;
 }
 
-const LOGO = '<circle class="logo-cream" cx="64" cy="64" r="60"/><circle class="logo-ring" cx="64" cy="64" r="58.5" stroke-width="3"/><path class="logo-wave" d="M22 100q42-13 84 0" stroke-width="5"/><path class="logo-wave" d="M34 112q30-9 60 0" stroke-width="4" stroke-opacity=".5"/><path class="logo-pad" d="M52.4 26A34 34 0 1 1 32 46.4L64 58Z"/><circle class="logo-bloom" cx="92" cy="36" r="9"/>';
 
-/** BrandMark (§4): logo + “FluxCatch”, sizes s and m, never a subtitle.
+/** BrandMark (§4): logo + “Havre”, sizes s and m, never a subtitle.
  *  It lays its two parts into the parent's lead grid (display: contents). */
 export function brandMark({ size = "m" } = {}) {
   const mark = document.createElement("span");
   mark.className = "brandmark";
   mark.dataset.brandmark = "";
   mark.dataset.size = size;
-  const logo = document.createElementNS(SVG_NS, "svg");
-  logo.setAttribute("viewBox", "0 0 128 128");
+  // The mark is the icon file itself (design review v3.2): a painted disc with
+  // gradients, filters and a mask that no token class could draw. Every
+  // surface page sits one folder below extension/, so the path is the same.
+  // Under 24 px the reflection in the 128 mark turns to noise, so size s
+  // (20 px) shows the dedicated 16 px mark (v3.2 §3.4).
+  const logo = document.createElement("img");
+  logo.className = "brandmark-logo";
+  logo.alt = "";
   logo.setAttribute("aria-hidden", "true");
-  logo.setAttribute("class", "brandmark-logo");
-  logo.innerHTML = LOGO;
+  logo.decoding = "async";
+  logo.src = size === "s" ? "../icons/havre-mark-16.svg" : "../icons/havre-mark.svg";
   const word = document.createElement("span");
   word.className = "t-wordmark";
   word.textContent = msg("brand.name");

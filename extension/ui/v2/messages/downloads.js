@@ -20,9 +20,9 @@ const en = {
   "downloads.clearAction": "Clear history",
   "downloads.loading": "Loading downloads…",
   "downloads.loadFailed": "Couldn’t read downloads",
-  "downloads.disconnected": "FluxCatch stopped responding",
+  "downloads.disconnected": "Havre stopped responding",
   "downloads.empty.none": "No downloads yet.",
-  "downloads.empty.noneBody": "On a video page, click the FluxCatch button in the toolbar, or paste a link above.",
+  "downloads.empty.noneBody": "On a video page, click the Havre button in the toolbar, or paste a link above.",
   "downloads.empty.noMatch": "No downloads match.",
   "downloads.empty.noMatchBody": "Try another word or filter.",
   "downloads.notificationsOff": "Notifications are off"
@@ -46,9 +46,9 @@ const zh = {
   "downloads.clearAction": "清空记录",
   "downloads.loading": "正在读取下载记录…",
   "downloads.loadFailed": "无法读取下载记录",
-  "downloads.disconnected": "FluxCatch 未响应",
+  "downloads.disconnected": "Havre 未响应",
   "downloads.empty.none": "还没有下载记录。",
-  "downloads.empty.noneBody": "在视频页面点击工具栏上的 FluxCatch 按钮开始下载，或在上方粘贴链接。",
+  "downloads.empty.noneBody": "在视频页面点击工具栏上的 Havre 按钮开始下载，或在上方粘贴链接。",
   "downloads.empty.noMatch": "没有符合条件的下载记录。",
   "downloads.empty.noMatchBody": "换个关键词，或切换筛选。",
   "downloads.notificationsOff": "通知已关闭"
