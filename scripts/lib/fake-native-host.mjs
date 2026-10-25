@@ -39,7 +39,7 @@ import { fileURLToPath } from "node:url";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_EXTENSION_DIR = path.resolve(HERE, "..", "..", "extension");
 
-export const DEFAULT_DOWNLOAD_DIR = "/Users/you/Downloads/Havre";
+export const DEFAULT_DOWNLOAD_DIR = "/Users/you/Downloads";
 export const DEFAULT_SCENARIO = Object.freeze({
   total: 812_000_000,
   hold: 0.62,

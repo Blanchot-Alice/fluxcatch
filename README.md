@@ -28,7 +28,7 @@ water and are kept safe.
 
 - **Sees what the page plays.** Direct files, HLS and DASH, read from the requests the page has already made.
 - **Shows the qualities that exist.** Every rendition of a stream sits in one card with a quality menu, and on Bilibili the ladder is the one your own account can play.
-- **Saves through a local engine.** A small Python engine downloads, resumes after a pause, uses parallel range transfers where the server allows them, and merges audio and video with FFmpeg.
+- **Saves through a local engine.** A small Python engine downloads, resumes after a pause, uses parallel range transfers where the server allows them, and merges audio and video with FFmpeg. Files land straight in your Downloads folder, or in one you choose in Settings.
 - **Keeps a record.** Files the engine saves never reach `chrome://downloads`, so Havre keeps its own history, grouped by day, with poster frames, search and Finder actions.
 - **Stays on your machine.** No account, no telemetry, no relay. Cookies stay with their own site and are dropped on every cross-origin hop.
 - **Leaves DRM alone.** Protected media is detected and reported, never decrypted.

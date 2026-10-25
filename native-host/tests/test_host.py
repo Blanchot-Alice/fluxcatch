@@ -1121,7 +1121,7 @@ class HostTests(unittest.TestCase):
             ), mock.patch.object(host, "probe_ffmpeg", return_value=capability):
                 native = host.Host()
                 try:
-                    self.assertEqual(native.download_dir, root / "Downloads" / "Havre")
+                    self.assertEqual(native.download_dir, root / "Downloads", "files go straight into Downloads")
                 finally:
                     native.close()
 
@@ -1145,13 +1145,16 @@ class HostTests(unittest.TestCase):
                 self.assertEqual(host.env_setting("DOWNLOAD_DIR"), str(root / "new"), "the new name wins when both are set")
             with mock.patch.dict(os.environ, {}, clear=True):
                 self.assertIsNone(host.env_setting("DOWNLOAD_DIR"))
-            # A15: an install that saved into the old default folder keeps it; a new install gets the new one.
+            # The default is ~/Downloads itself for every install; the folders
+            # earlier versions created stay where they are, inside it.
             with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(host.Path, "home", return_value=root):
-                self.assertEqual(host.default_download_dir(), root / "Downloads" / "Havre")
+                self.assertEqual(host.default_download_dir(), root / "Downloads")
                 (root / "Downloads" / "FluxCatch").mkdir(parents=True)
-                self.assertEqual(host.default_download_dir(), root / "Downloads" / "FluxCatch")
+                self.assertEqual(host.default_download_dir(), root / "Downloads", "an old default folder does not become the default")
+                self.assertEqual(host.legacy_default_download_dirs(root / "Downloads"), [root / "Downloads" / "FluxCatch"])
                 (root / "Downloads" / "Havre").mkdir()
-                self.assertEqual(host.default_download_dir(), root / "Downloads" / "Havre", "once the new folder exists it is the default")
+                self.assertEqual(host.legacy_default_download_dirs(root / "Downloads"), [root / "Downloads" / "FluxCatch", root / "Downloads" / "Havre"])
+                self.assertEqual(host.legacy_default_download_dirs(root / "Downloads" / "Havre"), [root / "Downloads" / "FluxCatch"], "the current folder is not listed")
             # A2: the 0.2.5 config is copied over once; the old file stays.
             legacy = root / "FluxCatch" / "config.json"
             current = root / "Havre" / "config.json"
@@ -3096,14 +3099,18 @@ class OutputAndFileActionTests(unittest.TestCase):
             root = pathlib.Path(directory)
             now = time.time()
             old = now - 9 * 86_400
+            checkpoint_v2 = json.dumps({"schemaVersion": 2, "urlSha256": "a" * 64, "length": 10, "entity": {}, "completed": []})
             stale_part = root / "old.mp4.part"
             stale_checkpoint = root / "old.mp4.part.json"
             stale_staging = root / f".old.{'0' * 32}.part.mp4"
             fresh_part = root / "fresh.mp4.part"
+            fresh_checkpoint = root / "fresh.mp4.part.json"
             finished = root / "movie.mp4"
             work_dir = root / "havre-hls-crash"
-            for path in (stale_part, stale_checkpoint, stale_staging, fresh_part, finished):
+            for path in (stale_part, stale_staging, fresh_part, finished):
                 path.write_bytes(b"x")
+            for path in (stale_checkpoint, fresh_checkpoint):
+                path.write_text(checkpoint_v2, "utf-8")
             work_dir.mkdir()
             for path in (stale_part, stale_checkpoint, stale_staging, finished):
                 os.utime(path, (old, old))
@@ -3112,8 +3119,68 @@ class OutputAndFileActionTests(unittest.TestCase):
             self.assertFalse(stale_checkpoint.exists())
             self.assertFalse(stale_staging.exists())
             self.assertFalse(work_dir.exists())
-            self.assertTrue(fresh_part.exists(), "a week-old resumable transfer keeps its checkpoint")
+            self.assertTrue(fresh_part.exists() and fresh_checkpoint.exists(), "a resumable transfer younger than a week keeps its checkpoint")
             self.assertTrue(finished.exists(), "published media is never touched")
+
+    def test_cleanup_leaves_other_programs_partial_files_in_downloads(self):
+        """The default folder is ~/Downloads: browsers and other downloaders
+        keep .part files there too, and only this host's own are collected."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            now = time.time()
+            old = now - 30 * 86_400
+            checkpoint_v2 = json.dumps({"schemaVersion": 2, "urlSha256": "b" * 64, "length": 10, "entity": {}, "completed": []})
+            browser_part = root / "installer.dmg.part"
+            browser_part.write_bytes(b"someone else's bytes")
+            foreign_pair = root / "notes.zip.part"
+            foreign_pair.write_bytes(b"x")
+            foreign_json = root / "notes.zip.part.json"
+            foreign_json.write_text(json.dumps({"tool": "other", "progress": 0.5}), "utf-8")
+            unreadable_json = root / "draft.part.json"
+            unreadable_json.write_bytes(b"not json")
+            half_fresh_part = root / "clip.mp4.part"
+            half_fresh_part.write_bytes(b"x")
+            half_fresh_checkpoint = root / "clip.mp4.part.json"
+            half_fresh_checkpoint.write_text(checkpoint_v2, "utf-8")
+            for path in (browser_part, foreign_pair, foreign_json, unreadable_json, half_fresh_part):
+                os.utime(path, (old, old))
+            host.cleanup_stale_workdirs(root, now=now)
+            self.assertTrue(browser_part.exists(), "a .part without this host's checkpoint is left alone")
+            self.assertTrue(foreign_pair.exists() and foreign_json.exists(), "another program's checkpoint is not this host's")
+            self.assertEqual(unreadable_json.read_bytes(), b"not json", "a file that is not a checkpoint is neither removed nor rewritten")
+            self.assertTrue(half_fresh_part.exists() and half_fresh_checkpoint.exists(), "a pair goes together while either half is younger than a week")
+            self.assertFalse(host.is_own_checkpoint(foreign_json))
+            self.assertTrue(host.is_own_checkpoint(half_fresh_checkpoint))
+
+    def test_startup_sweeps_old_default_folders_with_the_same_rule(self):
+        capability = host.FfmpegCapabilities(path="/fixture/ffmpeg")
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            old_folder = root / "Downloads" / "FluxCatch"
+            old_folder.mkdir(parents=True)
+            old = time.time() - 30 * 86_400
+            checkpoint_v2 = json.dumps({"schemaVersion": 2, "urlSha256": "c" * 64, "length": 10, "entity": {}, "completed": []})
+            own_part = old_folder / "talk.mp4.part"
+            own_part.write_bytes(b"x")
+            own_checkpoint = old_folder / "talk.mp4.part.json"
+            own_checkpoint.write_text(checkpoint_v2, "utf-8")
+            saved = old_folder / "talk-earlier.mp4"
+            saved.write_bytes(b"kept")
+            foreign = root / "Downloads" / "installer.dmg.part"
+            foreign.write_bytes(b"x")
+            for path in (own_part, own_checkpoint, saved, foreign):
+                os.utime(path, (old, old))
+            with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(
+                host.Path, "home", return_value=root
+            ), mock.patch.object(host, "probe_ffmpeg", return_value=capability):
+                native = host.Host()
+                try:
+                    self.assertEqual(native.download_dir, root / "Downloads")
+                finally:
+                    native.close()
+            self.assertFalse(own_part.exists() or own_checkpoint.exists(), "this host's stale pair in the old folder is collected")
+            self.assertTrue(saved.exists(), "saved files in the old folder stay where they are")
+            self.assertTrue(foreign.exists(), "another program's .part in Downloads is left alone")
 
     def test_single_download_rejects_truncated_close_delimited_bodies(self):
         with tempfile.TemporaryDirectory() as directory:
