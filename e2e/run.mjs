@@ -554,6 +554,10 @@ async function runCase(definition, devtoolsOrigin) {
     // GET_TAB_MEDIA call. Reading extension UI state must not be what causes
     // the toolbar badge to appear.
     const badgeSamples = [];
+    // background.js updateBadge writes the badge text first and the title a
+    // moment later, so the badge count can read "1" while the title is still
+    // the previous one; wait for both within the same budget.
+    const expectedFoundTitle = workerCopy["worker.action.found"]({ count: 1 });
     let badgeBeforeRead;
     try {
       badgeBeforeRead = await poll(async () => {
@@ -564,9 +568,9 @@ async function runCase(definition, devtoolsOrigin) {
           ]);
           return { text, title };
         }`);
-        badgeSamples.push({ at: Date.now() - startedAt, text: value?.text ?? null });
-        return value?.text === "1" ? value : null;
-      }, BADGE_APPEAR_TIMEOUT_MS, `${definition.name} automatic toolbar badge before media UI read`);
+        badgeSamples.push({ at: Date.now() - startedAt, text: value?.text ?? null, title: value?.title ?? null });
+        return value?.text === "1" && value?.title === expectedFoundTitle ? value : null;
+      }, BADGE_APPEAR_TIMEOUT_MS, `${definition.name} automatic toolbar badge and title before media UI read`);
     } catch (error) {
       // Keep what the worker had when the budget ran out: the badge values
       // seen and the tab's candidate list, so a slow machine and a missing
@@ -580,7 +584,7 @@ async function runCase(definition, devtoolsOrigin) {
     }
     assert.equal(badgeBeforeRead.text, "1", `${definition.name} toolbar badge count mismatch`);
     // background.js updateBadge: workerText("worker.action.found", { count }) from ui/v2/messages/worker.js.
-    assert.equal(badgeBeforeRead.title, workerCopy["worker.action.found"]({ count: 1 }),
+    assert.equal(badgeBeforeRead.title, expectedFoundTitle,
       `${definition.name} toolbar title did not describe the detected media`);
     item.badgeBeforeRead = badgeBeforeRead;
 
