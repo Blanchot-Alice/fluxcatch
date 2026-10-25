@@ -25,7 +25,7 @@ export const BUILD_PROFILE = Object.freeze({
 // temporary staging directory. Loading extension/ unpacked must never claim
 // to be an immutable release artifact from a commit it may no longer match.
 export const BUILD_IDENTITY = Object.freeze({
-  extensionVersion: "0.2.5",
+  extensionVersion: "0.3.0",
   channel: BUILD_PROFILE.channel,
   commit: "development",
   buildTimestamp: null,

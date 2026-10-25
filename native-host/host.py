@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""FluxCatch native-messaging host.
+"""Havre native-messaging host.
 
 Only JSON control messages traverse Native Messaging. Media bytes are fetched
 and written by this process, avoiding Chrome's message-size and MV3 lifetime
@@ -46,7 +46,7 @@ _NATIVE_HOST_ROOT = str(Path(__file__).resolve().parent)
 if _NATIVE_HOST_ROOT not in sys.path:
     sys.path.insert(0, _NATIVE_HOST_ROOT)
 
-from fluxcatch_network_policy import (  # noqa: E402 - local host package
+from havre_network_policy import (  # noqa: E402 - local host package
     NetworkPolicy,
     NetworkPolicyError,
     current_network_policy,
@@ -56,22 +56,37 @@ from fluxcatch_network_policy import (  # noqa: E402 - local host package
     set_current_network_policy,
 )
 
-VERSION = "0.2.5"
+VERSION = "0.3.0"
 NATIVE_PROTOCOL_VERSION = 1
 CAPABILITY_PROFILE_VERSION = 1
 MAX_MESSAGE = 1024 * 1024
 # Completion/file-action surface shared with the extension's download history.
-COMPLETE_MESSAGE = "已保存到 FluxCatch 文件夹"
+COMPLETE_MESSAGE = "已保存到 Havre 文件夹"
 HISTORY_THUMBNAIL_MAX_BYTES = 48_000
 FILE_ACTION_TIMEOUT_SECONDS = 20.0
 MEDIA_PROBE_TIMEOUT_SECONDS = 15.0
 STALE_PARTIAL_TTL_SECONDS = 7 * 24 * 3600
 OPEN_COMMAND = "/usr/bin/open"
 OSASCRIPT_COMMAND = "/usr/bin/osascript"
-CONFIG_PATH = Path(os.environ.get("FLUXCATCH_CONFIG") or (Path.home() / "Library" / "Application Support" / "FluxCatch" / "config.json"))
+LEGACY_ENV_PREFIX = "FLUXCATCH_"
+
+
+def env_setting(name: str) -> str | None:
+    """HAVRE_<name>, or the 0.2.5 FLUXCATCH_<name> for one release (design
+    review v3.3 §2.2, A11), so a launcher written by the old installer still
+    finds its FFmpeg until the user reinstalls."""
+    value = os.environ.get(f"HAVRE_{name}")
+    if value is None:
+        value = os.environ.get(f"{LEGACY_ENV_PREFIX}{name}")
+    return value
+
+
+CONFIG_PATH = Path(env_setting("CONFIG") or (Path.home() / "Library" / "Application Support" / "Havre" / "config.json"))
+# 0.2.5 kept its config under the old product name (v3.3 A2).
+LEGACY_CONFIG_PATH = Path.home() / "Library" / "Application Support" / "FluxCatch" / "config.json"
 MAX_KNOWN_DOWNLOAD_DIRS = 8
 CHOOSE_FOLDER_TIMEOUT_SECONDS = 300
-CHOOSE_FOLDER_PROMPT = "选择 FluxCatch 的保存位置"
+CHOOSE_FOLDER_PROMPT = "选择 Havre 的保存位置"
 FILE_ACTIONS = frozenset({"reveal", "open", "open_folder", "trash", "stat"})
 MAX_FILE_STAT_PATHS = 300
 MAX_MANIFEST = 4 * 1024 * 1024
@@ -79,7 +94,7 @@ MAX_MANIFEST = 4 * 1024 * 1024
 # then fails the job with a diagnosable timeout instead of hanging forever.
 MANIFEST_FETCH_TIMEOUT_SECONDS = 20
 ALLOWED_HEADERS = {"accept", "authorization", "cookie", "origin", "referer", "user-agent"}
-USER_AGENT = f"Mozilla/5.0 FluxCatch/{VERSION}"
+USER_AGENT = f"Mozilla/5.0 Havre/{VERSION}"
 SENSITIVE_REDIRECT_HEADERS = {"authorization", "cookie", "origin", "referer"}
 CONDITIONAL_REDIRECT_HEADERS = {
     "if-range",
@@ -117,15 +132,26 @@ EXTERNAL_TOOL_MAX_INSPECT_BYTES = 24 * 1024 * 1024
 EXTERNAL_TOOL_MAX_TUNNELS = 64
 EXTERNAL_TOOL_BROKER_PORTS = frozenset({80, 443})
 EXTERNAL_TOOL_TUNNEL_IDLE_SECONDS = 300
-YTDLP_WORK_PREFIX = ".fluxcatch-ytdlp-"
+YTDLP_WORK_PREFIX = ".havre-ytdlp-"
 YTDLP_MAX_HEIGHT = 8640
-DASH_PAIR_WORK_PREFIX = ".fluxcatch-dash-pair-"
-TEMP_WORK_PREFIXES = (
-    DASH_PAIR_WORK_PREFIX,
+DASH_PAIR_WORK_PREFIX = ".havre-dash-pair-"
+# Work directories 0.2.5 left in the download folder keep their names (v3.3
+# A10): the stale sweep, the folder confinement and the pause-marker check
+# recognise them for one release, so a job paused before the rename resumes.
+LEGACY_TEMP_WORK_PREFIXES = (
+    ".fluxcatch-dash-pair-",
     "fluxcatch-hls-",
     "fluxcatch-dash-",
     ".fluxcatch-convert-",
+    ".fluxcatch-ytdlp-",
+)
+TEMP_WORK_PREFIXES = (
+    DASH_PAIR_WORK_PREFIX,
+    "havre-hls-",
+    "havre-dash-",
+    ".havre-convert-",
     YTDLP_WORK_PREFIX,
+    *LEGACY_TEMP_WORK_PREFIXES,
 )
 DASH_PAIR_EXPIRY_SAFETY_SECONDS = 30.0
 
@@ -332,9 +358,9 @@ class YtDlpCapabilities:
 def probe_ytdlp(path: str | None = None) -> YtDlpCapabilities:
     """Report whether a usable yt-dlp is installed on this Mac.
 
-    FluxCatch does not bundle yt-dlp: YouTube changes faster than FluxCatch
+    Havre does not bundle yt-dlp: YouTube changes faster than Havre
     releases, and a bundled copy would pin users to a stale extractor. The
-    engine looks for an installed copy instead. FLUXCATCH_YTDLP pins an
+    engine looks for an installed copy instead. HAVRE_YTDLP pins an
     explicit executable; otherwise PATH plus the Homebrew/pip install
     locations are probed on every ping, so installing or upgrading yt-dlp
     takes effect at the next "Retry" without reinstalling the engine.
@@ -636,15 +662,15 @@ def dash_pair_headers(
 
 
 _ACTIVE_AUTHORIZED_TARGET: contextvars.ContextVar[Any | None] = contextvars.ContextVar(
-    "fluxcatch_active_authorized_target",
+    "havre_active_authorized_target",
     default=None,
 )
 _ACTIVE_REQUEST_HEADERS: contextvars.ContextVar[dict[str, str] | None] = contextvars.ContextVar(
-    "fluxcatch_active_request_headers",
+    "havre_active_request_headers",
     default=None,
 )
 _ACTIVE_VIA_SYSTEM_PROXY: contextvars.ContextVar[bool] = contextvars.ContextVar(
-    "fluxcatch_active_via_system_proxy",
+    "havre_active_via_system_proxy",
     default=False,
 )
 
@@ -757,7 +783,7 @@ _PROXY_HANDLER_CHAIN: tuple[Any, ...] = (
 
 def _system_proxies() -> dict[str, str]:
     """Best-effort HTTP(S) proxies from the OS network configuration."""
-    if os.environ.get("FLUXCATCH_DISABLE_SYSTEM_PROXY") == "1":
+    if env_setting("DISABLE_SYSTEM_PROXY") == "1":
         return {}
     try:
         discovered = urllib.request.getproxies()
@@ -885,7 +911,7 @@ def request(url: str, headers: dict[str, str], *, method: str = "GET", timeout: 
         _validate_connected_response(response, policy, final_target)
         # Keep only reusable, allow-listed request headers.  Per-request
         # controls such as Range must not flow from a manifest into children.
-        response._fluxcatch_request_headers = dict(_ACTIVE_REQUEST_HEADERS.get() or {})
+        response._havre_request_headers = dict(_ACTIVE_REQUEST_HEADERS.get() or {})
         return response
     except NetworkPolicyError as error:
         if response is not None:
@@ -1098,12 +1124,31 @@ def commit_file(source: Path, target: Path) -> Path:
 
 
 def default_download_dir() -> Path:
-    return Path.home() / "Downloads" / "FluxCatch"
+    """~/Downloads/Havre for a new install. An install that saved into
+    ~/Downloads/FluxCatch and never chose a folder keeps using it, so nothing
+    moves under the user (v3.3 A15)."""
+    home = Path.home()
+    current = home / "Downloads" / "Havre"
+    legacy = home / "Downloads" / "FluxCatch"
+    if legacy.is_dir() and not legacy.is_symlink() and not current.exists():
+        return legacy
+    return current
 
 
-def load_host_config(path: Path = CONFIG_PATH) -> dict[str, Any]:
+def load_host_config(path: Path = CONFIG_PATH, legacy_path: Path | None = None) -> dict[str, Any]:
     """The host's own small config: the chosen save folder and the folders
-    that were chosen before (so files saved there stay openable)."""
+    that were chosen before (so files saved there stay openable). A config
+    written by 0.2.5 under the old product name is copied over once when
+    the new file is missing; the old file stays for the old uninstaller
+    (v3.3 A2)."""
+    if legacy_path is None and path == CONFIG_PATH:
+        legacy_path = LEGACY_CONFIG_PATH
+    if legacy_path is not None and not path.exists() and legacy_path.is_file() and not legacy_path.is_symlink():
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(legacy_path, path)
+        except OSError:
+            pass
     try:
         if path.is_symlink() or not path.is_file() or path.stat().st_size > 64 * 1024:
             return {}
@@ -1140,9 +1185,9 @@ def validate_download_dir(value: Any) -> Path:
 
 
 def resolve_download_dir(config: dict[str, Any] | None = None) -> Path:
-    """Precedence: FLUXCATCH_DOWNLOAD_DIR (tests, harnesses) > the folder the
-    user chose > ~/Downloads/FluxCatch."""
-    configured = os.environ.get("FLUXCATCH_DOWNLOAD_DIR")
+    """Precedence: HAVRE_DOWNLOAD_DIR (tests, harnesses) > the folder the
+    user chose > ~/Downloads/Havre."""
+    configured = env_setting("DOWNLOAD_DIR")
     if configured:
         directory = Path(configured).expanduser()
         directory.mkdir(parents=True, exist_ok=True)
@@ -2021,7 +2066,7 @@ def _manifest_fetch_bounded(
                 holder["value"] = ManifestFetchResult(
                     text=read_limited(response, MAX_MANIFEST).decode("utf-8-sig", "replace"),
                     final_url=valid_url(response.geturl()),
-                    request_headers=dict(getattr(response, "_fluxcatch_request_headers", {})),
+                    request_headers=dict(getattr(response, "_havre_request_headers", {})),
                 )
             finally:
                 streamed = holder.get("response")
@@ -2047,7 +2092,7 @@ def _manifest_fetch_bounded(
             reset_current_network_policy(token)
             finished.set()
 
-    reader = threading.Thread(target=worker, daemon=True, name="fluxcatch-manifest-fetch")
+    reader = threading.Thread(target=worker, daemon=True, name="havre-manifest-fetch")
     reader.start()
     host_name = urllib.parse.urlsplit(url).hostname or urllib.parse.urlsplit(url).netloc or "unknown"
     if not finished.wait(MANIFEST_FETCH_TIMEOUT_SECONDS):
@@ -2076,7 +2121,7 @@ def _manifest_fetch_bounded(
 # the text in place of its own fetch for exactly those addresses; every child
 # the text names still goes through the pinned client and the network policy.
 _PRELOADED_MANIFESTS: contextvars.ContextVar[dict[str, str]] = contextvars.ContextVar(
-    "fluxcatch_preloaded_manifests",
+    "havre_preloaded_manifests",
     default={},
 )
 MAX_PRELOADED_MANIFESTS = 4
@@ -2361,7 +2406,7 @@ _DASH_TEMPLATE_TOKEN = re.compile(r"\$(RepresentationID|Bandwidth|Number|Time)(?
 
 
 def _dash_template_value(template: str, representation_id: str, bandwidth: int, number: int, time_value: int) -> str:
-    sentinel = "\x00FLUXCATCH-DOLLAR\x00"
+    sentinel = "\x00HAVRE-DOLLAR\x00"
     source = template.replace("$$", sentinel)
 
     def replace(match: re.Match[str]) -> str:
@@ -2820,7 +2865,7 @@ def dash_static_download(
         raise UnsupportedDashError("the selected DASH MPD has no audio Representation")
     if extract_audio:
         tracks = [audio]
-    work_dir = resume_segment_work_dir(target, manifest_url, "fluxcatch-dash-", "dash")
+    work_dir = resume_segment_work_dir(target, manifest_url, "havre-dash-", "dash")
     state = {"bytes": 0, "completed": 0, "resources": sum(len(track.resources) for track in tracks)}
     state_lock = threading.Lock()
     keep_work_dir = False
@@ -2931,9 +2976,9 @@ def validate_hls_static_media(
     # AES-128 playlists pass: segments stage raw and FFmpeg's local HLS
     # demuxer decrypts them against a rewritten local playlist.
     if playlist.live:
-        raise DownloadError(f"Live {scope} recording is not supported in FluxCatch {VERSION}")
+        raise DownloadError(f"Live {scope} recording is not supported in Havre {VERSION}")
     if playlist.discontinuity:
-        raise DownloadError(f"Discontinuous {scope} is not supported in FluxCatch {VERSION}")
+        raise DownloadError(f"Discontinuous {scope} is not supported in Havre {VERSION}")
     if playlist.separate_audio:
         raise DownloadError(f"Nested separate-audio {scope} is not supported")
     if require_segments and not playlist.segments:
@@ -3028,7 +3073,7 @@ def hls_fast_download(
     if any(current.encrypted and current.protection == "aes128" for _label, current, _text in planned_playlists) and not ffmpeg:
         raise DownloadError("AES-128 HLS requires FFmpeg")
 
-    temp_dir = resume_segment_work_dir(target, url, "fluxcatch-hls-", "hls")
+    temp_dir = resume_segment_work_dir(target, url, "havre-hls-", "hls")
     total_segments = sum(
         len(current.segments) + (1 if current.init_map else 0)
         for _label, current, _text in planned_playlists
@@ -3465,7 +3510,7 @@ def dash_pair_download(
                 label = "video" if kind == "video" else "audio"
                 raise DownloadError(f"DASH {label} track download failed: {error}") from error
 
-        pool = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="fluxcatch-dash-pair")
+        pool = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="havre-dash-pair")
         futures = [
             _submit_with_context(pool, fetch_track, "video", video_url, video_path, video_headers),
             _submit_with_context(pool, fetch_track, "audio", audio_url, audio_path, audio_headers),
@@ -3914,7 +3959,7 @@ class ExternalToolBroker:
 
     def __init__(self, policy: NetworkPolicy | None = None) -> None:
         self.policy = policy or current_network_policy()
-        self.username = "fluxcatch"
+        self.username = "havre"
         self.token = base64.urlsafe_b64encode(os.urandom(24)).decode("ascii").rstrip("=")
         self._server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._server.bind(("127.0.0.1", 0))
@@ -3926,7 +3971,7 @@ class ExternalToolBroker:
         self._sockets: set[socket.socket] = set()
         self.tunnels = 0
         self.rejections: list[str] = []
-        self._thread = threading.Thread(target=self._serve, name="fluxcatch-broker", daemon=True)
+        self._thread = threading.Thread(target=self._serve, name="havre-broker", daemon=True)
         self._thread.start()
 
     @property
@@ -4060,7 +4105,7 @@ class ExternalToolBroker:
                 if separator:
                     headers[name.strip().lower()] = value.strip()
             if not self._authorized(headers.get("proxy-authorization", "")):
-                self._reply(conn, 407, "Proxy authentication required", 'Proxy-Authenticate: Basic realm="FluxCatch"\r\n')
+                self._reply(conn, 407, "Proxy authentication required", 'Proxy-Authenticate: Basic realm="Havre"\r\n')
                 return
             host, port = self._parse_target(parts[1])
             if port not in EXTERNAL_TOOL_BROKER_PORTS:
@@ -4077,7 +4122,7 @@ class ExternalToolBroker:
             with self._lock:
                 if len(self.rejections) < 32:
                     self.rejections.append(redact_text(error))
-            self._reply(conn, 403, "Blocked by FluxCatch network policy")
+            self._reply(conn, 403, "Blocked by Havre network policy")
         except (OSError, ValueError, UnicodeError):
             self._reply(conn, 502, "Upstream connection failed")
         finally:
@@ -4203,10 +4248,10 @@ def ytdlp_format_args(container: str, extract_audio: bool, max_height: int = 0) 
 
 
 YTDLP_DOWNLOAD_TEMPLATE = (
-    "download:FLUXCATCH\t%(progress.status)s\t%(progress.downloaded_bytes)s\t%(progress.total_bytes)s"
+    "download:HAVRE\t%(progress.status)s\t%(progress.downloaded_bytes)s\t%(progress.total_bytes)s"
     "\t%(progress.total_bytes_estimate)s\t%(progress.speed)s\t%(progress.fragment_index)s\t%(progress.fragment_count)s"
 )
-YTDLP_POSTPROCESS_TEMPLATE = "postprocess:FLUXCATCH_PP\t%(progress.status)s\t%(postprocessor)s"
+YTDLP_POSTPROCESS_TEMPLATE = "postprocess:HAVRE_PP\t%(progress.status)s\t%(postprocessor)s"
 
 
 def _ytdlp_number(value: str) -> float:
@@ -4306,7 +4351,7 @@ def youtube_download(
     def consume_line(line: str) -> None:
         nonlocal finished_bytes, current_bytes, current_total, phase_message
         fields = line.rstrip("\r\n").split("\t")
-        if fields[0] == "FLUXCATCH" and len(fields) >= 8:
+        if fields[0] == "HAVRE" and len(fields) >= 8:
             status = fields[1]
             downloaded = _ytdlp_number(fields[2])
             total = _ytdlp_number(fields[3]) or _ytdlp_number(fields[4])
@@ -4336,7 +4381,7 @@ def youtube_download(
             if total_bytes:
                 payload["progress"] = min(0.99, done_bytes / total_bytes)
             progress.report(payload)
-        elif fields[0] == "FLUXCATCH_PP" and len(fields) >= 3:
+        elif fields[0] == "HAVRE_PP" and len(fields) >= 3:
             if fields[1] == "started":
                 progress.status("remuxing", f"正在合并音视频 · {fields[2]}", bytes=finished_bytes, total=0)
 
@@ -4596,7 +4641,7 @@ def make_thumbnail(path: Path, ffmpeg: str | None, duration: float = 0.0) -> str
     if not ffmpeg:
         return None
     seek = min(3.0, duration * 0.1) if duration and duration > 1 else 0.0
-    work_dir = Path(tempfile.mkdtemp(prefix="fluxcatch-thumb-"))
+    work_dir = Path(tempfile.mkdtemp(prefix="havre-thumb-"))
     try:
         for scale, quality in ((360, 8), (240, 14)):
             output = work_dir / f"poster-{scale}.jpg"
@@ -4633,15 +4678,15 @@ class Host:
         self.jobs_lock = threading.Lock()
         self.targets_lock = threading.Lock()
         self.reserved_targets: set[Path] = set()
-        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=MAX_CONCURRENT_JOBS + 2, thread_name_prefix="fluxcatch-job")
+        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=MAX_CONCURRENT_JOBS + 2, thread_name_prefix="havre-job")
         # Admitted jobs beyond the user's concurrency setting wait here; the
         # setting travels with every download message and applies at once.
         self.job_limit = DEFAULT_CONCURRENT_JOBS
         self.running_jobs = 0
         self.slots = threading.Condition()
-        self.ffmpeg_capabilities = probe_ffmpeg(os.environ.get("FLUXCATCH_FFMPEG") or None)
+        self.ffmpeg_capabilities = probe_ffmpeg(env_setting("FFMPEG") or None)
         self.ffmpeg = self.ffmpeg_capabilities.path or None
-        self.ytdlp_capabilities = probe_ytdlp(os.environ.get("FLUXCATCH_YTDLP") or None)
+        self.ytdlp_capabilities = probe_ytdlp(env_setting("YTDLP") or None)
         self.ytdlp = self.ytdlp_capabilities.path if self.ytdlp_capabilities.available else None
         self.config = load_host_config()
         self.download_dir = resolve_download_dir(self.config)
@@ -4662,7 +4707,7 @@ class Host:
         if kind == "ping":
             # Re-probe on every ping: installing or upgrading yt-dlp after the
             # engine started takes effect at the next "Retry" in Settings.
-            self.ytdlp_capabilities = probe_ytdlp(os.environ.get("FLUXCATCH_YTDLP") or None)
+            self.ytdlp_capabilities = probe_ytdlp(env_setting("YTDLP") or None)
             self.ytdlp = self.ytdlp_capabilities.path if self.ytdlp_capabilities.available else None
             self.send({
                 "type": "pong",
@@ -4989,7 +5034,7 @@ class Host:
                 if extract_audio or options.get("convert"):
                     if not self.ffmpeg:
                         raise DownloadError("Conversion requires FFmpeg")
-                    work_dir = Path(tempfile.mkdtemp(prefix=".fluxcatch-convert-", dir=str(self.download_dir)))
+                    work_dir = Path(tempfile.mkdtemp(prefix=".havre-convert-", dir=str(self.download_dir)))
                     raw_target = work_dir / f"source{source_suffix}"
                 raw_target = multipart_download(url, raw_target, headers, concurrent_ranges, cancel, progress)
                 if extract_audio or options.get("convert"):
@@ -5113,7 +5158,7 @@ class Host:
                 "downloadDir": str(directory) if directory != default_download_dir() else "",
                 "knownDownloadDirs": [str(path) for path in self.known_download_dirs],
             }
-            if os.environ.get("FLUXCATCH_DOWNLOAD_DIR") is None:
+            if env_setting("DOWNLOAD_DIR") is None:
                 save_host_config(self.config)
         cleanup_stale_workdirs(directory)
 
@@ -5230,7 +5275,7 @@ def main() -> int:
         for message in read_messages():
             host.handle(message)
     except Exception as error:  # Native Messaging logs stderr in Chrome diagnostics.
-        print(f"FluxCatch host error: {redact_text(error)}", file=sys.stderr)
+        print(f"Havre host error: {redact_text(error)}", file=sys.stderr)
         # ``traceback.print_exc`` would append the original exception message,
         # which can contain a signed query string from a third-party library.
         for frame in traceback.format_tb(error.__traceback__):

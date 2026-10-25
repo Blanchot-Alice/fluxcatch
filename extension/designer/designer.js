@@ -1,5 +1,5 @@
-// FluxCatch UI editor (a developer tool: Settings -> Lab -> Developer).
-// Edits the layout values of the fluxcatch.uiCustomization.v1 record: spacing,
+// Havre UI editor (a developer tool: Settings -> Lab -> Developer).
+// Edits the layout values of the havre.uiCustomization.v1 record: spacing,
 // width, text size, corner radius and accent. Settings applies them only while
 // Developer tools is on. Copy is not editable: v2 copy is never overridden
 // (rename table, §5 note); copy saved by older editors stays in the record
@@ -175,7 +175,7 @@ function exportJson() {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
-  anchor.download = "fluxcatch-ui.json";
+  anchor.download = "havre-ui.json";
   anchor.hidden = true;
   document.body.append(anchor);
   anchor.click();

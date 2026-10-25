@@ -1,4 +1,4 @@
-// FluxCatch v2 form and frame controls (design review §6.2, §6.3, §6.12,
+// Havre v2 form and frame controls (design review §6.2, §6.3, §6.12,
 // §6.13): select, switch, text and number fields, the Settings row and nav,
 // the popup-sized dialog and the segmented control. Pure DOM; styles in
 // system.css; tokens only. Every control is a native element (or a button

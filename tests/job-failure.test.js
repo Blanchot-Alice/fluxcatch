@@ -13,7 +13,7 @@ import {
 const read = (relative) => readFileSync(new URL(`../${relative}`, import.meta.url), "utf8");
 
 const HOST_PY = read("native-host/host.py");
-const POLICY_PY = read("native-host/fluxcatch_network_policy.py");
+const POLICY_PY = read("native-host/havre_network_policy.py");
 const BACKGROUND_JS = read("extension/background.js");
 
 function pythonConstant(source, name) {
@@ -66,7 +66,7 @@ const PLANNER = (detail) =>
   `The pinned built-in static DASH planner could not handle this MPD: ${detail}. Direct network access by /opt/homebrew/bin/ffmpeg (version 7.1) is disabled; this structure needs pinned broker support`;
 
 // [input, expected code, expected params (exact)]. Text follows the real
-// templates in native-host/host.py, fluxcatch_network_policy.py and
+// templates in native-host/host.py, havre_network_policy.py and
 // extension/background.js.
 const SAMPLES = [
   ["HLS media segment 11 failed: HTTP 403 for https://example.tv/…", "http_forbidden",
@@ -155,8 +155,8 @@ const SAMPLES = [
   [PLANNER("selected DASH video Representation is no longer present"), "quality_unavailable", {}],
   ["Selected HLS variant references a missing external audio group", "audio_track_missing", {}],
   ["未找到可配对的音轨，请重新扫描页面", "audio_track_missing", {}],
-  ["Live audio HLS recording is not supported in FluxCatch 0.2.5", "stream_live", { track: "audio" }],
-  ["Discontinuous HLS is not supported in FluxCatch 0.2.5", "stream_discontinuous", {}],
+  ["Live audio HLS recording is not supported in Havre 0.3.0", "stream_live", { track: "audio" }],
+  ["Discontinuous HLS is not supported in Havre 0.3.0", "stream_discontinuous", {}],
   ["Nested separate-audio HLS is not supported", "stream_nested_audio", {}],
   ["HLS playlist has no downloadable static VOD segments", "stream_empty", {}],
   ["Invalid HLS playlist", "stream_invalid", {}],
@@ -193,8 +193,8 @@ const SAMPLES = [
   ["HLS media segment 5 failed: [Errno 28] No space left on device", "disk_full", {}],
   ["DASH audio/video merge failed: FFmpeg failed (228): av_interleaved_write_frame(): No space left on device", "disk_full", {}],
   [{ browserReason: "FILE_NO_SPACE" }, "disk_full", {}],
-  [redactJobText("[Errno 2] No such file or directory: '/Users/me/Downloads/FluxCatch/.fluxcatch-dash-pair-1'", 240), "folder_unavailable", {}],
-  [redactJobText("[Errno 13] Permission denied: '/Volumes/Drive/FluxCatch/clip.mp4'", 240), "folder_not_writable", {}],
+  [redactJobText("[Errno 2] No such file or directory: '/Users/me/Downloads/Havre/.havre-dash-pair-1'", 240), "folder_unavailable", {}],
+  [redactJobText("[Errno 13] Permission denied: '/Volumes/Drive/Havre/clip.mp4'", 240), "folder_not_writable", {}],
   [{ browserReason: "FILE_ACCESS_DENIED" }, "folder_not_writable", {}],
   ["Could not allocate an output filename", "output_name_unavailable", {}],
   [redactJobText("Could not publish output safely: [Errno 18] Cross-device link: '/Users/me/a.part' -> '/Users/me/a.mp4'", 240), "disk_write_failed", {}],
@@ -240,7 +240,7 @@ const SAMPLES = [
   ["消息来源未通过校验", "invalid_request", {}],
   ["Unknown message type: SOMETHING", "invalid_request", {}],
   ["商店版本不支持从此平台下载", "site_not_supported", {}],
-  ["该域名已在 FluxCatch 设置中被忽略", "site_ignored", {}],
+  ["该域名已在 Havre 设置中被忽略", "site_ignored", {}],
   ["该地址被当前设置忽略（域名屏蔽或小于最小媒体大小）", "ignored_by_settings", {}],
   ["网络策略已阻止 https://media.example.tv/…（download_requires_observation_or_user_action）", "download_not_allowed", {}],
   ["网络策略已阻止 http://192.168.1.20/…（blocked_private）", "private_network_blocked", { host: "192.168.1.20" }],
@@ -251,14 +251,14 @@ const SAMPLES = [
   ["无法读取这个地址的类型，请确认链接可以直接打开（HTTP 403）", "url_unreadable", {}],
   ["读取媒体清单超时（12 秒无响应）", "playlist_timeout", { seconds: 12 }],
   ["所选 DASH 清晰度已失效，请重新读取清晰度", "quality_unavailable", {}],
-  ["FluxCatch 0.2.5 暂不支持 HLS 直播录制", "stream_live", {}],
-  ["FluxCatch 0.2.5 暂不支持包含时间线切换的 HLS 下载", "stream_discontinuous", {}],
-  ["0.2.5 暂停外部引擎联网，等待受控网络代理", "external_tool_disabled", {}],
+  ["Havre 0.3.0 暂不支持 HLS 直播录制", "stream_live", {}],
+  ["Havre 0.3.0 暂不支持包含时间线切换的 HLS 下载", "stream_discontinuous", {}],
+  ["0.3.0 暂停外部引擎联网，等待受控网络代理", "external_tool_disabled", {}],
   ["媒体清单超出大小限制", "stream_too_large", {}],
   ["找不到这条下载记录", "record_missing", {}],
   ["只有已完成的下载才能打开文件", "file_not_ready", {}],
   ["文件已不在下载文件夹中", "file_missing", {}],
-  ["这个文件不在 FluxCatch 的下载文件夹里，请在 Finder 中打开", "file_outside_folder", {}],
+  ["这个文件不在 Havre 的下载文件夹里，请在 Finder 中打开", "file_outside_folder", {}],
   ["无法移到废纸篓，请在 Finder 中操作", "trash_failed", {}],
   ["操作失败，请在 Finder 中手动打开", "file_action_failed", {}],
   ["无法更改保存位置", "folder_change_failed", {}],
@@ -329,7 +329,7 @@ test("nativeCode and browserReason win over text", () => {
 });
 
 const CJK = /[⺀-〿㐀-䶿一-鿿豈-﫿＀-￯]/;
-const ZH_LATIN_ALLOWED = new Set(["FluxCatch", "Chrome", "Mac", "HTTP", "MP3", "MP4", "Finder", "macOS", "http", "https", "YouTube", "yt-dlp"]);
+const ZH_LATIN_ALLOWED = new Set(["Havre", "Chrome", "Mac", "HTTP", "MP3", "MP4", "Finder", "macOS", "http", "https", "YouTube", "yt-dlp"]);
 const JARGON = /FFmpeg|\bHLS\b|\bDASH\b|\brange\b|manifest|native host|\bsegments?\b|protocol|Errno|https?:|undefined|NaN|\bnull\b|[{}<>]|\(s\)/i;
 
 function checkRendered(text, lang, params, context) {
@@ -467,22 +467,22 @@ const STORED_SAMPLES = [
   // FFmpeg tails keep newlines and local paths.
   ["DASH audio/video merge failed: FFmpeg failed (234): [mp4 @ 0x7f8a1c00] Could not find tag for codec opus in stream #1, codec not currently supported in container\nError initializing output stream 0:1 --\nConversion failed!", "processing_failed",
     { stage: "merge", exit_code: 234 }],
-  ["FFmpeg failed (1): /Users/me/Downloads/FluxCatch/.fluxcatch-convert-abc/source.mp4: Invalid data found when processing input", "processing_failed", { exit_code: 1 }],
-  ["FFmpeg failed (1): /Volumes/T7/FluxCatch/fluxcatch-hls-1/joined-media.ts: No space left on device", "disk_full", {}],
+  ["FFmpeg failed (1): /Users/me/Downloads/Havre/.havre-convert-abc/source.mp4: Invalid data found when processing input", "processing_failed", { exit_code: 1 }],
+  ["FFmpeg failed (1): /Volumes/T7/Havre/havre-hls-1/joined-media.ts: No space left on device", "disk_full", {}],
   // Local paths are redacted under /Users and /Volumes alike. Folder names
-  // such as "fluxcatch-hls-…" or "Period Dramas" must not read as a
+  // such as "havre-hls-…" or "Period Dramas" must not read as a
   // streaming-format problem (classifyJobFailure also masks quoted paths
   // in records stored before the redaction covered other drives).
-  ["[Errno 28] No space left on device: '/Users/me/Downloads/FluxCatch/clip.mp4.part'", "disk_full", {}],
-  ["HLS media segment 3 failed: [Errno 28] No space left on device: '/Volumes/T7/FluxCatch/fluxcatch-hls-3f9a2c/media/00000003.ts.tmp'", "disk_full", {}],
-  ["HLS media segment 3 failed: [Errno 2] No such file or directory: '/Volumes/T7/FluxCatch/fluxcatch-hls-3f9a2c/media/00000003.ts.tmp'", "folder_unavailable", {}],
-  ["DASH resource failed: [Errno 5] Input/output error: '/Volumes/NAS/FluxCatch/fluxcatch-dash-77aa/video/00000012.m4s.tmp'", "disk_write_failed", {}],
-  ["[Errno 17] File exists: '/Volumes/NAS/FluxCatch/fluxcatch-dash-77aa'", "disk_write_failed", {}],
-  ["[Errno 13] Permission denied: \"/Volumes/Bob's NAS/Period Dramas/FluxCatch/clip.mp4\"", "folder_not_writable", {}],
-  ["[Errno 30] Read-only file system: '/Volumes/Disk/FluxCatch/clip.mp4'", "folder_not_writable", {}],
+  ["[Errno 28] No space left on device: '/Users/me/Downloads/Havre/clip.mp4.part'", "disk_full", {}],
+  ["HLS media segment 3 failed: [Errno 28] No space left on device: '/Volumes/T7/Havre/havre-hls-3f9a2c/media/00000003.ts.tmp'", "disk_full", {}],
+  ["HLS media segment 3 failed: [Errno 2] No such file or directory: '/Volumes/T7/Havre/havre-hls-3f9a2c/media/00000003.ts.tmp'", "folder_unavailable", {}],
+  ["DASH resource failed: [Errno 5] Input/output error: '/Volumes/NAS/Havre/havre-dash-77aa/video/00000012.m4s.tmp'", "disk_write_failed", {}],
+  ["[Errno 17] File exists: '/Volumes/NAS/Havre/havre-dash-77aa'", "disk_write_failed", {}],
+  ["[Errno 13] Permission denied: \"/Volumes/Bob's NAS/Period Dramas/Havre/clip.mp4\"", "folder_not_writable", {}],
+  ["[Errno 30] Read-only file system: '/Volumes/Disk/Havre/clip.mp4'", "folder_not_writable", {}],
   ["Could not publish output safely: [Errno 18] Cross-device link: '/Volumes/A/x.part' -> '/Volumes/B/x.mp4'", "disk_write_failed", {}],
   // Cut at 240 characters inside the quoted path (no closing quote).
-  ["DASH video track download failed: Range 0-1048575 failed: [Errno 28] No space left on device: '/Volumes/Media Drive With A Very Long Name/Downloads/FluxCatch Videos/Season 01 Period Dramas/HLS and DASH tests/fluxcatch-dash-pair-abcdef0123456789/video.m4s'", "disk_full", {}],
+  ["DASH video track download failed: Range 0-1048575 failed: [Errno 28] No space left on device: '/Volumes/Media Drive With A Very Long Name/Downloads/Havre Videos/Season 01 Period Dramas/HLS and DASH tests/havre-dash-pair-abcdef0123456789/video.m4s'", "disk_full", {}],
   // A type="dynamic" MPD is a live stream.
   [PLANNER("built-in DASH planner supports static MPDs only"), "stream_live", {}],
   [PLANNER("Protected DASH is metadata-only"), "drm_protected", {}],
@@ -498,7 +498,7 @@ test("records keep no local folder names: the home folder, other drives, shares 
   const cases = [
     ["[Errno 28] No space left on device: '/Volumes/T7/Period Dramas/clip.mp4.part'", "[Errno 28] No space left on device: <本地路径已隐藏>"],
     ["[Errno 13] Permission denied: \"/Volumes/Bob's NAS/Period Dramas/clip.mp4\"", "[Errno 13] Permission denied: <本地路径已隐藏>"],
-    ["FFmpeg failed (1): /Volumes/T7/FluxCatch/fluxcatch-hls-1/joined-media.ts: No space left on device", "FFmpeg failed (1): <本地路径已隐藏>: No space left on device"],
+    ["FFmpeg failed (1): /Volumes/T7/Havre/havre-hls-1/joined-media.ts: No space left on device", "FFmpeg failed (1): <本地路径已隐藏>: No space left on device"],
     ["Error writing /Volumes/Media Drive/Season 01/clip.mp4 after 3 tries", "Error writing <本地路径已隐藏>"],
     ["/Network/Servers/nas/Movies/Holiday 2026/a.mp4: Input/output error", "<本地路径已隐藏>"],
     ["/mnt/storage/Movies/a.mp4: Disc quota exceeded", "<本地路径已隐藏>: Disc quota exceeded"],
@@ -520,7 +520,7 @@ test("records keep no local folder names: the home folder, other drives, shares 
   }
   // A redacted path keeps the failure's code.
   assert.equal(classifyJobFailure({ text: storedNativeText("FFmpeg failed (1): /Volumes/T7/x/joined.ts: No space left on device") }).code, "disk_full");
-  assert.equal(classifyJobFailure({ text: storedNativeText("[Errno 17] File exists: '/Volumes/NAS/FluxCatch/fluxcatch-dash-77aa'") }).code, "disk_write_failed");
+  assert.equal(classifyJobFailure({ text: storedNativeText("[Errno 17] File exists: '/Volumes/NAS/Havre/havre-dash-77aa'") }).code, "disk_write_failed");
 });
 
 test("the worker's one phrasing for an engine that is not set up", () => {
@@ -555,7 +555,7 @@ test("stored records of realistic engine failures classify and render cleanly", 
     for (const lang of ["en", "zh"]) {
       const rendered = describeJobFailure(result, lang);
       checkRendered(rendered, lang, result.params, `${label} ${lang}`);
-      assert.doesNotMatch(rendered, /Volumes|Bob|Period|fluxcatch-|edge-cache|secondary|本地路径/, `${label} ${lang}: ${rendered}`);
+      assert.doesNotMatch(rendered, /Volumes|Bob|Period|havre-|edge-cache|secondary|本地路径/, `${label} ${lang}: ${rendered}`);
     }
   }
   // The truncated-host and truncated-path samples really are cut.
@@ -697,7 +697,7 @@ const PLACEHOLDER_SAMPLES = {
   index: ["11", "0", "-1"],
   "len(key_bytes)": ["0", "32"],
   scope: ["HLS", "audio HLS"],
-  VERSION: ["0.2.5"],
+  VERSION: ["0.3.0"],
   "self.ffmpeg": ["/opt/homebrew/bin/ffmpeg"],
   "proc.returncode": ["1", "-9"],
   "redact_text(tail.strip())": ["Conversion failed!", UNCLASSIFIED_CAUSE],
@@ -931,7 +931,7 @@ function driftFailures(templates) {
 
 const ENGINE_SOURCES = {
   "native-host/host.py": HOST_PY,
-  "native-host/fluxcatch_network_policy.py": POLICY_PY
+  "native-host/havre_network_policy.py": POLICY_PY
 };
 
 test("drift guard: every engine failure template classifies to a known code", (t) => {
@@ -1045,7 +1045,7 @@ test("every Chinese error text the worker, the engine and lib/ emit classifies t
   // rows show through describeJobActivity, and the tail of a two-line message.
   const NOT_ERRORS = new Set([
     "<链接已隐藏>", "Bearer <已隐藏>", "$1=<已隐藏>", "<本地路径已隐藏>", "<无效地址>",
-    "选择 FluxCatch 的保存位置",
+    "选择 Havre 的保存位置",
     "视频轨", "音频轨", "文本大小", "行数", "引用 URL 总长度", "媒体轨道数量", "密钥引用数量", "变体数量", "分片数量",
     "正在下载20", "视频轨启动", "音频轨启动", " · 已处理 20", "任务开始",
     "正在启动 YouTube 引擎", "正在通过 YouTube 引擎下载", "20 · 分片 20/20",

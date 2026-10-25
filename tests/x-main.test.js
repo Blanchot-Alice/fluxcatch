@@ -99,7 +99,7 @@ test("X response observer binds candidates to the status id in the current route
     [current]
   );
   assert.equal(observer.extractProgressiveVideos(payload, "9999999999999999999").length, 0);
-  assert.equal(observer.statusIdForPath("/fluxcatch/status/2000000000000000000/photo/1"), "2000000000000000000");
+  assert.equal(observer.statusIdForPath("/havre/status/2000000000000000000/photo/1"), "2000000000000000000");
   assert.equal(observer.statusIdForPath("/home"), "");
 });
 

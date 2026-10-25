@@ -1,17 +1,17 @@
 #!/usr/bin/env node
-// FluxCatch live harness: real websites, real downloads, through Chrome for
+// Havre live harness: real websites, real downloads, through Chrome for
 // Testing with the unpacked extension and this checkout's native engine.
 //
 //   node tools/live/live.mjs --case direct-mp4,hls,dash,bilibili [--headed] [--keep] [--finder]
 //
 // What it does per case: open the page in a fresh profile, start playback,
-// wait for FluxCatch to detect media, screenshot the popup, start a download
+// wait for Havre to detect media, screenshot the popup, start a download
 // with the lowest quality, poll the job to its end, then check the history
 // record, the file on disk (ffprobe) and the downloads page rendering.
 //
 // Side effects on this machine: none outside the run's own folders. The
 // disposable Chrome profile carries a native-messaging registration that runs
-// native-host/host.py with FLUXCATCH_DOWNLOAD_DIR inside the output folder;
+// native-host/host.py with HAVRE_DOWNLOAD_DIR inside the output folder;
 // the user's Chrome, profile and installed engine are never touched.
 import { spawn, spawnSync } from "node:child_process";
 import crypto from "node:crypto";
@@ -24,7 +24,7 @@ import { fileURLToPath } from "node:url";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..", "..");
 const SOURCE_EXTENSION = path.join(ROOT, "extension");
-const HOST_NAME = "io.github.blanchot_alice.fluxcatch";
+const HOST_NAME = "io.github.blanchot_alice.havre";
 const START_TIMEOUT_MS = 25_000;
 const POLL_INTERVAL_MS = 250;
 
@@ -286,15 +286,15 @@ function registerNativeHost(extensionId, profile) {
   const python = ["/opt/homebrew/bin/python3", "/usr/bin/python3"].find((candidate) => fs.existsSync(candidate)) || "python3";
   fs.writeFileSync(launcher, [
     "#!/bin/sh",
-    `export FLUXCATCH_FFMPEG=${shellQuote(ffmpeg)}`,
-    `export FLUXCATCH_DOWNLOAD_DIR=${shellQuote(FILES_DIR)}`,
+    `export HAVRE_FFMPEG=${shellQuote(ffmpeg)}`,
+    `export HAVRE_DOWNLOAD_DIR=${shellQuote(FILES_DIR)}`,
     `exec ${shellQuote(python)} ${shellQuote(path.join(ROOT, "native-host", "host.py"))} "$@"`,
     ""
   ].join("\n"));
   fs.chmodSync(launcher, 0o700);
   fs.writeFileSync(manifestPath, `${JSON.stringify({
     name: HOST_NAME,
-    description: "FluxCatch local download engine (live harness)",
+    description: "Havre local download engine (live harness)",
     path: launcher,
     type: "stdio",
     allowed_origins: [`chrome-extension://${extensionId}/`]
@@ -332,7 +332,7 @@ function ffprobe(file) {
 async function main() {
   const executable = discoverChrome();
   const extension = prepareExtension();
-  const profile = fs.mkdtempSync(path.join(os.tmpdir(), "fluxcatch-live-"));
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), "havre-live-"));
   const registration = registerNativeHost(extension.id, profile);
   report.chrome = { executable, extensionId: extension.id, extensionVersion: extension.version, profile, headed: options.headed, nativeHostRegistration: registration };
   log("Chrome:", executable);
@@ -353,7 +353,7 @@ async function main() {
     control = await CdpClient.connect(controlTarget.webSocketDebuggerUrl);
     await control.send("Runtime.enable");
     const call = (fnSource) => evaluate(control, `(${fnSource})()`);
-    await call(`async () => chrome.storage.local.set({ "fluxcatch.uiLanguage.v1": "zh" })`);
+    await call(`async () => chrome.storage.local.set({ "havre.uiLanguage.v1": "zh" })`);
     const diagnostics = await call(`async () => chrome.runtime.sendMessage({ type: "GET_DIAGNOSTICS" })`);
     log("Diagnostics:", { version: diagnostics?.diagnostics?.extension?.version, channel: diagnostics?.diagnostics?.extension?.channel });
     const host = await call(`async () => chrome.runtime.sendMessage({ type: "PING_HOST" })`);

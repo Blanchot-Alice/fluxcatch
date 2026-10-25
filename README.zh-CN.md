@@ -1,19 +1,22 @@
 <div align="center">
 
-<img src="docs/assets/icon.png" width="110" alt="FluxCatch logo" />
+<img src="docs/assets/icon.png" width="110" alt="Havre logo" />
 
-# FluxCatch
+# Havre
 
 **所见，即所得。**
 
 *本地优先的媒体下载器 · macOS 上的 Chrome*
 
-FluxCatch 是一个 Manifest V3 扩展，配一个很小的本地引擎。页面在放什么，它就
+Havre 是勒阿弗尔，莫奈长大的港口，也是《印象·日出》所画的地方，印象派因这幅画得名。
+普通名词 havre 的意思是港湾、避风港：东西从水上进来，在这里被稳妥地留住。
+
+Havre 是一个 Manifest V3 扩展，配一个很小的本地引擎。页面在放什么，它就
 看见什么：直链文件、HLS、DASH，列成一张如实的画质阶梯，再经由受策略约束的本地
 引擎保存到你的 Mac 上。没有云端，没有中转，没有账号；字节只在你的机器和你正在
 看的网站之间往来。
 
-[![Version](https://img.shields.io/badge/version-0.2.5-5E8F84?style=flat-square)](https://github.com/Blanchot-Alice/fluxcatch/releases)
+[![Version](https://img.shields.io/badge/version-0.3.0-5E8F84?style=flat-square)](https://github.com/Blanchot-Alice/fluxcatch/releases)
 [![Chrome MV3](https://img.shields.io/badge/Chrome-Manifest_V3-8E82AD?style=flat-square&logo=googlechrome&logoColor=white)](https://developer.chrome.com/docs/extensions/develop/migrate)
 [![License: MIT](https://img.shields.io/badge/license-MIT-C78FA0?style=flat-square)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS_%2B_Chrome-486D80?style=flat-square)](docs/INSTALL.md)
@@ -34,7 +37,7 @@ FluxCatch 是一个 Manifest V3 扩展，配一个很小的本地引擎。页面
 | 🎚 **变体合并** | 播放器从不给出主列表，也能合成一张带清晰度菜单的卡片；音视频由 FFmpeg 无损合并。 |
 | ⏯ **暂停、续传、排队** | 任何任务都能暂停、稍后接着下：直链从断点续传，HLS 与 DASH 复用磁盘上已有的每个完整分片。 |
 | 📥 **整页下载与链接下载** | 一键下载整页媒体，链接框可以粘贴任何媒体地址，保存目录经由引擎自己选。 |
-| 🗂 **真正的下载记录** | 引擎保存的文件不会出现在 `chrome://downloads`，所以 FluxCatch 自己记一份按日分组的记录，带封面帧、搜索和 Finder 操作。 |
+| 🗂 **真正的下载记录** | 引擎保存的文件不会出现在 `chrome://downloads`，所以 Havre 自己记一份按日分组的记录，带封面帧、搜索和 Finder 操作。 |
 | ⚡ **看条件加速** | 服务器支持 Range 才并行传输；只在成立的地方才这么说。 |
 | 🔒 **本地优先的隐私** | 没有遥测、账号和中转。Cookie 只限原站，跨域跳转时去掉。 |
 | 🛡️ **DRM 就是 DRM** | 受保护的内容只检测、只提示，从不解密，也不绕过。 |
@@ -69,9 +72,9 @@ FluxCatch 是一个 Manifest V3 扩展，配一个很小的本地引擎。页面
 | :---: | :---: | :---: |
 | <img src="docs/assets/popup.png" height="440" alt="弹出窗口"> | <img src="docs/assets/sidepanel.png" height="440" alt="侧边栏"> | <img src="docs/assets/download-dialog.png" height="440" alt="下载对话框"> |
 
-<p align="center"><img src="docs/assets/downloads.png" width="720" alt="FluxCatch 下载记录页"></p>
+<p align="center"><img src="docs/assets/downloads.png" width="720" alt="Havre 下载记录页"></p>
 
-<p align="center"><img src="docs/assets/options.png" width="720" alt="FluxCatch 设置页"></p>
+<p align="center"><img src="docs/assets/options.png" width="720" alt="Havre 设置页"></p>
 
 背景是一层静止的色彩，叫作**池塘图层**：几条青瓷、丁香、玫瑰和杏色的漂带，每台
 机器安装时定一次，只在留白和空白处显露，所有内容下方都被遮掉。进度条用它所处
@@ -103,8 +106,9 @@ git clone https://github.com/Blanchot-Alice/fluxcatch.git
 ```
 
 脚本会固定 Homebrew 的稳定路径，检查 Python 3.9 或更新的版本，并探测 FFmpeg。
-也可以用 [`v0.2.5` 现成包](https://github.com/Blanchot-Alice/fluxcatch/releases/tag/v0.2.5)：
-native 压缩包整体解压后，在它的目录里执行 `./install-macos.sh`。YouTube 另外需要
+也可以用 [Releases 页面](https://github.com/Blanchot-Alice/fluxcatch/releases)上的现成包：
+native 压缩包整体解压后，在它的目录里执行 `./install-macos.sh`。安装脚本会把 0.2.5 的安装接过来：
+保留你选过的保存目录，换掉旧的引擎注册，删除旧的运行副本。YouTube 另外需要
 本机的 yt-dlp（`brew install yt-dlp`），装好之前设置页里那一行显示“需要额外组件”。
 
 **三 · 使用**
@@ -162,5 +166,5 @@ flowchart LR
 
 ## 许可证
 
-[MIT](LICENSE)。FluxCatch 用于保存你拥有或获准保存的媒体；它不解密 DRM
+[MIT](LICENSE)。Havre 用于保存你拥有或获准保存的媒体；它不解密 DRM
 内容，也不绕过访问控制。

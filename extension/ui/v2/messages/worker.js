@@ -47,10 +47,10 @@ const en = {
   // Toolbar button tooltip (chrome.action.setTitle).
   "worker.action.downloading": ({ count: n, fraction, locale } = {}) => {
     const tag = englishLocale(locale);
-    return `FluxCatch · ${count(n, tag)} ${pluralEn(n, "download", "downloads")} in progress · ${percent(fraction, tag)}`;
+    return `Havre · ${count(n, tag)} ${pluralEn(n, "download", "downloads")} in progress · ${percent(fraction, tag)}`;
   },
-  "worker.action.found": ({ count: n, locale } = {}) => `FluxCatch · ${count(n, englishLocale(locale))} media ${pluralEn(n, "item", "items")} on this page`,
-  "worker.action.none": "FluxCatch · No downloadable media on this page yet",
+  "worker.action.found": ({ count: n, locale } = {}) => `Havre · ${count(n, englishLocale(locale))} media ${pluralEn(n, "item", "items")} on this page`,
+  "worker.action.none": "Havre · No downloadable media on this page yet",
 
   // Labels the worker builds for pages.
   "worker.qualityRank": ({ rank, size, locale } = {}) => `Quality ${count(rank || 1, englishLocale(locale))}${size ? ` · ${size}` : ""}`,
@@ -73,10 +73,10 @@ const zh = {
   "worker.notify.readyToDownload": "现在可以下载了。",
   "worker.notify.setUp": "设置",
 
-  "worker.action.downloading": ({ count: n, fraction } = {}) => `FluxCatch · 正在下载 ${count(n, "zh-CN")} 项 · ${percent(fraction, "zh-CN")}`,
-  "worker.action.found": ({ count: n } = {}) => `FluxCatch · 此页面有 ${count(n, "zh-CN")} 项媒体`,
+  "worker.action.downloading": ({ count: n, fraction } = {}) => `Havre · 正在下载 ${count(n, "zh-CN")} 项 · ${percent(fraction, "zh-CN")}`,
+  "worker.action.found": ({ count: n } = {}) => `Havre · 此页面有 ${count(n, "zh-CN")} 项媒体`,
   // Same wording as media.empty.none (messages/media.js), without the full stop.
-  "worker.action.none": "FluxCatch · 此页还没有可下载的媒体",
+  "worker.action.none": "Havre · 此页还没有可下载的媒体",
 
   "worker.qualityRank": ({ rank, size } = {}) => `清晰度 ${count(rank || 1, "zh-CN")}${size ? ` · ${size}` : ""}`,
   "worker.untitledMedia": "媒体"

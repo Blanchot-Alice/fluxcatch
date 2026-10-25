@@ -1,4 +1,4 @@
-// FluxCatch side-panel workspace on the v2 system: the popup's skeleton at
+// Havre side-panel workspace on the v2 system: the popup's skeleton at
 // 420 wide (design review P2). Top bar: BrandMark S, "Download a link" and
 // Settings. The engine's one status line. "Media on this page": while empty,
 // the page host as meta and the empty state with Rescan as the one primary;
@@ -56,7 +56,7 @@ const state = {
 // long: an idle worker drops the port, so the page reconnects, resyncs what
 // it missed, and says "stopped responding" only when the worker is gone.
 connectWorkerPort({
-  name: "fluxcatch-sidepanel",
+  name: "havre-sidepanel",
   onMessage: (message) => onPortMessage(message),
   onReconnect: async () => {
     if (!jobList) return true;

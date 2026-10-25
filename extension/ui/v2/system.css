@@ -1,4 +1,4 @@
-/* FluxCatch v2 system: base, type roles and components (design review §4–§6).
+/* Havre v2 system: base, type roles and components (design review §4–§6).
    Principles: one pond per view (no container inside a container), soft
    separation (no 1px rules), colour is light (dots and tints, no blocks),
    left-anchored text on one column. No colour literals here: tokens only. */

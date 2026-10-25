@@ -1,4 +1,4 @@
-// FluxCatch v2 component builders (design review §6). Pure DOM, no framework.
+// Havre v2 component builders (design review §6). Pure DOM, no framework.
 // Every builder returns elements that use only the classes in system.css.
 import { msg } from "./messages.js";
 import { formatCount } from "./locale.js";
@@ -36,7 +36,7 @@ export function icon(name) {
 }
 
 
-/** BrandMark (§4): logo + “FluxCatch”, sizes s and m, never a subtitle.
+/** BrandMark (§4): logo + “Havre”, sizes s and m, never a subtitle.
  *  It lays its two parts into the parent's lead grid (display: contents). */
 export function brandMark({ size = "m" } = {}) {
   const mark = document.createElement("span");
@@ -53,7 +53,7 @@ export function brandMark({ size = "m" } = {}) {
   logo.alt = "";
   logo.setAttribute("aria-hidden", "true");
   logo.decoding = "async";
-  logo.src = size === "s" ? "../icons/fluxcatch-mark-16.svg" : "../icons/fluxcatch-mark.svg";
+  logo.src = size === "s" ? "../icons/havre-mark-16.svg" : "../icons/havre-mark.svg";
   const word = document.createElement("span");
   word.className = "t-wordmark";
   word.textContent = msg("brand.name");

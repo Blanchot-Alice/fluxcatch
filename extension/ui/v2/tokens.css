@@ -1,4 +1,4 @@
-/* FluxCatch v2 tokens — design review §4 (type), §5 (grid), §8 (value ladders).
+/* Havre v2 tokens — design review §4 (type), §5 (grid), §8 (value ladders).
    The only file in v2 allowed to contain colour literals (audit check h).
 
    Colour: every brief hue keeps its OKLCH hue and chroma; only lightness moves.

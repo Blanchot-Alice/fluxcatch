@@ -27,7 +27,7 @@ import { resolveScenario } from "./fake-native-host.mjs";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 /** extension/background.js HOST_NAME, scripts/validate.py NATIVE_HOST_NAME. */
-export const NATIVE_HOST_NAME = "io.github.blanchot_alice.fluxcatch";
+export const NATIVE_HOST_NAME = "io.github.blanchot_alice.havre";
 export const FAKE_HOST_SCRIPT = path.join(HERE, "fake-native-host.mjs");
 export const GRANTED_PERMISSIONS = Object.freeze(["nativeMessaging", "notifications"]);
 export const DEFAULT_FIXTURE_ITEMS = Object.freeze([
@@ -102,15 +102,15 @@ export function writeFakeHostLauncher(dir, { scenario, downloadDir, extensionDir
   const target = path.resolve(dir);
   fs.mkdirSync(target, { recursive: true });
   const variables = [
-    ["FLUXCATCH_FAKE_HOST_SCENARIO", scenarioJson],
-    ["FLUXCATCH_FAKE_HOST_DOWNLOAD_DIR", downloadDir ?? null],
-    ["FLUXCATCH_FAKE_HOST_EXTENSION_DIR", extensionDir ? path.resolve(extensionDir) : null],
-    ["FLUXCATCH_FAKE_HOST_LOG", logFile ? path.resolve(logFile) : null]
+    ["HAVRE_FAKE_HOST_SCENARIO", scenarioJson],
+    ["HAVRE_FAKE_HOST_DOWNLOAD_DIR", downloadDir ?? null],
+    ["HAVRE_FAKE_HOST_EXTENSION_DIR", extensionDir ? path.resolve(extensionDir) : null],
+    ["HAVRE_FAKE_HOST_LOG", logFile ? path.resolve(logFile) : null]
   ];
   const launcher = path.join(target, "fake-native-host.sh");
   fs.writeFileSync(launcher, [
     "#!/bin/sh",
-    "# FluxCatch stand-in engine for a disposable Chrome profile (scripts/lib/active-profile.mjs).",
+    "# Havre stand-in engine for a disposable Chrome profile (scripts/lib/active-profile.mjs).",
     "unset NODE_OPTIONS",
     ...variables.map(([name, value]) => (value === null ? `unset ${name}` : `export ${name}=${shellQuote(value)}`)),
     `exec ${shellQuote(process.execPath)} ${shellQuote(FAKE_HOST_SCRIPT)} "$@"`,
@@ -121,7 +121,7 @@ export function writeFakeHostLauncher(dir, { scenario, downloadDir, extensionDir
 }
 
 /**
- * Registers the launcher as the FluxCatch engine for one disposable profile.
+ * Registers the launcher as the Havre engine for one disposable profile.
  * Chrome looks for user-level hosts in <user-data-dir>/NativeMessagingHosts,
  * so the real engine registration under ~/Library is never touched. Returns
  * the registration file path.
@@ -135,7 +135,7 @@ export function registerFakeHost(profileDir, launcherPath, extensionId) {
   const registration = path.join(registrationDir, `${NATIVE_HOST_NAME}.json`);
   fs.writeFileSync(registration, `${JSON.stringify({
     name: NATIVE_HOST_NAME,
-    description: "FluxCatch stand-in engine (design audit)",
+    description: "Havre stand-in engine (design audit)",
     path: launcher,
     type: "stdio",
     allowed_origins: [`chrome-extension://${extensionId}/`]
@@ -164,7 +164,7 @@ export function registerFakeHost(profileDir, launcherPath, extensionId) {
  * pause still works but resume fails with "来源页面的媒体信息已失效".
  *
  * Filenames: without options.filename the worker names the file after the
- * sending tab's title ("FluxCatch 下载记录.mp4" from the Downloads page, the
+ * sending tab's title ("Havre 下载记录.mp4" from the Downloads page, the
  * same name for both items), not after the URL. Each item therefore sends
  * options.filename, defaulting to the URL's last path segment
  * ("lecture-12-pharmacokinetics.mp4", "keynote-2026.mp4"). Pass

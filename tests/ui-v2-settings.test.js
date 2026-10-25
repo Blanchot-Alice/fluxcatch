@@ -183,7 +183,7 @@ let recoverReply = null;
 let failSaves = false;
 let saveGate = null;
 let cancelFolder = false;
-const host = { connected: true, compatible: true, version: "0.2.5", protocolVersion: 1, capabilityProfileVersion: 1, downloadDir: "/Users/someone/Downloads/FluxCatch", capabilities: { ffmpeg: { available: true } } };
+const host = { connected: true, compatible: true, version: "0.3.0", protocolVersion: 1, capabilityProfileVersion: 1, downloadDir: "/Users/someone/Downloads/Havre", capabilities: { ffmpeg: { available: true } } };
 const { buildDiagnostics } = await import("../extension/lib/build-profile.js");
 globalThis.chrome = {
   runtime: {
@@ -201,10 +201,10 @@ globalThis.chrome = {
           return { ok: true, settings: { ...stored } };
         case "PING_HOST": return { ok: true, hostStatus: permissions.has("nativeMessaging") ? { ...(hostOverride || host) } : { connected: false, needsPermission: true } };
         case "RECOVER_NATIVE_API": { const reply = recoverReply; hostOverride = null; return { ok: true, ...reply }; }
-        case "GET_DIAGNOSTICS": return { ok: true, diagnostics: buildDiagnostics({ extensionId: "abcdefghijklmnopabcdefghijklmnop", manifestVersion: "0.2.5", hostStatus: permissions.has("nativeMessaging") ? host : {} }) };
+        case "GET_DIAGNOSTICS": return { ok: true, diagnostics: buildDiagnostics({ extensionId: "abcdefghijklmnopabcdefghijklmnop", manifestVersion: "0.3.0", hostStatus: permissions.has("nativeMessaging") ? host : {} }) };
         case "CHOOSE_DOWNLOAD_FOLDER":
           if (cancelFolder) return { ok: false, error: "selection cancelled", code: "cancelled" };
-          return { ok: true, downloadDir: message.reset ? "/Users/someone/Downloads/FluxCatch" : "/Users/someone/Movies/Saved" };
+          return { ok: true, downloadDir: message.reset ? "/Users/someone/Downloads/Havre" : "/Users/someone/Movies/Saved" };
         case "OPEN_DOWNLOAD_FOLDER": case "OPEN_DOWNLOADS_PAGE": return { ok: true };
         default: return { ok: false, error: "unknown" };
       }
@@ -262,7 +262,7 @@ const visibleText = (root) => {
   walk(root, false);
   return out;
 };
-const AUDIT_LATIN_OK = new Set(["fluxcatch", "finder", "chrome", "macos", "mp4", "mkv", "webm", "kb", "mb", "gb", "instagram", "youtube", "bilibili", "x", "mac", "yt-dlp"]);
+const AUDIT_LATIN_OK = new Set(["havre", "finder", "chrome", "macos", "mp4", "mkv", "webm", "kb", "mb", "gb", "instagram", "youtube", "bilibili", "x", "mac", "yt-dlp"]);
 
 // ---------- static ----------
 
@@ -321,7 +321,7 @@ test("the page: top bar with the BrandMark only, the display title on the nav ed
   const titles = $$("#sections .t-title");
   assert.deepEqual(titles.map((heading) => heading.localName), ids.map(() => "h2"), "no sub-headings in the section style");
   assert.deepEqual(titles.map((heading) => heading.textContent), nav.map((item) => item.textContent));
-  assert.equal($("#capabilities-heading").textContent, "What FluxCatch can save");
+  assert.equal($("#capabilities-heading").textContent, "What Havre can save");
   assert.equal($("#saveBar"), null, "no save bar");
   assert.equal($$(".btn-primary").length, 0, "no primary button on Settings (autosave)");
   assert.equal($("#sections").hasAttribute("inert"), false, "the page is live once loaded");
@@ -435,7 +435,7 @@ test("the status rows: one engine row, merging, Instagram and X, local network; 
   assert.deepEqual(listed().map(([, value]) => value), ["Yes", "Yes", "Yes", "Not yet", "Yes", "Not yet", "Yes", "Needs an extra component", "Yes"], "no tool name in a status word (v3 §3.8)");
   assert.equal($("#row-capability-7 .row-status").dataset.tone, "cancelled");
   assert.equal($("#field-useNativeForDirect").disabled, false);
-  assert.equal($("#row-location .setting-description").textContent, "~/Downloads/FluxCatch");
+  assert.equal($("#row-location .setting-description").textContent, "~/Downloads/Havre");
   assert.equal($("#row-location .setting-description").hasAttribute("data-user-content"), true, "the path is user content");
   assert.ok(sent.some((message) => message.type === "PING_HOST"));
 });
@@ -648,7 +648,7 @@ test("privacy facts and shortcuts: Sign-in info carries its value; shortcuts use
   assert.equal($("#row-signin .row-value").textContent, "Never stored");
   assert.equal($("#row-signin .setting-description").textContent, "Used only for the site it came from.");
   assert.equal($("#row-cloud .row-value").textContent, "None");
-  assert.equal($("#row-shortcuts .setting-description").textContent, "⌥⇧F Open FluxCatch · ⌥⇧D All downloads · ⌥⇧W Open workspace");
+  assert.equal($("#row-shortcuts .setting-description").textContent, "⌥⇧F Open Havre · ⌥⇧D All downloads · ⌥⇧W Open workspace");
   assert.equal(MESSAGES.zh["settings.shortcuts.workspace"], "打开工作台");
   assert.equal(MESSAGES.zh["settings.cap.protected"], "带数字版权加密的视频", "DRM, never 'copyrighted video'");
   assert.equal(MESSAGES.zh["settings.engine.descNotSetUp"], "Chrome 会弹出授权请求，点“允许”即可。");
@@ -722,7 +722,7 @@ test("Lab: Developer tools is off by default; on, it reveals the UI editor and v
   assert.match($("#row-unsupported .setting-description").textContent, /^Live streams · Copy-protected video$/);
   $("#field-developerTools").click();
   await settle();
-  assert.equal(local["fluxcatch.developerTools.v1"], true);
+  assert.equal(local["havre.developerTools.v1"], true);
   assert.equal($("#developer-rows").hidden, false);
   assert.equal($("#editor-open").getAttribute("href"), "../designer/designer.html");
   assert.equal($("#row-versionExtensionId .row-value").textContent, "abcdefghijklmnopabcdefghijklmnop");
@@ -732,7 +732,7 @@ test("Lab: Developer tools is off by default; on, it reveals the UI editor and v
   assert.equal(JSON.parse(clipboard).extension.id, "abcdefghijklmnopabcdefghijklmnop");
 
   // The UI editor's layout values apply while Developer tools is on; its saved copy never does.
-  await globalThis.chrome.storage.local.set({ "fluxcatch.uiCustomization.v1": { language: "en", pageTitle: "Preferences", sectionGap: 30 } });
+  await globalThis.chrome.storage.local.set({ "havre.uiCustomization.v1": { language: "en", pageTitle: "Preferences", sectionGap: 30 } });
   await settle();
   assert.equal($("#settingsTitle").textContent, "Settings", "saved copy never replaces v2 copy");
   assert.equal(doc.documentElement.style.props["--settings-section-gap"], "30px");
@@ -783,7 +783,7 @@ test("a save that ends after a language switch catches the rebuilt controls up",
   const before = $("#field-saveAs").getAttribute("aria-checked");
   $("#field-saveAs").click();
   await settle();
-  await globalThis.chrome.storage.local.set({ "fluxcatch.uiLanguage.v1": "zh" });
+  await globalThis.chrome.storage.local.set({ "havre.uiLanguage.v1": "zh" });
   await settle(20);
   assert.equal($("#settingsTitle").textContent, "设置", "rebuilt in Chinese while the save is held");
   saveGate = null;
@@ -793,7 +793,7 @@ test("a save that ends after a language switch catches the rebuilt controls up",
   assert.equal(stored.saveAs, expected);
   assert.equal($("#field-saveAs").getAttribute("aria-checked"), String(expected), "the new switch shows the stored value");
   assert.equal($("#row-saveAs .saved-note").dataset.visible, "true", "the note lands on the rebuilt row");
-  await globalThis.chrome.storage.local.set({ "fluxcatch.uiLanguage.v1": "en" });
+  await globalThis.chrome.storage.local.set({ "havre.uiLanguage.v1": "en" });
   await settle(20);
 });
 

@@ -58,7 +58,7 @@ async function loadWorker({ chromeLanguage = "en-US", preference, sessionJobs = 
     runtime: {
       id: EXTENSION_ID,
       getURL: (path = "") => `chrome-extension://${EXTENSION_ID}/${path}`,
-      getManifest: () => ({ name: "FluxCatch", version: "0.2.5" }),
+      getManifest: () => ({ name: "Havre", version: "0.3.0" }),
       getPlatformInfo: async () => ({ os: platform, arch: "arm64" }),
       onConnect: event(),
       onMessage,
@@ -72,7 +72,7 @@ async function loadWorker({ chromeLanguage = "en-US", preference, sessionJobs = 
         postMessage: (message) => {
           nativeOutgoing.push(message);
           if (message.type === "ping") queueMicrotask(() => nativeListeners.message.emit({
-            type: "pong", requestId: message.requestId, version: "0.2.5", protocolVersion: 1, capabilityProfileVersion: 1,
+            type: "pong", requestId: message.requestId, version: "0.3.0", protocolVersion: 1, capabilityProfileVersion: 1,
             ffmpeg: true, capabilities: { ffmpeg: { available: true, demuxers: { hls: true, dash: false }, encoders: { libmp3lame: true } }, dashPlanner: "static-v1", dashPair: "direct-v1", pause: "resume-v1" }
           }));
         }
@@ -173,15 +173,15 @@ test("Auto follows Chrome's UI language: English Chrome gets English, Chinese Ch
 
 test("the worker follows a language change at once, tooltips included", async () => {
   const worker = await loadWorker({ chromeLanguage: "en-US", preference: "auto" });
-  assert.equal(await worker.titleFor(3), "FluxCatch · No downloadable media on this page yet");
+  assert.equal(await worker.titleFor(3), "Havre · No downloadable media on this page yet");
   const before = worker.titles.length;
   worker.storageChanged.emit({ [UI_LANGUAGE_STORAGE_KEY]: { newValue: "zh", oldValue: "auto" } }, "local");
   for (let index = 0; index < 50 && worker.titles.length === before; index += 1) await tick();
-  assert.equal(worker.titles.at(-1)?.title, "FluxCatch · 此页还没有可下载的媒体", "the open tab's tooltip is rewritten in Chinese");
+  assert.equal(worker.titles.at(-1)?.title, "Havre · 此页还没有可下载的媒体", "the open tab's tooltip is rewritten in Chinese");
   worker.storageChanged.emit({ [UI_LANGUAGE_STORAGE_KEY]: { newValue: "auto" } }, "local");
-  assert.equal(await worker.titleFor(3), "FluxCatch · No downloadable media on this page yet", "back to Auto, back to Chrome's English");
+  assert.equal(await worker.titleFor(3), "Havre · No downloadable media on this page yet", "back to Auto, back to Chrome's English");
   worker.storageChanged.emit({ [UI_LANGUAGE_STORAGE_KEY]: { newValue: "zh" } }, "sync");
-  assert.equal(await worker.titleFor(3), "FluxCatch · No downloadable media on this page yet", "only chrome.storage.local carries the preference");
+  assert.equal(await worker.titleFor(3), "Havre · No downloadable media on this page yet", "only chrome.storage.local carries the preference");
 });
 
 // ---------- 2. notifications ----------
@@ -195,7 +195,7 @@ test("a failed download notifies in the UI language with the job-failure reason,
     });
     worker.downloadsChanged.emit({ id: 7, state: { current: "interrupted" }, error: { current: "NETWORK_FAILED" } });
     await worker.settle();
-    const notice = worker.notifications.find((entry) => entry.id === "fluxcatch:browser:7:failed");
+    const notice = worker.notifications.find((entry) => entry.id === "havre:browser:7:failed");
     assert.ok(notice, `${lang}: one failure notification`);
     const reason = describeJobFailure(classifyJobFailure({ text: "NETWORK_FAILED" }), lang);
     assert.equal(notice.options.title, workerMessages[lang]["worker.notify.failedTitle"]);
@@ -214,7 +214,7 @@ test("a finished download notifies with the file name and a decimal meta line, i
     });
     worker.downloadsChanged.emit({ id: 8, state: { current: "complete" }, bytesReceived: { current: 2_200_000_000 }, totalBytes: { current: 2_200_000_000 }, filename: { current: "/Volumes/T7/Private Folder/Lecture 13.mp4" } });
     await worker.settle();
-    const notice = worker.notifications.find((entry) => entry.id === "fluxcatch:browser:8:completed");
+    const notice = worker.notifications.find((entry) => entry.id === "havre:browser:8:completed");
     assert.ok(notice, chromeLanguage);
     assert.equal(notice.options.title, title);
     assert.equal(notice.options.message, `Lecture 13.mp4\n${meta}`, "no “Saved” word, sizes in GB like Finder");
@@ -231,21 +231,21 @@ test("an engine failure notification shows the localised reason: no engine text,
   const raw = "HLS media segment 11 failed: HTTP 403 for https://cdn.example.tv/private/path/seg-12.ts?token=SECRET_TOKEN";
   worker.nativeListeners.message.emit({ type: "failed", jobId: "engine-job-1", filename: "Clip.mp4", error: raw });
   await worker.settle();
-  const notice = worker.notifications.find((entry) => entry.id === "fluxcatch:engine-job-1:failed");
+  const notice = worker.notifications.find((entry) => entry.id === "havre:engine-job-1:failed");
   assert.ok(notice, "the failure is announced");
   assert.equal(notice.options.title, "Download failed");
   assert.equal(notice.options.message, "Clip.mp4\nThe site refused to send part 12 of the video (HTTP 403) after 5 retries. Refresh the page, play the video once, then retry.");
   assert.doesNotMatch(JSON.stringify(notice.options), /https?:|SECRET|private|segment|HLS|cdn\.example/);
 
   // A save folder on another drive never reaches the record or the notification.
-  worker.nativeListeners.message.emit({ type: "failed", jobId: "engine-job-2", filename: "Clip 2.mp4", error: "HLS media segment 3 failed: [Errno 28] No space left on device: '/Volumes/T7/Period Dramas/fluxcatch-hls-3f/media/00000003.ts.tmp'" });
+  worker.nativeListeners.message.emit({ type: "failed", jobId: "engine-job-2", filename: "Clip 2.mp4", error: "HLS media segment 3 failed: [Errno 28] No space left on device: '/Volumes/T7/Period Dramas/havre-hls-3f/media/00000003.ts.tmp'" });
   await worker.settle();
-  const disk = worker.notifications.find((entry) => entry.id === "fluxcatch:engine-job-2:failed");
+  const disk = worker.notifications.find((entry) => entry.id === "havre:engine-job-2:failed");
   assert.equal(disk.options.message, `Clip 2.mp4\n${describeJobFailure({ code: "disk_full" }, "en")}`);
   const jobs = (await worker.send({ type: "GET_JOBS" })).jobs;
   const stored = jobs.find((job) => job.jobId === "engine-job-2");
   assert.ok(stored);
-  assert.doesNotMatch(`${stored.message} ${stored.error}`, /Volumes|T7|Period|fluxcatch-hls/, "the stored record hides the folder names");
+  assert.doesNotMatch(`${stored.message} ${stored.error}`, /Volumes|T7|Period|havre-hls/, "the stored record hides the folder names");
 });
 
 test("notification and tooltip code paths hold no Chinese literals and no v1 translator calls", () => {
@@ -267,22 +267,22 @@ test("notification and tooltip code paths hold no Chinese literals and no v1 tra
 
 test("the toolbar tooltip pluralises with Intl and names downloads, not jobs", async () => {
   const one = await loadWorker({ chromeLanguage: "en-US", sessionJobs: [activeBrowserJob(11, "a.mp4", 0.42)], downloadItems: { 11: inProgress("a.mp4") } });
-  assert.match(await one.titleFor(3), /^FluxCatch · 1 download in progress · \d+%$/);
+  assert.match(await one.titleFor(3), /^Havre · 1 download in progress · \d+%$/);
   const two = await loadWorker({
     chromeLanguage: "en-US",
     sessionJobs: [activeBrowserJob(12, "a.mp4"), activeBrowserJob(13, "b.mp4")],
     downloadItems: { 12: inProgress("a.mp4"), 13: inProgress("b.mp4") }
   });
-  assert.match(await two.titleFor(3), /^FluxCatch · 2 downloads in progress · \d+%$/);
+  assert.match(await two.titleFor(3), /^Havre · 2 downloads in progress · \d+%$/);
   const zh = await loadWorker({ chromeLanguage: "zh-CN", sessionJobs: [activeBrowserJob(14, "a.mp4")], downloadItems: { 14: inProgress("a.mp4") } });
-  assert.match(await zh.titleFor(3), /^FluxCatch · 正在下载 1 项 · \d+%$/);
+  assert.match(await zh.titleFor(3), /^Havre · 正在下载 1 项 · \d+%$/);
   const en = workerMessages.en;
-  assert.equal(en["worker.action.downloading"]({ count: 1, fraction: 0.42 }), "FluxCatch · 1 download in progress · 42%");
-  assert.equal(en["worker.action.downloading"]({ count: 1200, fraction: 0.5, locale: "en-US" }), "FluxCatch · 1,200 downloads in progress · 50%");
-  assert.equal(en["worker.action.found"]({ count: 1 }), "FluxCatch · 1 media item on this page");
-  assert.equal(en["worker.action.found"]({ count: 3 }), "FluxCatch · 3 media items on this page");
-  assert.equal(workerMessages.zh["worker.action.found"]({ count: 3 }), "FluxCatch · 此页面有 3 项媒体");
-  assert.equal(workerMessages.zh["worker.action.downloading"]({ count: 2, fraction: 0.42 }), "FluxCatch · 正在下载 2 项 · 42%");
+  assert.equal(en["worker.action.downloading"]({ count: 1, fraction: 0.42 }), "Havre · 1 download in progress · 42%");
+  assert.equal(en["worker.action.downloading"]({ count: 1200, fraction: 0.5, locale: "en-US" }), "Havre · 1,200 downloads in progress · 50%");
+  assert.equal(en["worker.action.found"]({ count: 1 }), "Havre · 1 media item on this page");
+  assert.equal(en["worker.action.found"]({ count: 3 }), "Havre · 3 media items on this page");
+  assert.equal(workerMessages.zh["worker.action.found"]({ count: 3 }), "Havre · 此页面有 3 项媒体");
+  assert.equal(workerMessages.zh["worker.action.downloading"]({ count: 2, fraction: 0.42 }), "Havre · 正在下载 2 项 · 42%");
   assert.equal(en["worker.qualityRank"]({ rank: 2, size: "24 MB" }), "Quality 2 · 24 MB");
   assert.equal(workerMessages.zh["worker.qualityRank"]({ rank: 2, size: "24 MB" }), "清晰度 2 · 24 MB");
   for (const table of [workerMessages.en, workerMessages.zh]) {
@@ -298,7 +298,7 @@ test("messages/worker.js imports nothing, keeps identical keys, and has no local
   assert.doesNotMatch(source, /^\s*import\b/m, "the worker reads this module without messages.js or locale.js");
   assert.deepEqual(Object.keys(workerMessages.zh).sort(), Object.keys(workerMessages.en).sort());
   assert.deepEqual(workerMessages.display, []);
-  const LATIN_OK = new Set(["FluxCatch", "Finder", "GB", "MB"]);
+  const LATIN_OK = new Set(["Havre", "Finder", "GB", "MB"]);
   for (const key of Object.keys(workerMessages.en)) {
     assert.ok(key.startsWith("worker."), key);
     const en = workerMessages.en[key];
@@ -440,7 +440,7 @@ test("the toolbar badge uses the Morning tokens of ui/v2/tokens.css, two fills a
 
 test("a language switch rewrites the tooltip of every open tab, including background tabs with no media", async () => {
   const worker = await loadWorker({ chromeLanguage: "en-US", preference: "auto", openTabs: [{ id: 3 }, { id: 5 }] });
-  assert.equal(await worker.titleFor(5), "FluxCatch · No downloadable media on this page yet");
+  assert.equal(await worker.titleFor(5), "Havre · No downloadable media on this page yet");
   const before = worker.titles.length;
   worker.storageChanged.emit({ [UI_LANGUAGE_STORAGE_KEY]: { newValue: "zh", oldValue: "auto" } }, "local");
   for (let index = 0; index < 50 && !worker.titles.slice(before).some((entry) => entry.tabId === 5); index += 1) await tick();
@@ -458,7 +458,7 @@ test("a finished download offers Show in Finder on macOS and Show in folder else
     const worker = await loadWorker({ chromeLanguage, platform, sessionJobs: [activeBrowserJob(31, "Clip.mp4")], downloadItems: { 31: inProgress("Clip.mp4") } });
     worker.downloadsChanged.emit({ id: 31, state: { current: "complete" }, bytesReceived: { current: 2_000_000 }, totalBytes: { current: 2_000_000 }, filename: { current: "/Users/me/Downloads/Clip.mp4" } });
     await worker.settle();
-    const notice = worker.notifications.find((entry) => entry.id === "fluxcatch:browser:31:completed");
+    const notice = worker.notifications.find((entry) => entry.id === "havre:browser:31:completed");
     assert.deepEqual(notice?.options.buttons.map((button) => button.title), expected, platform);
   }
 });
@@ -478,7 +478,7 @@ test("a local engine that is still not ready after the self-heal reload says why
       storedLocal: marker
     });
     for (let index = 0; index < 100 && !worker.notifications.length; index += 1) await tick();
-    const notice = worker.notifications.find((entry) => entry.id.startsWith("fluxcatch:self-heal:"));
+    const notice = worker.notifications.find((entry) => entry.id.startsWith("havre:self-heal:"));
     assert.ok(notice, `${lang} · permission ${nativePermission}`);
     assert.equal(notice.options.title, title);
     assert.equal(notice.options.message, workerMessages[lang]["worker.notify.engineNotReadyBody"]);
@@ -497,7 +497,7 @@ test("a local engine that is still not ready after the self-heal reload says why
 });
 
 test("Open and Show in Finder keep the engine's own code when the engine is missing", async () => {
-  const record = { jobId: "native:done-1", method: "native", status: "completed", filename: "Clip.mp4", path: "/Users/me/Downloads/FluxCatch/Clip.mp4", createdAt: Date.now() - 10_000, finishedAt: Date.now() - 5_000 };
+  const record = { jobId: "native:done-1", method: "native", status: "completed", filename: "Clip.mp4", path: "/Users/me/Downloads/Havre/Clip.mp4", createdAt: Date.now() - 10_000, finishedAt: Date.now() - 5_000 };
   const worker = await loadWorker({
     chromeLanguage: "en-US",
     nativePermission: true,

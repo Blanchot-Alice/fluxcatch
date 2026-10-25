@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Measure FluxCatch direct-download throughput against a chosen URL."""
+"""Measure Havre direct-download throughput against a chosen URL."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import threading
 import time
 
 HOST_PATH = pathlib.Path(__file__).with_name("host.py")
-SPEC = importlib.util.spec_from_file_location("fluxcatch_benchmark_host", HOST_PATH)
+SPEC = importlib.util.spec_from_file_location("havre_benchmark_host", HOST_PATH)
 host = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader
 import sys
@@ -37,7 +37,7 @@ def main() -> int:
     workers = sorted(set(max(1, min(24, int(value))) for value in args.workers.split(",") if value.strip()))
     probe = host.probe_direct(url, headers)
     results = []
-    with tempfile.TemporaryDirectory(prefix="fluxcatch-benchmark-") as directory:
+    with tempfile.TemporaryDirectory(prefix="havre-benchmark-") as directory:
         for count in workers:
             target = pathlib.Path(directory) / f"download-{count}.bin"
             progress = host.Progress(lambda _event: None, f"bench-{count}", target.name)

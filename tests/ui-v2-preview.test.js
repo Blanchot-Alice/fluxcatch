@@ -183,7 +183,7 @@ const $$ = (selector) => document.querySelectorAll(selector);
 const click = (element) => element.dispatchEvent(new Event("click", { bubbles: true }));
 const VIEW_IDS = ["type", "text", "controls", "rows", "feedback", "overlays"];
 // The audit's Latin allowlist for the Chinese UI (scripts/design-audit.mjs).
-const LATIN_OK = new Set(["fluxcatch", "finder", "chrome", "macos", "mp4", "mkv", "webm", "mp3", "m4a", "aac", "hls", "dash", "http", "kb", "mb", "gb", "tb", "youtube", "x"]);
+const LATIN_OK = new Set(["havre", "finder", "chrome", "macos", "mp4", "mkv", "webm", "mp3", "m4a", "aac", "hls", "dash", "http", "kb", "mb", "gb", "tb", "youtube", "x"]);
 
 function visible(element) {
   for (let e = element; e && e !== document; e = e.parentNode) {
@@ -285,7 +285,7 @@ test("messages/preview.js: identical keys, preview. prefix, natural Chinese, the
   for (const key of Object.keys(module.en)) assert.ok(key.startsWith("preview."), key);
   for (const [key, value] of Object.entries(module.en)) assert.ok(!CJK.test(value), `en ${key} has no CJK`);
   for (const [key, value] of Object.entries(module.zh)) {
-    const latin = (value.match(/[A-Za-z]{2,}/g) || []).filter((word) => !["MB", "GB", "FluxCatch", "Chrome", "Finder", "Mac"].includes(word));
+    const latin = (value.match(/[A-Za-z]{2,}/g) || []).filter((word) => !["MB", "GB", "Havre", "Chrome", "Finder", "Mac"].includes(word));
     assert.deepEqual(latin, [], `zh ${key} has no stray Latin: ${value}`);
   }
   assert.deepEqual(module.display, ["preview.title"], "the page title is the preview's one Display string");
@@ -308,7 +308,7 @@ test("skeleton: BrandMark M in the top bar, the page title, and the view switch 
     assert.equal(tab.getAttribute("aria-controls"), `view-${tab.dataset.value}`);
     assert.equal(panelOf(tab.dataset.value).getAttribute("aria-labelledby"), tab.id);
   }
-  assert.equal(document.title, "Components · FluxCatch");
+  assert.equal(document.title, "Components · Havre");
 });
 
 test("?view=<id> renders that view directly; an unknown id falls back to the first view", async () => {

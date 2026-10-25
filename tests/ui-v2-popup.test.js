@@ -194,7 +194,7 @@ const until = async (condition, timeout = 2000) => {
 // ---------- helpers ----------
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 const CJK = /[㐀-鿿　-〿＀-￯]/;
-const LATIN_OK = new Set(["fluxcatch", "finder", "chrome", "mp4", "mkv", "webm", "mp3", "m4a", "hls", "dash", "mb", "gb", "kb", "http", "https", "youtube", "instagram", "x"]);
+const LATIN_OK = new Set(["havre", "finder", "chrome", "mp4", "mkv", "webm", "mp3", "m4a", "hls", "dash", "mb", "gb", "kb", "http", "https", "youtube", "instagram", "x"]);
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => document.querySelectorAll(selector);
 const click = (element) => element.dispatchEvent(new Event("click", { bubbles: true }));
@@ -535,9 +535,9 @@ test("footer: Open workspace and All downloads as tertiary links; Folder is gone
   assert.ok(second.sent.some((message) => message.type === "OPEN_DOWNLOADS_PAGE"));
 });
 
-test("a page FluxCatch cannot read says so plainly and offers no Rescan", async () => {
+test("a page Havre cannot read says so plainly and offers no Rescan", async () => {
   const env = await bootPopup({ url: "chrome://newtab/" });
-  assert.equal($("#mediaEmpty .t-empty").textContent, "FluxCatch can’t read this page.");
+  assert.equal($("#mediaEmpty .t-empty").textContent, "Havre can’t read this page.");
   assert.equal($("#mediaEmpty button").hidden, true);
   assert.ok(env.sent.some((message) => message.type === "GET_SETTINGS"));
   assert.ok(!env.sent.some((message) => message.type === "GET_TAB_MEDIA"));
@@ -586,7 +586,7 @@ test("status changes are announced once per job, and a same-name retry is still 
 test("a language switch in Settings rebuilds the popup's copy in place", async () => {
   await bootPopup({ items: [FILE], jobs: [DONE_JOB] });
   assert.equal($('[role="tab"][data-view="media"] span').textContent, "Media");
-  for (const listener of chrome.storage.onChanged.listeners) listener({ "fluxcatch.uiLanguage.v1": { newValue: "zh" } }, "local");
+  for (const listener of chrome.storage.onChanged.listeners) listener({ "havre.uiLanguage.v1": { newValue: "zh" } }, "local");
   await settle(2);
   assert.equal(document.documentElement.lang, "zh-CN");
   assert.equal($('[role="tab"][data-view="media"] span').textContent, "媒体");
@@ -596,7 +596,7 @@ test("a language switch in Settings rebuilds the popup's copy in place", async (
   assert.equal($("#workspaceButton").textContent, "打开工作台");
   assert.equal($$('[role="tab"]').length, 2, "rebuilt, not duplicated");
   assert.equal($$("#topbarInner [data-brandmark]").length, 1);
-  for (const listener of chrome.storage.onChanged.listeners) listener({ "fluxcatch.uiLanguage.v1": { newValue: "en" } }, "local");
+  for (const listener of chrome.storage.onChanged.listeners) listener({ "havre.uiLanguage.v1": { newValue: "en" } }, "local");
 });
 
 // ---------- review fixes ----------
@@ -713,14 +713,14 @@ test("an idle worker's disconnect reconnects and resyncs; only a worker that nev
   const jobsBefore = env.sent.filter((message) => message.type === "GET_JOBS").length;
   for (const listener of env.ports[0].onDisconnect.listeners) listener();
   await until(() => env.ports.length === 2 && env.sent.filter((message) => message.type === "GET_JOBS").length > jobsBefore);
-  assert.notEqual(lineText("#engineLine"), "FluxCatch stopped responding");
+  assert.notEqual(lineText("#engineLine"), "Havre stopped responding");
   assert.equal(env.ports[1].onMessage.listeners.length, 1, "the new port carries the broadcasts");
 
   const { connectWorkerPort } = await import("../extension/ui/v2/runtime.js");
   let lost = 0;
   let opened = 0;
   chrome.runtime.connect = () => { opened += 1; if (opened > 1) throw new Error("Extension context invalidated."); return { onMessage: { addListener() {} }, onDisconnect: { addListener(fn) { chrome.__drop = fn; } } }; };
-  connectWorkerPort({ name: "fluxcatch-popup", onMessage() {}, onReconnect: async () => true, onLost: () => { lost += 1; }, delays: [1, 1] });
+  connectWorkerPort({ name: "havre-popup", onMessage() {}, onReconnect: async () => true, onLost: () => { lost += 1; }, delays: [1, 1] });
   chrome.__drop();
   await until(() => lost === 1);
   assert.equal(opened, 3, "two attempts, then the loss is reported once");
@@ -729,7 +729,7 @@ test("an idle worker's disconnect reconnects and resyncs; only a worker that nev
   const ports = [];
   chrome.runtime.connect = () => { const port = { onMessage: { addListener() {} }, onDisconnect: { addListener(fn) { port.drop = fn; } }, disconnect() { port.closed = true; } }; ports.push(port); return port; };
   let lostAgain = 0;
-  connectWorkerPort({ name: "fluxcatch-popup", onMessage() {}, onReconnect: async () => { answers += 1; return false; }, onLost: () => { lostAgain += 1; }, delays: [1, 1] });
+  connectWorkerPort({ name: "havre-popup", onMessage() {}, onReconnect: async () => { answers += 1; return false; }, onLost: () => { lostAgain += 1; }, delays: [1, 1] });
   ports[0].drop();
   await until(() => lostAgain === 1);
   assert.equal(answers, 2, "a resync that finds no worker counts as a failed attempt");

@@ -85,7 +85,7 @@ export const FAILURE_CODES = Object.freeze([
   "browser_closed",
   "browser_interrupted",
   "browser_record_missing",
-  // Answers the background worker gives to FluxCatch pages
+  // Answers the background worker gives to Havre pages
   "engine_not_set_up",
   "engine_unreachable",
   "engine_not_responding",
@@ -302,10 +302,10 @@ function normalise(value) {
 const LOCAL_PATH = "<本地路径已隐藏>";
 
 // Python quotes the file name of an OSError ("[Errno 28] No space left on
-// device: '/Volumes/T7/FluxCatch/fluxcatch-hls-1f/media/00000003.ts.tmp'").
+// device: '/Volumes/T7/Havre/havre-hls-1f/media/00000003.ts.tmp'").
 // background.js now hides every absolute local path before storing a record,
 // but records stored by older builds kept folders on other drives, and their
-// names ("fluxcatch-hls-…", "Period Dramas") would otherwise trip the stream
+// names ("havre-hls-…", "Period Dramas") would otherwise trip the stream
 // rules. A quoted absolute path never says what failed; replace it (closed or
 // cut off by the 240-character limit) with the redaction placeholder.
 function maskQuotedPaths(text) {
@@ -468,7 +468,7 @@ const CAUSE_RULES = [
   rule(/浏览器下载记录已不存在/, "browser_record_missing"),
   rule(/浏览器下载中断/, "browser_interrupted"),
 
-  // The worker's own answers to FluxCatch pages (background.js). The worker
+  // The worker's own answers to Havre pages (background.js). The worker
   // also sends the code itself; these rules keep the Chinese text it still
   // puts in `error` (and older records) classifiable.
   rule(/需要授权连接本地引擎|尚未授权连接本地引擎|需要本地下载引擎权限|本地下载引擎未连接，请先在设置里开启|请先设置本地引擎/, "engine_not_set_up"),
@@ -480,7 +480,7 @@ const CAUSE_RULES = [
   rule(/本地下载引擎不支持暂停/, "pause_unsupported"),
   rule(/消息格式无效|消息来源未通过校验|任务编号无效|标签页编号无效|不支持的文件操作|^Unknown message type\b/, "invalid_request"),
   rule(/商店版本不支持从此平台下载|此版本不支持从此平台下载/, "site_not_supported"),
-  rule(/该域名已在 FluxCatch 设置中被忽略/, "site_ignored"),
+  rule(/该域名已在 Havre 设置中被忽略/, "site_ignored"),
   rule(/该地址被当前设置忽略/, "ignored_by_settings"),
   rule(/网络策略已阻止\s*(\S*?)（blocked_(?:private|local_name)）/, "private_network_blocked", (match) => ({ host: hostFromUrl(match[1]) })),
   rule(/网络策略已阻止\s*(\S*?)（blocked_[a-z_]+）/, "address_blocked", (match) => ({ host: hostFromUrl(match[1]) })),
@@ -504,7 +504,7 @@ const CAUSE_RULES = [
   rule(/找不到这条下载记录/, "record_missing"),
   rule(/只有已完成的下载才能打开文件/, "file_not_ready"),
   rule(/文件已不在下载文件夹中|这条记录没有保存文件位置/, "file_missing"),
-  rule(/不在 FluxCatch 的下载文件夹里/, "file_outside_folder"),
+  rule(/不在 Havre 的下载文件夹里/, "file_outside_folder"),
   rule(/无法移到废纸篓/, "trash_failed"),
   rule(/操作失败，请在 Finder 中手动打开|本地引擎未能完成文件操作/, "file_action_failed"),
   rule(/无法更改保存位置/, "folder_change_failed"),
@@ -548,7 +548,7 @@ const CAUSE_RULES = [
   rule(/签名链接已过期|视频清晰度地址已过期/, "link_expired"),
   rule(/服务器返回了网页/, "html_instead_of_media"),
 
-  // Network policy (fluxcatch_network_policy.py and the pinned client).
+  // Network policy (havre_network_policy.py and the pinned client).
   rule(/Network target (\S+) is private\b/i, "private_network_blocked", (match) => ({ host: match[1] })),
   rule(/Network target (\S+) (?:resolves to|is) a metadata service/i, "address_blocked", (match) => ({ host: match[1] })),
   rule(/Network target (\S+) resolves to a forbidden address/i, "address_blocked", (match) => ({ host: match[1] })),
@@ -873,8 +873,8 @@ const CATALOG = Object.freeze({
     zh: (p) => `${p.host ? `${p.host} ` : "网站"}发送${stageZh(p)}时没有响应${retriesZh(p)}。请重试。`
   },
   network_tls_failed: {
-    en: (p) => `FluxCatch couldn't verify the secure connection to ${p.host || "the site"}, so it stopped. Check your network or proxy settings.`,
-    zh: (p) => `无法验证与${p.host ? ` ${p.host} ` : "网站"}的安全连接，FluxCatch 已停止下载。请检查网络或代理设置。`
+    en: (p) => `Havre couldn't verify the secure connection to ${p.host || "the site"}, so it stopped. Check your network or proxy settings.`,
+    zh: (p) => `无法验证与${p.host ? ` ${p.host} ` : "网站"}的安全连接，Havre 已停止下载。请检查网络或代理设置。`
   },
   network_proxy_failed: {
     en: (p) => `Your network proxy refused the connection to ${p.host || "the site"}${statusEn(p)}. Check your proxy settings.`,
@@ -917,16 +917,16 @@ const CATALOG = Object.freeze({
     zh: (p) => `${p.host ? `${p.host} ` : "这个地址"}位于你的家庭网络内。如需从这里下载，请在设置中开启“允许从家庭网络下载”。`
   },
   address_blocked: {
-    en: (p) => `For your safety, FluxCatch doesn't download from ${p.host || "this address"}.`,
-    zh: (p) => `为了安全，FluxCatch 不会从${p.host ? ` ${p.host} ` : "这个地址"}下载。`
+    en: (p) => `For your safety, Havre doesn't download from ${p.host || "this address"}.`,
+    zh: (p) => `为了安全，Havre 不会从${p.host ? ` ${p.host} ` : "这个地址"}下载。`
   },
   insecure_redirect_blocked: {
-    en: () => "The site tried to move this download to an unencrypted connection, so FluxCatch stopped.",
-    zh: () => "网站试图把下载转到未加密的连接上，FluxCatch 已停止。"
+    en: () => "The site tried to move this download to an unencrypted connection, so Havre stopped.",
+    zh: () => "网站试图把下载转到未加密的连接上，Havre 已停止。"
   },
   connection_changed: {
-    en: (p) => `The connection to ${p.host || "the site"} changed unexpectedly, so FluxCatch stopped for safety. Retry the download.`,
-    zh: (p) => `与${p.host ? ` ${p.host} ` : "网站"}的连接出现了意外变化，FluxCatch 出于安全考虑已停止。请重试。`
+    en: (p) => `The connection to ${p.host || "the site"} changed unexpectedly, so Havre stopped for safety. Retry the download.`,
+    zh: (p) => `与${p.host ? ` ${p.host} ` : "网站"}的连接出现了意外变化，Havre 出于安全考虑已停止。请重试。`
   },
   invalid_address: {
     en: () => "This media address can't be downloaded.",
@@ -945,39 +945,39 @@ const CATALOG = Object.freeze({
     zh: () => "你选的清晰度已不再提供。请刷新页面后重新选择。"
   },
   audio_track_missing: {
-    en: () => "FluxCatch couldn't find this video's sound. Refresh the page, then retry.",
+    en: () => "Havre couldn't find this video's sound. Refresh the page, then retry.",
     zh: () => "找不到这个视频的声音。请刷新页面后重试。"
   },
   stream_live: {
-    en: () => "This is a live stream. FluxCatch can't record live streams yet.",
-    zh: () => "这是直播，FluxCatch 暂时还不能录制直播。"
+    en: () => "This is a live stream. Havre can't record live streams yet.",
+    zh: () => "这是直播，Havre 暂时还不能录制直播。"
   },
   stream_discontinuous: {
-    en: () => "This video is stitched together from separate pieces, often with ads in between. FluxCatch can't save this kind yet.",
-    zh: () => "这个视频由几段互不衔接的内容拼成（常见于插播广告），FluxCatch 暂时还不能保存这类视频。"
+    en: () => "This video is stitched together from separate pieces, often with ads in between. Havre can't save this kind yet.",
+    zh: () => "这个视频由几段互不衔接的内容拼成（常见于插播广告），Havre 暂时还不能保存这类视频。"
   },
   stream_nested_audio: {
-    en: () => "This video's sound is packaged in a way FluxCatch can't handle yet.",
-    zh: () => "这个视频的声音封装方式比较特殊，FluxCatch 暂时还处理不了。"
+    en: () => "This video's sound is packaged in a way Havre can't handle yet.",
+    zh: () => "这个视频的声音封装方式比较特殊，Havre 暂时还处理不了。"
   },
   stream_empty: {
-    en: () => "This video has nothing FluxCatch can download.",
-    zh: () => "这个视频里没有 FluxCatch 能下载的内容。"
+    en: () => "This video has nothing Havre can download.",
+    zh: () => "这个视频里没有 Havre 能下载的内容。"
   },
   stream_invalid: {
-    en: () => "The site sent video details FluxCatch couldn't read. Refresh the page, then retry.",
+    en: () => "The site sent video details Havre couldn't read. Refresh the page, then retry.",
     zh: () => "网站返回的视频信息无法读取。请刷新页面后重试。"
   },
   stream_too_large: {
-    en: () => "This video has more parts than FluxCatch can handle in one download.",
-    zh: () => "这个视频分成的段数太多，超出了 FluxCatch 单次下载能处理的数量。"
+    en: () => "This video has more parts than Havre can handle in one download.",
+    zh: () => "这个视频分成的段数太多，超出了 Havre 单次下载能处理的数量。"
   },
   stream_unsupported: {
-    en: () => "This video uses a streaming format FluxCatch can't save yet.",
-    zh: () => "这个视频使用的播放格式，FluxCatch 暂时还不能保存。"
+    en: () => "This video uses a streaming format Havre can't save yet.",
+    zh: () => "这个视频使用的播放格式，Havre 暂时还不能保存。"
   },
   media_info_incomplete: {
-    en: () => "Some details FluxCatch needs for this video are missing. Rescan the page, then retry.",
+    en: () => "Some details Havre needs for this video are missing. Rescan the page, then retry.",
     zh: () => "这个视频缺少下载所需的部分信息。请重新扫描页面后重试。"
   },
   selection_changed: {
@@ -1009,8 +1009,8 @@ const CATALOG = Object.freeze({
     zh: () => `本地引擎被关闭了，下载因此停止。请到${ENGINE_SETTINGS_ZH}重新设置。`
   },
   engine_restarted: {
-    en: () => "Chrome restarted FluxCatch in the background, so this download stopped. Download it again.",
-    zh: () => "Chrome 在后台重启了 FluxCatch，这个下载因此中断。请重新下载。"
+    en: () => "Chrome restarted Havre in the background, so this download stopped. Download it again.",
+    zh: () => "Chrome 在后台重启了 Havre，这个下载因此中断。请重新下载。"
   },
   component_missing: {
     en: (p) => `${COMPONENT_EN[p.feature] || "This download"} needs video tools that aren't installed yet. Finish setup in ${ENGINE_SETTINGS_EN}.`,
@@ -1021,8 +1021,8 @@ const CATALOG = Object.freeze({
     zh: () => `已安装的视频处理工具无法生成 MP3 文件。请到${ENGINE_SETTINGS_ZH}重新安装。`
   },
   external_tool_disabled: {
-    en: () => "FluxCatch can't download this kind of video yet.",
-    zh: () => "FluxCatch 暂时还不能下载这类视频。"
+    en: () => "Havre can't download this kind of video yet.",
+    zh: () => "Havre 暂时还不能下载这类视频。"
   },
   youtube_tool_missing: {
     en: () => `YouTube downloads need yt-dlp on this Mac. Install it, then choose Retry in ${ENGINE_SETTINGS_EN}.`,
@@ -1033,8 +1033,8 @@ const CATALOG = Object.freeze({
     zh: (p) => `YouTube 引擎没能完成这个下载${Number.isInteger(p.exit_code) ? `（退出码 ${p.exit_code}）` : ""}。请重试；反复失败时请更新 yt-dlp。`
   },
   internal_error: {
-    en: () => "Something went wrong inside FluxCatch. Retry the download.",
-    zh: () => "FluxCatch 内部出了问题。请重试。"
+    en: () => "Something went wrong inside Havre. Retry the download.",
+    zh: () => "Havre 内部出了问题。请重试。"
   },
   disk_full: {
     // The save folder may sit on an external drive, so don't blame "your Mac".
@@ -1046,15 +1046,15 @@ const CATALOG = Object.freeze({
     zh: () => "找不到保存文件夹。请重新连接所在的磁盘，或在设置中换一个文件夹。"
   },
   folder_not_writable: {
-    en: () => "FluxCatch isn't allowed to save in this folder. Choose another folder in Settings.",
-    zh: () => "FluxCatch 没有权限保存到这个文件夹。请在设置中换一个文件夹。"
+    en: () => "Havre isn't allowed to save in this folder. Choose another folder in Settings.",
+    zh: () => "Havre 没有权限保存到这个文件夹。请在设置中换一个文件夹。"
   },
   output_name_unavailable: {
-    en: () => "FluxCatch couldn't find a free file name in the save folder. Rename or move files with the same name, then retry.",
+    en: () => "Havre couldn't find a free file name in the save folder. Rename or move files with the same name, then retry.",
     zh: () => "保存文件夹里找不到可用的文件名。请整理同名文件后重试。"
   },
   disk_write_failed: {
-    en: () => "FluxCatch couldn't finish writing the file. Retry the download.",
+    en: () => "Havre couldn't finish writing the file. Retry the download.",
     zh: () => "文件没能写完。请重试。"
   },
   processing_failed: {
@@ -1063,17 +1063,17 @@ const CATALOG = Object.freeze({
   },
   processing_timeout: {
     en: (p) => (p.hours
-      ? `Processing took longer than ${countEn(p.hours, "hour", "hours")}, so FluxCatch stopped it.`
-      : "Processing took too long, so FluxCatch stopped it."),
-    zh: (p) => (p.hours ? `处理时间超过 ${p.hours} 小时，FluxCatch 已停止。` : "处理时间太长，FluxCatch 已停止。")
+      ? `Processing took longer than ${countEn(p.hours, "hour", "hours")}, so Havre stopped it.`
+      : "Processing took too long, so Havre stopped it."),
+    zh: (p) => (p.hours ? `处理时间超过 ${p.hours} 小时，Havre 已停止。` : "处理时间太长，Havre 已停止。")
   },
   processing_output_too_large: {
-    en: () => "The finished file grew unusually large, so FluxCatch stopped.",
-    zh: () => "生成的文件异常庞大，FluxCatch 已停止。"
+    en: () => "The finished file grew unusually large, so Havre stopped.",
+    zh: () => "生成的文件异常庞大，Havre 已停止。"
   },
   drm_protected: {
-    en: () => "This video is copy-protected, so FluxCatch can't save it.",
-    zh: () => "这个视频受版权保护，FluxCatch 无法保存。"
+    en: () => "This video is copy-protected, so Havre can't save it.",
+    zh: () => "这个视频受版权保护，Havre 无法保存。"
   },
   key_fetch_failed: {
     en: (p) => `The site didn't provide the key needed to unlock this video${evenAfterRetriesEn(p)}. ${REFRESH_EN}`,
@@ -1113,7 +1113,7 @@ const CATALOG = Object.freeze({
     zh: () => "请先设置本地引擎。"
   },
   engine_unreachable: {
-    en: () => `FluxCatch couldn't reach the local engine. Check ${ENGINE_SETTINGS_EN}.`,
+    en: () => `Havre couldn't reach the local engine. Check ${ENGINE_SETTINGS_EN}.`,
     zh: () => `无法连接本地引擎。请到${ENGINE_SETTINGS_ZH}查看。`
   },
   engine_not_responding: {
@@ -1137,12 +1137,12 @@ const CATALOG = Object.freeze({
     zh: () => `当前的本地引擎不支持暂停。请到${ENGINE_SETTINGS_ZH}更新。`
   },
   invalid_request: {
-    en: () => "FluxCatch couldn't handle that request. Reload the page and try again.",
-    zh: () => "FluxCatch 无法处理这个请求。请重新载入页面后再试。"
+    en: () => "Havre couldn't handle that request. Reload the page and try again.",
+    zh: () => "Havre 无法处理这个请求。请重新载入页面后再试。"
   },
   site_not_supported: {
-    en: () => "FluxCatch can't download from this site.",
-    zh: () => "FluxCatch 不支持从这个网站下载。"
+    en: () => "Havre can't download from this site.",
+    zh: () => "Havre 不支持从这个网站下载。"
   },
   site_ignored: {
     en: () => "This site is in “Ignored sites” in Settings.",
@@ -1153,19 +1153,19 @@ const CATALOG = Object.freeze({
     zh: () => "这个链接被设置略过了：它的网站在“忽略的网站”里，或文件小于“忽略小于此大小的文件”中设定的大小。"
   },
   download_not_allowed: {
-    en: () => "For your safety, FluxCatch can't download this address. Play the video on the page, then retry.",
-    zh: () => "为了安全，FluxCatch 不能下载这个地址。请先在页面上播放一下视频，再重试。"
+    en: () => "For your safety, Havre can't download this address. Play the video on the page, then retry.",
+    zh: () => "为了安全，Havre 不能下载这个地址。请先在页面上播放一下视频，再重试。"
   },
   url_scheme_invalid: {
     en: () => "Enter a link that starts with http or https.",
     zh: () => "请输入以 http 或 https 开头的链接。"
   },
   not_media: {
-    en: () => "This link isn't a video, audio file or playlist FluxCatch can download.",
+    en: () => "This link isn't a video, audio file or playlist Havre can download.",
     zh: () => "这个链接不是可下载的视频、音频或播放列表。"
   },
   url_unreadable: {
-    en: () => "FluxCatch couldn't read this link. Check that it opens on its own, then retry.",
+    en: () => "Havre couldn't read this link. Check that it opens on its own, then retry.",
     zh: () => "无法读取这个链接。请确认它可以直接打开，再重试。"
   },
   record_missing: {
@@ -1181,8 +1181,8 @@ const CATALOG = Object.freeze({
     zh: () => "找不到文件，它可能已被移走或删除。"
   },
   file_outside_folder: {
-    en: () => "This file isn't in the FluxCatch folder. Open it from Finder.",
-    zh: () => "这个文件不在 FluxCatch 文件夹里，请在 Finder 中打开。"
+    en: () => "This file isn't in the Havre folder. Open it from Finder.",
+    zh: () => "这个文件不在 Havre 文件夹里，请在 Finder 中打开。"
   },
   trash_failed: {
     en: () => "Couldn't move the file to the Trash. Try it in Finder.",
@@ -1280,7 +1280,7 @@ const ACTIVITIES = [
   [/^正在暂停/, "Pausing…", "正在暂停…"],
   [/^已暂停/, "Paused", "已暂停"],
   [/^浏览器正在下载/, "Downloading", "正在下载"],
-  [/^已保存到 ?FluxCatch ?文件夹/, "Saved to the FluxCatch folder", "已保存到 FluxCatch 文件夹"],
+  [/^已保存到 ?Havre ?文件夹/, "Saved to the Havre folder", "已保存到 Havre 文件夹"],
   [/^已保存到下载目录/, "Saved to your Downloads folder", "已保存到“下载”文件夹"],
   [/^任务已取消/, "Cancelled", "已取消"]
 ];

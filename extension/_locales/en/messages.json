@@ -1,12 +1,12 @@
 {
   "extensionName": {
-    "message": "FluxCatch"
+    "message": "Havre"
   },
   "extensionDescription": {
     "message": "Finds the video and audio on the page you are viewing and saves the ones you choose to your computer. Nothing is uploaded."
   },
   "commandOpenPopup": {
-    "message": "Open FluxCatch"
+    "message": "Open Havre"
   },
   "commandOpenDownloads": {
     "message": "All downloads"

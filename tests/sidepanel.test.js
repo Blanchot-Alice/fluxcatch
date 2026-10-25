@@ -9,7 +9,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const extension = path.join(root, "extension");
 const read = (file) => fs.readFileSync(path.join(extension, file), "utf8");
 
-test("manifest exposes the FluxCatch side panel workspace", () => {
+test("manifest exposes the Havre side panel workspace", () => {
   const manifest = JSON.parse(read("manifest.json"));
   assert.ok(manifest.permissions.includes("sidePanel"));
   assert.equal(manifest.side_panel?.default_path, "sidepanel/sidepanel.html");
@@ -32,7 +32,7 @@ test("side panel ships its v2 assets, accessible states and the worker messages 
   assert.match(html, /sidepanel\.css/);
   assert.match(html, /sidepanel\.js/);
 
-  assert.match(js, /name:\s*"fluxcatch-sidepanel"/);
+  assert.match(js, /name:\s*"havre-sidepanel"/);
   for (const type of ["GET_TAB_MEDIA", "GET_JOBS", "CLEAR_COMPLETED_JOBS", "OPEN_DOWNLOADS_PAGE", "SCAN_TAB", "DOWNLOAD_BATCH", "GET_SETTINGS"]) {
     assert.match(js, new RegExp(`type: "${type}"`), type);
   }

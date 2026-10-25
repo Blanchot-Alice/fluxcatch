@@ -6,9 +6,9 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
-/** The extension to load: FLUXCATCH_EXTENSION_DIR (a packaged copy), else the source tree. */
+/** The extension to load: HAVRE_EXTENSION_DIR (a packaged copy), else the source tree. */
 export function extensionDir(root) {
-  return process.env.FLUXCATCH_EXTENSION_DIR ? path.resolve(process.env.FLUXCATCH_EXTENSION_DIR) : path.join(root, "extension");
+  return process.env.HAVRE_EXTENSION_DIR ? path.resolve(process.env.HAVRE_EXTENSION_DIR) : path.join(root, "extension");
 }
 
 /** The source commit as a report states it: the short hash of HEAD, "uncommitted"
@@ -37,5 +37,5 @@ export function sourceCommit(root) {
 /** What a report states about the build it captured. */
 export function buildIdentity(root) {
   const dir = extensionDir(root);
-  return { commit: sourceCommit(root), extensionDir: path.relative(root, dir) || ".", packaged: Boolean(process.env.FLUXCATCH_EXTENSION_DIR) };
+  return { commit: sourceCommit(root), extensionDir: path.relative(root, dir) || ".", packaged: Boolean(process.env.HAVRE_EXTENSION_DIR) };
 }

@@ -34,10 +34,10 @@ if [[ -n "$WORKTREE_STATUS" && "$ALLOW_DIRTY" -ne 1 ]]; then
   exit 2
 fi
 if ! command -v python3 >/dev/null 2>&1; then
-  echo "error: Python 3.9 or newer is required to validate and package FluxCatch" >&2
+  echo "error: Python 3.9 or newer is required to validate and package Havre" >&2
   exit 2
 fi
-python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else "error: Python 3.9 or newer is required to validate and package FluxCatch")'
+python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else "error: Python 3.9 or newer is required to validate and package Havre")'
 
 python3 scripts/validate.py
 npm run test:coverage

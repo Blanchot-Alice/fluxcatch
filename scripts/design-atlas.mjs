@@ -115,7 +115,7 @@ function build(before, after) {
   let e2e = null;
   try { e2e = JSON.parse(fs.readFileSync(E2E_LATEST, "utf8")); } catch { e2e = null; }
   pages.push(`<section class="cover">
-    <h1>FluxCatch design atlas <span class="zh">FluxCatch 设计图集</span></h1>
+    <h1>Havre design atlas <span class="zh">Havre 设计图集</span></h1>
     ${line(`Every audited screen, Morning and Dusk, English and Chinese: the capture before the v3 work beside the capture after it. ${date}.`, `每一屏审计过的界面，清晨与黄昏、英文与中文：v3 改动前的截图与改动后的截图并排。${date}。`)}
     <dl>
       <dt>${line("Before", "改动前")}</dt><dd>${esc(identity(before))}</dd>
@@ -189,8 +189,8 @@ function build(before, after) {
     .missing .none { border: 1px dashed #CDCCC8; padding: 24px; color: #5B5B60; }
     .folio { position: absolute; left: 64px; right: 64px; bottom: 28px; font-size: 13px; color: #5B5B60; display: flex; justify-content: space-between; }
   `;
-  const numbered = pages.map((page, index) => page.replace(/<\/section>$/, `<div class="folio"><span>FluxCatch design atlas · ${esc(date)} · before ${esc(before.label)} / after ${esc(after.label)}</span><span>${index + 1}</span></div></section>`));
-  return { css, pages: numbered, title: `FluxCatch design atlas ${esc(date)}` };
+  const numbered = pages.map((page, index) => page.replace(/<\/section>$/, `<div class="folio"><span>Havre design atlas · ${esc(date)} · before ${esc(before.label)} / after ${esc(after.label)}</span><span>${index + 1}</span></div></section>`));
+  return { css, pages: numbered, title: `Havre design atlas ${esc(date)}` };
 }
 
 const document = ({ css, title }, pages) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${title}</title><style>${css}</style></head><body>${pages.join("\n")}</body></html>`;

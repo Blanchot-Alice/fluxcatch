@@ -1,4 +1,4 @@
-// FluxCatch component preview (design review §0: 1440 × auto, full page) on
+// Havre component preview (design review §0: 1440 × auto, full page) on
 // the v2 system: the living gallery of the shared components, built from the
 // real builders (ui/v2 components.js, controls.js, rows.js, media.js) with
 // fixture data, so it never drifts from the product.

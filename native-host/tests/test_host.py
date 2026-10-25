@@ -22,7 +22,7 @@ from unittest import mock
 from urllib.parse import urlsplit
 
 HOST_PATH = pathlib.Path(__file__).resolve().parents[1] / "host.py"
-SPEC = importlib.util.spec_from_file_location("fluxcatch_host", HOST_PATH)
+SPEC = importlib.util.spec_from_file_location("havre_host", HOST_PATH)
 host = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader
 sys.modules[SPEC.name] = host
@@ -904,7 +904,7 @@ class HostTests(unittest.TestCase):
                 self.assertEqual(kinds, ["audio", "video"], "the decrypted merge carries both tracks")
 
     def test_inspect_hls_returns_playlist_text_through_pinned_client(self):
-        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(os.environ, {"FLUXCATCH_DOWNLOAD_DIR": directory}):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(os.environ, {"HAVRE_DOWNLOAD_DIR": directory}):
             native = host.Host()
             try:
                 with mock.patch.object(native, "send") as send:
@@ -967,7 +967,7 @@ class HostTests(unittest.TestCase):
             libmp3lame=True,
         )
         ytdlp = host.YtDlpCapabilities(path="/fixture/yt-dlp", version="2026.08.22")
-        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(os.environ, {"FLUXCATCH_DOWNLOAD_DIR": directory}), mock.patch.object(host, "probe_ffmpeg", return_value=capability), mock.patch.object(host, "probe_ytdlp", return_value=ytdlp):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(os.environ, {"HAVRE_DOWNLOAD_DIR": directory}), mock.patch.object(host, "probe_ffmpeg", return_value=capability), mock.patch.object(host, "probe_ytdlp", return_value=ytdlp):
             native = host.Host()
             try:
                 with mock.patch.object(native, "send") as send:
@@ -1001,7 +1001,7 @@ class HostTests(unittest.TestCase):
         capability = host.FfmpegCapabilities(path="/fixture/ffmpeg")
         with tempfile.TemporaryDirectory() as directory, mock.patch.dict(
             os.environ,
-            {"FLUXCATCH_DOWNLOAD_DIR": directory},
+            {"HAVRE_DOWNLOAD_DIR": directory},
         ), mock.patch.object(host, "probe_ffmpeg", return_value=capability):
             native = host.Host()
             try:
@@ -1026,7 +1026,7 @@ class HostTests(unittest.TestCase):
 
     def test_host_dash_pair_message_uses_selected_urls_scoped_headers_and_output_extension(self):
         capability = host.FfmpegCapabilities(path="/fixture/ffmpeg", libmp3lame=True)
-        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(os.environ, {"FLUXCATCH_DOWNLOAD_DIR": directory}), mock.patch.object(host, "probe_ffmpeg", return_value=capability):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(os.environ, {"HAVRE_DOWNLOAD_DIR": directory}), mock.patch.object(host, "probe_ffmpeg", return_value=capability):
             native = host.Host()
             events = []
 
@@ -1070,7 +1070,7 @@ class HostTests(unittest.TestCase):
         capability = host.FfmpegCapabilities()
         with tempfile.TemporaryDirectory() as directory, mock.patch.dict(
             os.environ,
-            {"FLUXCATCH_DOWNLOAD_DIR": directory},
+            {"HAVRE_DOWNLOAD_DIR": directory},
         ), mock.patch.object(host, "probe_ffmpeg", return_value=capability):
             native = host.Host()
             observed = []
@@ -1100,14 +1100,14 @@ class HostTests(unittest.TestCase):
             finally:
                 native.close()
 
-    def test_fluxcatch_environment_names_and_defaults(self):
-        self.assertEqual(host.USER_AGENT, f"Mozilla/5.0 FluxCatch/{host.VERSION}")
+    def test_havre_environment_names_and_defaults(self):
+        self.assertEqual(host.USER_AGENT, f"Mozilla/5.0 Havre/{host.VERSION}")
         capability = host.FfmpegCapabilities(path="/fixture/new-ffmpeg")
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
             with mock.patch.dict(os.environ, {
-                "FLUXCATCH_FFMPEG": "/fixture/new-ffmpeg",
-                "FLUXCATCH_DOWNLOAD_DIR": str(root / "new"),
+                "HAVRE_FFMPEG": "/fixture/new-ffmpeg",
+                "HAVRE_DOWNLOAD_DIR": str(root / "new"),
             }, clear=True), mock.patch.object(host, "probe_ffmpeg", return_value=capability) as probe:
                 native = host.Host()
                 try:
@@ -1121,9 +1121,78 @@ class HostTests(unittest.TestCase):
             ), mock.patch.object(host, "probe_ffmpeg", return_value=capability):
                 native = host.Host()
                 try:
-                    self.assertEqual(native.download_dir, root / "Downloads" / "FluxCatch")
+                    self.assertEqual(native.download_dir, root / "Downloads" / "Havre")
                 finally:
                     native.close()
+
+    def test_rename_migrations_keep_old_environment_config_folder_and_work_dirs(self):
+        """Design review v3.3 §2.2: the 0.2.5 names still work for one release."""
+        capability = host.FfmpegCapabilities(path="/fixture/old-ffmpeg")
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            # A11: a launcher written by the 0.2.5 installer exports FLUXCATCH_*.
+            with mock.patch.dict(os.environ, {
+                "FLUXCATCH_FFMPEG": "/fixture/old-ffmpeg",
+                "FLUXCATCH_DOWNLOAD_DIR": str(root / "old-env"),
+            }, clear=True), mock.patch.object(host, "probe_ffmpeg", return_value=capability) as probe:
+                native = host.Host()
+                try:
+                    probe.assert_called_once_with("/fixture/old-ffmpeg")
+                    self.assertEqual(native.download_dir, root / "old-env")
+                finally:
+                    native.close()
+            with mock.patch.dict(os.environ, {"HAVRE_DOWNLOAD_DIR": str(root / "new"), "FLUXCATCH_DOWNLOAD_DIR": str(root / "old")}, clear=True):
+                self.assertEqual(host.env_setting("DOWNLOAD_DIR"), str(root / "new"), "the new name wins when both are set")
+            with mock.patch.dict(os.environ, {}, clear=True):
+                self.assertIsNone(host.env_setting("DOWNLOAD_DIR"))
+            # A15: an install that saved into the old default folder keeps it; a new install gets the new one.
+            with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(host.Path, "home", return_value=root):
+                self.assertEqual(host.default_download_dir(), root / "Downloads" / "Havre")
+                (root / "Downloads" / "FluxCatch").mkdir(parents=True)
+                self.assertEqual(host.default_download_dir(), root / "Downloads" / "FluxCatch")
+                (root / "Downloads" / "Havre").mkdir()
+                self.assertEqual(host.default_download_dir(), root / "Downloads" / "Havre", "once the new folder exists it is the default")
+            # A2: the 0.2.5 config is copied over once; the old file stays.
+            legacy = root / "FluxCatch" / "config.json"
+            current = root / "Havre" / "config.json"
+            legacy.parent.mkdir()
+            legacy.write_text(json.dumps({"downloadDir": str(root / "chosen")}), "utf-8")
+            self.assertEqual(host.load_host_config(current, legacy_path=legacy), {"downloadDir": str(root / "chosen")})
+            self.assertTrue(current.is_file(), "the config was carried over")
+            self.assertTrue(legacy.is_file(), "the old file is left for the old uninstaller")
+            current.write_text(json.dumps({"downloadDir": str(root / "newer")}), "utf-8")
+            self.assertEqual(host.load_host_config(current, legacy_path=legacy)["downloadDir"], str(root / "newer"), "an existing new file is never overwritten")
+            # A10: the old work-directory prefixes are still recognised.
+            for prefix in (".fluxcatch-dash-pair-", "fluxcatch-hls-", "fluxcatch-dash-", ".fluxcatch-convert-", ".fluxcatch-ytdlp-"):
+                self.assertIn(prefix, host.TEMP_WORK_PREFIXES)
+            self.assertTrue(host.TEMP_WORK_PREFIXES[0].startswith(".havre-"), "new work directories take the new prefixes")
+
+    def test_installer_migrates_a_0_2_5_install(self):
+        """v3.3 A1 and A2: the old manifest and runtime copy go, config.json comes along."""
+        install = HOST_PATH.parent / "install-macos.sh"
+        uninstall = HOST_PATH.parent / "uninstall-macos.sh"
+        with tempfile.TemporaryDirectory() as home:
+            environment = {**os.environ, "HOME": home}
+            app_support = pathlib.Path(home) / "Library/Application Support"
+            old_manifest = app_support / "Google/Chrome/NativeMessagingHosts/io.github.blanchot_alice.fluxcatch.json"
+            old_manifest.parent.mkdir(parents=True)
+            old_manifest.write_text("{}", "utf-8")
+            old_runtime = app_support / "FluxCatch"
+            (old_runtime / "native-host").mkdir(parents=True)
+            (old_runtime / "native-host" / "host.py").write_text("# old", "utf-8")
+            (old_runtime / "config.json").write_text(json.dumps({"downloadDir": "/Volumes/T7/Clips"}), "utf-8")
+            subprocess.run(["bash", str(install)], env=environment, check=True, capture_output=True, text=True)
+            self.assertFalse(old_manifest.exists(), "the old host id is unregistered")
+            self.assertTrue((app_support / "Google/Chrome/NativeMessagingHosts/io.github.blanchot_alice.havre.json").is_file())
+            self.assertFalse((old_runtime / "native-host").exists(), "the old runtime copy is removed")
+            self.assertTrue((old_runtime / "config.json").is_file(), "the old config stays for the old uninstaller")
+            carried = json.loads((app_support / "Havre" / "config.json").read_text("utf-8"))
+            self.assertEqual(carried, {"downloadDir": "/Volumes/T7/Clips"}, "the chosen folder is carried over")
+            (app_support / "Havre" / "config.json").write_text(json.dumps({"downloadDir": "/Volumes/T7/Newer"}), "utf-8")
+            subprocess.run(["bash", str(install)], env=environment, check=True, capture_output=True, text=True)
+            self.assertEqual(json.loads((app_support / "Havre" / "config.json").read_text("utf-8")), {"downloadDir": "/Volumes/T7/Newer"}, "a second run never overwrites the new config")
+            subprocess.run(["bash", str(uninstall)], env=environment, check=True, capture_output=True, text=True)
+            self.assertFalse((app_support / "Havre" / "native-host").exists())
 
     def test_static_dash_planner_expands_timeline_and_formatted_number(self):
         tracks = host.plan_static_dash(DASH_MPD.decode(), f"{self.base}/dash/out.mpd")
@@ -1271,7 +1340,7 @@ class HostTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory, mock.patch.dict(
             os.environ,
-            {"FLUXCATCH_DOWNLOAD_DIR": directory},
+            {"HAVRE_DOWNLOAD_DIR": directory},
         ), mock.patch.object(host, "probe_ffmpeg", return_value=capability), mock.patch.object(
             host,
             "run_ffmpeg",
@@ -1323,7 +1392,7 @@ class HostTests(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as directory, mock.patch.dict(
             os.environ,
-            {"FLUXCATCH_DOWNLOAD_DIR": directory},
+            {"HAVRE_DOWNLOAD_DIR": directory},
         ), mock.patch.object(host, "probe_ffmpeg", return_value=capability):
             native = host.Host()
             events = []
@@ -1399,7 +1468,7 @@ class HostTests(unittest.TestCase):
             self.assertEqual(result.read_bytes(), b"locally-muxed-mp4")
             self.assertTrue(any(event.get("progress") == 0.9 and event.get("status") == "remuxing" for event in events))
             self.assertTrue(any(0.989 <= event.get("progress", 0) <= 0.991 for event in events))
-            self.assertEqual(list(root.glob(".fluxcatch-dash-pair-*")), [])
+            self.assertEqual(list(root.glob(".havre-dash-pair-*")), [])
 
     def test_dash_pair_mp3_downloads_only_audio_then_encodes_locally(self):
         events = []
@@ -1442,7 +1511,7 @@ class HostTests(unittest.TestCase):
             self.assertEqual(fetched, [("https://audio.example/track.m4s", {"authorization": "Bearer AUDIO"})])
             self.assertEqual(result.read_bytes(), b"encoded-mp3")
             self.assertTrue(any(event.get("progress") == 0.9 for event in events))
-            self.assertEqual(list(root.glob(".fluxcatch-dash-pair-*")), [])
+            self.assertEqual(list(root.glob(".havre-dash-pair-*")), [])
 
     def test_dash_pair_failure_and_cancellation_remove_all_temporary_files(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1569,12 +1638,12 @@ class HostTests(unittest.TestCase):
             self.assertFalse(target.with_suffix(".m4s.part.json").exists())
             self.assertNotIn("TOP_SECRET", "\n".join(str(path) for path in root.rglob("*")))
 
-            crash_dir = root / ".fluxcatch-dash-pair-crashed"
+            crash_dir = root / ".havre-dash-pair-crashed"
             crash_dir.mkdir()
             (crash_dir / "video.m4s.part").write_bytes(b"partial")
             (crash_dir / "video.m4s.part.json").write_text(json.dumps({"url": secret_url}), "utf-8")
             crash_dirs = [crash_dir]
-            for name in ("fluxcatch-hls-crashed", "fluxcatch-dash-crashed", ".fluxcatch-convert-crashed"):
+            for name in ("havre-hls-crashed", "havre-dash-crashed", ".havre-convert-crashed"):
                 work = root / name
                 work.mkdir()
                 (work / "partial.bin").write_bytes(b"partial")
@@ -1582,7 +1651,7 @@ class HostTests(unittest.TestCase):
             unrelated = root / "keep-this-directory"
             unrelated.mkdir()
             capability = host.FfmpegCapabilities(path="/fixture/ffmpeg")
-            with mock.patch.dict(os.environ, {"FLUXCATCH_DOWNLOAD_DIR": str(root)}), mock.patch.object(host, "probe_ffmpeg", return_value=capability):
+            with mock.patch.dict(os.environ, {"HAVRE_DOWNLOAD_DIR": str(root)}), mock.patch.object(host, "probe_ffmpeg", return_value=capability):
                 native = host.Host()
                 try:
                     self.assertTrue(all(not path.exists() for path in crash_dirs), "startup removes every native temporary-work class")
@@ -1623,7 +1692,7 @@ class HostTests(unittest.TestCase):
 
     def test_dash_pair_rejects_expired_queued_job_and_track_start_expiry(self):
         capability = host.FfmpegCapabilities(path="/fixture/ffmpeg")
-        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(os.environ, {"FLUXCATCH_DOWNLOAD_DIR": directory}), mock.patch.object(host, "probe_ffmpeg", return_value=capability):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(os.environ, {"HAVRE_DOWNLOAD_DIR": directory}), mock.patch.object(host, "probe_ffmpeg", return_value=capability):
             native = host.Host()
             events = []
             try:
@@ -2052,7 +2121,7 @@ class HostTests(unittest.TestCase):
         capability = host.FfmpegCapabilities(path="/fixture/ffmpeg")
         with tempfile.TemporaryDirectory() as directory, mock.patch.dict(
             os.environ,
-            {"FLUXCATCH_DOWNLOAD_DIR": directory},
+            {"HAVRE_DOWNLOAD_DIR": directory},
         ), mock.patch.object(host, "probe_ffmpeg", return_value=capability):
             native = host.Host()
             try:
@@ -2163,7 +2232,7 @@ class HostTests(unittest.TestCase):
             if len(attempts) == 1:
                 raise TimeoutError("timed out")
             response = StubResponse(b"#EXTM3U\n#EXT-X-ENDLIST\n")
-            response._fluxcatch_request_headers = {"user-agent": "fixture"}  # noqa: SLF001
+            response._havre_request_headers = {"user-agent": "fixture"}  # noqa: SLF001
             return response
 
         with mock.patch.object(host, "request", side_effect=fake_request):
@@ -2294,7 +2363,7 @@ class HostTests(unittest.TestCase):
         target = pathlib.Path("capture.mp4")
         progress = host.Progress(lambda _event: None, "job", target.name)
         with mock.patch.object(host, "select_hls_media", return_value=(live, "", None, None)), mock.patch.object(host, "run_ffmpeg") as run:
-            with self.assertRaisesRegex(host.DownloadError, "Live HLS recording.*0.2.5"):
+            with self.assertRaisesRegex(host.DownloadError, "Live HLS recording.*0.3.0"):
                 host.hls_fast_download(live.url, target, {}, 1, threading.Event(), progress, "/ffmpeg", live_duration=37)
         run.assert_not_called()
 
@@ -2352,7 +2421,7 @@ class HostTests(unittest.TestCase):
         ]
         for playlist, message in unsupported:
             with self.subTest(message=message), mock.patch.object(host, "select_hls_media", return_value=(playlist, "", None, None)), mock.patch.object(host, "run_ffmpeg") as run:
-                with self.assertRaisesRegex(host.DownloadError, f"{message}.*0.2.5"):
+                with self.assertRaisesRegex(host.DownloadError, f"{message}.*0.3.0"):
                     host.hls_fast_download(playlist.url, target, {}, 1, threading.Event(), progress, "/ffmpeg")
             run.assert_not_called()
 
@@ -2626,18 +2695,18 @@ class HostTests(unittest.TestCase):
                 (app_support / browser_root).mkdir(parents=True)
             subprocess.run(["bash", str(install)], env=environment, check=True, capture_output=True, text=True)
             manifest_paths = [
-                app_support / "Google/Chrome/NativeMessagingHosts/io.github.blanchot_alice.fluxcatch.json",
-                app_support / "Google/Chrome for Testing/NativeMessagingHosts/io.github.blanchot_alice.fluxcatch.json",
-                app_support / "Chromium/NativeMessagingHosts/io.github.blanchot_alice.fluxcatch.json",
+                app_support / "Google/Chrome/NativeMessagingHosts/io.github.blanchot_alice.havre.json",
+                app_support / "Google/Chrome for Testing/NativeMessagingHosts/io.github.blanchot_alice.havre.json",
+                app_support / "Chromium/NativeMessagingHosts/io.github.blanchot_alice.havre.json",
             ]
             self.assertTrue(all(path.is_file() for path in manifest_paths))
             manifest_path = manifest_paths[0]
             manifest = json.loads(manifest_path.read_text("utf-8"))
-            self.assertEqual(manifest["name"], "io.github.blanchot_alice.fluxcatch")
+            self.assertEqual(manifest["name"], "io.github.blanchot_alice.havre")
             launcher = pathlib.Path(manifest["path"])
             launcher_text = launcher.read_text("utf-8")
-            installed_host = pathlib.Path(home) / "Library/Application Support/FluxCatch/native-host/host.py"
-            installed_policy = pathlib.Path(home) / "Library/Application Support/FluxCatch/native-host/fluxcatch_network_policy.py"
+            installed_host = pathlib.Path(home) / "Library/Application Support/Havre/native-host/host.py"
+            installed_policy = pathlib.Path(home) / "Library/Application Support/Havre/native-host/havre_network_policy.py"
             self.assertTrue(launcher.is_absolute())
             self.assertTrue(os.access(launcher, os.X_OK))
             self.assertTrue(installed_host.is_file())
@@ -2646,7 +2715,7 @@ class HostTests(unittest.TestCase):
             self.assertTrue(installed_policy.is_file())
             self.assertEqual(
                 installed_policy.read_bytes(),
-                (HOST_PATH.parent / "fluxcatch_network_policy.py").read_bytes(),
+                (HOST_PATH.parent / "havre_network_policy.py").read_bytes(),
             )
             self.assertEqual(installed_policy.stat().st_mode & 0o777, 0o700)
             # The launcher must pin the stable interpreter path (the
@@ -2664,7 +2733,7 @@ class HostTests(unittest.TestCase):
             self.assertNotIn(str(HOST_PATH.resolve()), launcher_text)
             ffmpeg = shutil.which("ffmpeg")
             if ffmpeg:
-                self.assertIn(f"FLUXCATCH_FFMPEG={ffmpeg}", launcher_text)
+                self.assertIn(f"HAVRE_FFMPEG={ffmpeg}", launcher_text)
             self.assertNotIn("/usr/bin/env python3", launcher_text)
 
             subprocess.run(["bash", str(uninstall)], env=environment, check=True, capture_output=True, text=True)
@@ -2754,7 +2823,7 @@ class HostTests(unittest.TestCase):
             self.assertFalse(any(name.endswith(".tmp") for name in staged), "no half-written object survives a pause")
             self.assertEqual(host.unique_path(root, "paused.ts", allow_checkpoint=True), target, "the resuming job gets the same name")
             # Startup cleanup keeps the referenced directory but drops orphans.
-            orphan = root / "fluxcatch-hls-orphan"
+            orphan = root / "havre-hls-orphan"
             orphan.mkdir()
             host.cleanup_stale_workdirs(root)
             self.assertTrue(work_dir.is_dir())
@@ -2771,7 +2840,7 @@ class HostTests(unittest.TestCase):
     def test_expired_pause_markers_and_discard_remove_every_leftover(self):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
-            kept = root / "fluxcatch-dash-kept"
+            kept = root / "havre-dash-kept"
             kept.mkdir()
             (kept / "video-default").mkdir()
             target = root / "paused.mp4"
@@ -2825,7 +2894,7 @@ class HostTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
             config_path = root / "config.json"
-            chosen = root / "Movies" / "FluxCatch"
+            chosen = root / "Movies" / "Havre"
             previous = root / "Old"
             previous.mkdir()
             (previous / "kept.mp4").write_bytes(b"old")
@@ -2835,17 +2904,17 @@ class HostTests(unittest.TestCase):
             host.save_host_config({"downloadDir": str(chosen), "knownDownloadDirs": [str(previous), "relative/path", str(root / "missing")]}, config_path)
             config = host.load_host_config(config_path)
             with mock.patch.dict(os.environ, {}, clear=False):
-                os.environ.pop("FLUXCATCH_DOWNLOAD_DIR", None)
+                os.environ.pop("HAVRE_DOWNLOAD_DIR", None)
                 self.assertEqual(host.resolve_download_dir(config), chosen.resolve())
                 self.assertTrue(chosen.is_dir(), "a chosen folder is created on demand")
                 self.assertEqual(host.resolve_download_dir({"downloadDir": "not/absolute"}), host.default_download_dir())
-            with mock.patch.dict(os.environ, {"FLUXCATCH_DOWNLOAD_DIR": str(root / "env")}):
+            with mock.patch.dict(os.environ, {"HAVRE_DOWNLOAD_DIR": str(root / "env")}):
                 self.assertEqual(host.resolve_download_dir(config), root / "env")
             self.assertEqual(host.known_download_dirs(config), [previous])
             with self.assertRaises(host.DownloadError):
                 host.validate_download_dir("relative")
             with self.assertRaises(host.DownloadError):
-                host.validate_download_dir(str(root / "fluxcatch-hls-work"))
+                host.validate_download_dir(str(root / "havre-hls-work"))
             link = root / "link"
             link.symlink_to(previous)
             with self.assertRaises(host.DownloadError):
@@ -2865,7 +2934,7 @@ class HostTests(unittest.TestCase):
 
             sent = []
             native.send = sent.append
-            with mock.patch.dict(os.environ, {"FLUXCATCH_DOWNLOAD_DIR": str(root / "env")}), mock.patch.object(host, "default_download_dir", return_value=root / "Default"):
+            with mock.patch.dict(os.environ, {"HAVRE_DOWNLOAD_DIR": str(root / "env")}), mock.patch.object(host, "default_download_dir", return_value=root / "Default"):
                 native.handle_choose_folder({"type": "choose_folder", "requestId": "r1", "reset": True})
             self.assertTrue(sent[-1]["ok"], sent[-1])
             self.assertEqual(sent[-1]["downloadDir"], str((root / "Default").resolve()))
@@ -2926,7 +2995,7 @@ class ManifestFetchDeadlineTest(unittest.TestCase):
         )
         try:
             with self.assertRaises(host.DownloadError) as caught:
-                host.fetch_manifest(url, {"user-agent": "fluxcatch-test"})
+                host.fetch_manifest(url, {"user-agent": "havre-test"})
         finally:
             host.reset_current_network_policy(token)
             server.shutdown()
@@ -3006,7 +3075,7 @@ class OutputAndFileActionTests(unittest.TestCase):
 
     def _host(self, directory):
         capability = host.FfmpegCapabilities(path="/fixture/ffmpeg", version="8.1", hls_demuxer=True, dash_demuxer=True, libmp3lame=True)
-        with mock.patch.dict(os.environ, {"FLUXCATCH_DOWNLOAD_DIR": directory}), mock.patch.object(host, "probe_ffmpeg", return_value=capability), mock.patch.object(host, "probe_ytdlp", return_value=host.YtDlpCapabilities()):
+        with mock.patch.dict(os.environ, {"HAVRE_DOWNLOAD_DIR": directory}), mock.patch.object(host, "probe_ffmpeg", return_value=capability), mock.patch.object(host, "probe_ytdlp", return_value=host.YtDlpCapabilities()):
             return host.Host()
 
     def test_commit_file_publishes_under_next_free_name_when_occupied(self):
@@ -3032,7 +3101,7 @@ class OutputAndFileActionTests(unittest.TestCase):
             stale_staging = root / f".old.{'0' * 32}.part.mp4"
             fresh_part = root / "fresh.mp4.part"
             finished = root / "movie.mp4"
-            work_dir = root / "fluxcatch-hls-crash"
+            work_dir = root / "havre-hls-crash"
             for path in (stale_part, stale_checkpoint, stale_staging, fresh_part, finished):
                 path.write_bytes(b"x")
             work_dir.mkdir()
@@ -3294,15 +3363,15 @@ if mode == "hang":
     sys.exit(0)
 payload = through_broker(urllib.parse.urlsplit(url).path)
 template = argv[argv.index("-o") + 1]
-print("FLUXCATCH\tdownloading\t512\t%d\tNA\t2048\tNA\tNA" % len(payload), flush=True)
+print("HAVRE\tdownloading\t512\t%d\tNA\t2048\tNA\tNA" % len(payload), flush=True)
 time.sleep(0.35)
-print("FLUXCATCH\tdownloading\t%d\t%d\tNA\t4096\t3\t8" % (len(payload) - 1, len(payload)), flush=True)
-print("FLUXCATCH\tfinished\t%d\t%d\tNA\tNA\tNA\tNA" % (len(payload), len(payload)), flush=True)
-print("FLUXCATCH_PP\tstarted\tMerger", flush=True)
+print("HAVRE\tdownloading\t%d\t%d\tNA\t4096\t3\t8" % (len(payload) - 1, len(payload)), flush=True)
+print("HAVRE\tfinished\t%d\t%d\tNA\tNA\tNA\tNA" % (len(payload), len(payload)), flush=True)
+print("HAVRE_PP\tstarted\tMerger", flush=True)
 ext = "mp3" if "-x" in argv else argv[argv.index("--merge-output-format") + 1]
 with open(template.replace("%(ext)s", ext), "wb") as handle:
     handle.write(payload)
-print("FLUXCATCH_PP\tfinished\tMerger", flush=True)
+print("HAVRE_PP\tfinished\tMerger", flush=True)
 """
 
 
@@ -3360,7 +3429,7 @@ class ExternalToolTests(unittest.TestCase):
     def test_broker_requires_credentials_policy_and_connect(self):
         broker = host.ExternalToolBroker(self.policy)
         self.addCleanup(broker.close)
-        self.assertRegex(broker.proxy_url, rf"^http://fluxcatch:[A-Za-z0-9_-]+@127\.0\.0\.1:{broker.port}$")
+        self.assertRegex(broker.proxy_url, rf"^http://havre:[A-Za-z0-9_-]+@127\.0\.0\.1:{broker.port}$")
         sock, status = self.connect(broker, f"127.0.0.1:{self.port}", auth=False)
         sock.close()
         self.assertIn("407", status)
@@ -3404,7 +3473,7 @@ class ExternalToolTests(unittest.TestCase):
             target = root / "Fixture Clip.mp4"
             events = []
             progress = host.Progress(events.append, "job", target.name)
-            with mock.patch.dict(os.environ, {"https_proxy": "http://127.0.0.1:1", "FLUXCATCH_DISABLE_SYSTEM_PROXY": "1"}):
+            with mock.patch.dict(os.environ, {"https_proxy": "http://127.0.0.1:1", "HAVRE_DISABLE_SYSTEM_PROXY": "1"}):
                 result = host.youtube_download(
                     f"{self.base}/clip.mp4",
                     target,
@@ -3489,7 +3558,7 @@ class ExternalToolTests(unittest.TestCase):
             with self.assertRaises(host.DownloadError):
                 host.summarize_ytdlp_info(None)
 
-            with mock.patch.dict(os.environ, {"FLUXCATCH_DOWNLOAD_DIR": str(root), "FLUXCATCH_YTDLP": str(script)}):
+            with mock.patch.dict(os.environ, {"HAVRE_DOWNLOAD_DIR": str(root), "HAVRE_YTDLP": str(script)}):
                 native = host.Host()
                 try:
                     self.assertEqual(native.ytdlp, str(script.resolve()))

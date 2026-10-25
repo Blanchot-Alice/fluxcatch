@@ -1,4 +1,4 @@
-// FluxCatch Settings (design review §6.13) on the v2 system: a nav column and
+// Havre Settings (design review §6.13) on the v2 system: a nav column and
 // one content column of setting rows. Every control saves itself and shows an
 // inline "Saved"; there is no save bar. Allowing home-network downloads asks
 // first with the shared confirm popover. The local engine is explained once,
@@ -41,7 +41,7 @@ const DIRECT_SITES = Object.freeze(["Instagram", "X"]);
 const YOUTUBE = "YouTube";
 const FORMAT_LABELS = Object.freeze({ mp4: "MP4", mkv: "MKV", webm: "WebM" });
 const KB_UNIT = "KB";
-const DEFAULT_LOCATION = "~/Downloads/FluxCatch";
+const DEFAULT_LOCATION = "~/Downloads/Havre";
 const DESIGNER_URL = "../designer/designer.html";
 const SHORTCUTS_URL = "chrome://extensions/shortcuts";
 const SHORTCUT_LABELS = Object.freeze({
@@ -322,7 +322,7 @@ function buildStatus() {
   ];
 }
 
-// ---------- What FluxCatch can save ----------
+// ---------- What Havre can save ----------
 // What can be saved today. "Not yet" is for what this build lacks; a format
 // the build has but only the engine saves shows the engine's own state until
 // the engine is Ready (renderEngine), so the list never claims more than works.

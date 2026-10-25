@@ -1,8 +1,8 @@
-# FluxCatch UI v2: API reference
+# Havre UI v2: API reference
 
 The shared design system for every surface: popup, side panel, Downloads,
 Settings, component preview, and worker-built text. It implements the design
-review (`fluxcatch-design-review.md`, sections 3 to 7; kept outside this
+review (`havre-design-review.md`, sections 3 to 7; kept outside this
 repository by the project owner, so the rules it sets are restated below) and
 the approved rename table (`docs/design-review/rename-table.md`). The Downloads page
 (`extension/downloads/`) is the reference implementation.
@@ -143,7 +143,7 @@ its prefix:
 
 `messages.js` merges them and **throws at load** if two modules define the same
 key. Tests also enforce the prefixes, parity, and no locale leaks (no CJK in `en`,
-no stray Latin in `zh` except FluxCatch, Finder, Mac, Chrome, http(s), GB, MB).
+no stray Latin in `zh` except Havre, Finder, Mac, Chrome, http(s), GB, MB).
 Pluralise with `plural()` and format numbers with `formatCount()`; never "(s)".
 
 - `msg(key, params = {})` → string in the UI language; falls back to English, then to the key itself. Entries are strings or `(params) => string`.
@@ -173,7 +173,7 @@ The one locale source (review §7) and the owner of the language preference.
 - `bootLocale({ storage, onChanged })` → resolves the stored preference (Auto follows `chrome.i18n.getUILanguage()`), sets `<html lang>`, keeps it live. Await it before first render.
 - `onLocaleChange(listener)` → re-render on a language switch; returns an unsubscribe function.
 - `uiLanguage()` → `"en" | "zh"`; `uiLocale()` → BCP 47 tag for Intl.
-- The preference (Settings → Language): `UI_LANGUAGE_STORAGE_KEY` (`"fluxcatch.uiLanguage.v1"` in `chrome.storage.local`, unchanged from v1), `loadUiLanguage(storage)` → `"auto" | "en" | "zh"`, `saveUiLanguage(pref, storage)` → the normalised value it stored (every open page follows through `bootLocale`'s listener), `resolveUiLanguage(pref, chromeLanguage)` → `"en" | "zh"` (Auto: Chinese for a `zh*` Chrome, English otherwise), `getUiLanguage()` / `setUiLanguage(language)` for the language in force (tests set it directly).
+- The preference (Settings → Language): `UI_LANGUAGE_STORAGE_KEY` (`"havre.uiLanguage.v1"` in `chrome.storage.local`, unchanged from v1), `loadUiLanguage(storage)` → `"auto" | "en" | "zh"`, `saveUiLanguage(pref, storage)` → the normalised value it stored (every open page follows through `bootLocale`'s listener), `resolveUiLanguage(pref, chromeLanguage)` → `"en" | "zh"` (Auto: Chinese for a `zh*` Chrome, English otherwise), `getUiLanguage()` / `setUiLanguage(language)` for the language in force (tests set it directly).
 - `formatBytes(n)`, `formatRate(n)` (decimal units, like Finder; `lib/format.js` with `uiLocale()`), `formatDuration(s)` ("2:28"), `formatCount(n)`, `formatRelativeTime(ts, now)` ("just now" under a minute, then Intl; Chinese minute, hour and day forms get a space around the numeral, "5 分钟前", like the rest of the Chinese copy), `dayGroupOf(ts, now)` → `today | yesterday | week | earlier`, `plural(count, { one, other })`.
 
 ## lib/format.js
@@ -188,7 +188,7 @@ calls it with its own locale for notifications and quality labels.
 ## errors.js and runtime.js
 
 - `callWorker(message)` → resolves `{ ok: true, ... }`; on `{ ok: false }` throws `workerError(response)`: an `Error(response.error)` that keeps `code`, `params` and `jobId` when the worker sends them.
-- `connectWorkerPort({ name, onMessage, onReconnect, onLost, delays = [300, 1000, 3000] })` → the page's broadcast port (`"fluxcatch-popup"`, `"fluxcatch-sidepanel"`, `"fluxcatch-downloads"`). Call it before anything awaits. An MV3 worker that goes idle drops its ports although nothing is wrong: the page reconnects after each delay in turn (which wakes the worker), then calls `onReconnect()` to resync what it missed (resolve `false` when the worker did not answer; that counts as a failed attempt). A successful resync resets the backoff. One live port at a time, so no broadcast arrives twice. `onLost()` runs once, only when connecting throws or every attempt fails (the extension was reloaded or updated): show "stopped responding · Reload" then.
+- `connectWorkerPort({ name, onMessage, onReconnect, onLost, delays = [300, 1000, 3000] })` → the page's broadcast port (`"havre-popup"`, `"havre-sidepanel"`, `"havre-downloads"`). Call it before anything awaits. An MV3 worker that goes idle drops its ports although nothing is wrong: the page reconnects after each delay in turn (which wakes the worker), then calls `onReconnect()` to resync what it missed (resolve `false` when the worker did not answer; that counts as a failed attempt). A successful resync resets the backoff. One live port at a time, so no broadcast arrives twice. `onLost()` runs once, only when connecting throws or every attempt fails (the extension was reloaded or updated): show "stopped responding · Reload" then.
 - `errorText(error)` → the sentence to show, in the UI language: `error.userMessage`; else a known `error.code` from `lib/job-failure.js` `FAILURE_CODES` through `describeJobFailure({ code, params })`; else `classifyJobFailure({ text })` unless unknown; else `toast.genericError`. Raw text never reaches either UI (it may be engine, Chrome or exception text). The worker sends a code with every error, and every Chinese error the worker and the engine can emit classifies to a code (`tests/job-failure.test.js` scans `background.js`, `native-host/host.py` and `lib/` for strings that do not).
 - `userError(text)` → an Error carrying `userMessage` (for copy you already have from `msg()`).
 - `isKnownFailureCode(code)` → true for any FAILURE_CODES entry except `"unknown"`.
@@ -207,7 +207,7 @@ calls it with its own locale for notifications and quality labels.
 | Builder | Returns / classes | Notes |
 |---|---|---|
 | `icon(name)` | `svg.icon` | `settings link more search video audio stream folder source copy trash remove clear close chevron rescan workspace` |
-| `brandMark({ size: "s" \| "m" })` | `span.brandmark[data-brandmark]` > `img.brandmark-logo` (icons/fluxcatch-mark.svg at m, icons/fluxcatch-mark-16.svg at s) + `span.t-wordmark` | `display: contents`; place it inside a `.lead-grid`. S in popup and side panel, M on full pages. No subtitle. |
+| `brandMark({ size: "s" \| "m" })` | `span.brandmark[data-brandmark]` > `img.brandmark-logo` (icons/havre-mark.svg at m, icons/havre-mark-16.svg at s) + `span.t-wordmark` | `display: contents`; place it inside a `.lead-grid`. S in popup and side panel, M on full pages. No subtitle. |
 | `button({ kind, label, iconName, title, type, action, jobId })` | `button.btn.btn-{primary\|secondary\|tertiary\|destructive}` | `data-action`, `data-job-id`. Heights 36 (32 compact). Tertiary and destructive bleed 8px so text stays on the grid. One primary per view; destructive is always confirmed. |
 | `iconButton({ iconName, label, action, jobId, haspopup })` | `button.icon-button` 32 × 32 | `title` and `aria-label` from `label`. |
 | `status(tone, label)` | `span.status.t-meta[data-tone]` | 8px dot + word. Tones `progress paused queued complete warning failed cancelled`. Exceptions only. |

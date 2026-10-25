@@ -1,7 +1,7 @@
 (() => {
   "use strict";
-  if (globalThis.__fluxCatchContentInstalled) return;
-  globalThis.__fluxCatchContentInstalled = true;
+  if (globalThis.__havreContentInstalled) return;
+  globalThis.__havreContentInstalled = true;
 
   const sent = new Map();
   const MAX_SENT = 800;
@@ -10,12 +10,12 @@
   const MUTATION_RESCAN_COOLDOWN_MS = 5000;
   const MAX_PREVIEW_URL_LENGTH = 4096;
   const TOP_FRAME = window === window.top;
-  const SITE_PAYLOAD_KIND = globalThis.__fluxcatchSiteExtract?.payloadSiteForPage?.(location.hostname, TOP_FRAME) || null;
+  const SITE_PAYLOAD_KIND = globalThis.__havreSiteExtract?.payloadSiteForPage?.(location.hostname, TOP_FRAME) || null;
   // Pornhub / MissAV / Jable: the page's own scripts name the HLS ladder.
   const LADDER_SITE = Boolean(SITE_PAYLOAD_KIND)
-    && (globalThis.__fluxcatchSiteExtract?.LADDER_SITES || []).includes(SITE_PAYLOAD_KIND);
+    && (globalThis.__havreSiteExtract?.LADDER_SITES || []).includes(SITE_PAYLOAD_KIND);
   const SITE_TITLE_SUFFIX = /\s*(?:[-|–]\s*)?(?:Pornhub(?:\.com)?|MissAV|ThisAV|Jable(?:\.tv)?)\s*$/i;
-  const X_PROGRESSIVE_CHANNEL = "fluxcatch-x-progressive-v1";
+  const X_PROGRESSIVE_CHANNEL = "havre-x-progressive-v1";
   const SITE_MEDIA_CACHE_MAX = 256;
   const SITE_MEDIA_CACHE_TTL_MS = 15 * 60 * 1000;
   const cachedSiteMedia = new Map();
@@ -171,7 +171,7 @@
   // page's ladder key; the worker groups them into one card with a quality
   // menu and hands every transfer to the pinned native client.
   function scanLadderScripts(root) {
-    const extract = globalThis.__fluxcatchSiteExtract;
+    const extract = globalThis.__havreSiteExtract;
     if (!extract || !LADDER_SITE || !currentLadderPageKey()) return;
     const scripts = [];
     if (root instanceof HTMLScriptElement) scripts.push(root);
@@ -299,7 +299,7 @@
   window.addEventListener("message", (event) => {
     if (!TOP_FRAME || SITE_PAYLOAD_KIND !== "instagram") return;
     if (event.source !== window || event.origin !== location.origin) return;
-    if (event.data?.type !== "FLUXCATCH_INSTAGRAM_MEDIA_V1" || !event.data.video || typeof event.data.video !== "object") return;
+    if (event.data?.type !== "HAVRE_INSTAGRAM_MEDIA_V1" || !event.data.video || typeof event.data.video !== "object") return;
     const candidate = trustedInstagramProgressiveItem(event.data.video);
     if (!candidate) return;
     cacheSiteCandidate(candidate);
@@ -384,7 +384,7 @@
   // before this file). Sent through the same CONTENT_MEDIA pipeline as every
   // other observation, so background-side validation still applies.
   function scanSitePayloads(root = document) {
-    const extract = globalThis.__fluxcatchSiteExtract;
+    const extract = globalThis.__havreSiteExtract;
     if (!extract || !SITE_PAYLOAD_KIND) return;
     if (LADDER_SITE) {
       scanLadderScripts(root);

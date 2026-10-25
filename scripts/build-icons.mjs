@@ -4,8 +4,8 @@
 // the marks use feGaussianBlur filters and a mask, which only a browser engine
 // renders faithfully (design review v3.2 §3).
 //   node scripts/build-icons.mjs [--sizes 16,32,48,128] [--logo] [--sheet <png>]
-// 16 px comes from icons/fluxcatch-mark-16.svg (the dedicated 16 px mark); the
-// other sizes from icons/fluxcatch-mark.svg (the 128 mark). --logo also writes
+// 16 px comes from icons/havre-mark-16.svg (the dedicated 16 px mark); the
+// other sizes from icons/havre-mark.svg (the 128 mark). --logo also writes
 // docs/assets/icon.png (the README logo) from the 128 mark at 256 px. --sheet
 // writes a contact sheet of the rasters at 128/48/32/16 on Chrome's light and
 // dark toolbars and on both canvases, plus the in-app BrandMark sizes (24 and
@@ -24,7 +24,7 @@ const argv = process.argv.slice(2);
 const option = (name, fallback) => { const index = argv.indexOf(`--${name}`); return index >= 0 ? argv[index + 1] : fallback; };
 const flag = (name) => argv.includes(`--${name}`);
 const SIZES = option("sizes", "16,32,48,128").split(",").map((n) => Number(n.trim())).filter((n) => Number.isInteger(n) && n > 0);
-const SOURCE = (size) => path.join(ICONS, size === 16 ? "fluxcatch-mark-16.svg" : "fluxcatch-mark.svg");
+const SOURCE = (size) => path.join(ICONS, size === 16 ? "havre-mark-16.svg" : "havre-mark.svg");
 const LOGO = flag("logo") ? path.join(ROOT, "docs", "assets", "icon.png") : null;
 const LOGO_SIZE = 256;
 const SHEET = option("sheet", null) ? path.resolve(option("sheet", null)) : null;

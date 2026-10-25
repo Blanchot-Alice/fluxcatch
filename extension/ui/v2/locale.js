@@ -9,7 +9,8 @@ import { msg } from "./messages.js";
 
 /** chrome.storage.local key of the language preference: "auto" | "en" | "zh".
  *  The background worker reads the same key (tests/worker-i18n.test.js). */
-export const UI_LANGUAGE_STORAGE_KEY = "fluxcatch.uiLanguage.v1";
+export const UI_LANGUAGE_STORAGE_KEY = "havre.uiLanguage.v1";
+import { readWithLegacy } from "../../lib/legacy-storage.js";
 
 const listeners = new Set();
 let activeLanguage = "zh";
@@ -44,8 +45,7 @@ export function getUiLanguage() {
 export async function loadUiLanguage(storage) {
   const store = storage || globalThis.chrome?.storage?.local;
   if (!store?.get) return "auto";
-  const stored = await store.get(UI_LANGUAGE_STORAGE_KEY);
-  return normalizePref(stored?.[UI_LANGUAGE_STORAGE_KEY]);
+  return normalizePref(await readWithLegacy(store, UI_LANGUAGE_STORAGE_KEY));
 }
 
 /** Store a preference (normalised to "auto" | "en" | "zh"); returns what was stored.

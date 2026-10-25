@@ -12,7 +12,7 @@ documentation changes alone do not carry test status forward.
 
 These entries are provenance only. They do not carry a checked state into 0.2.5.
 
-## Automated gates for 0.2.5
+## Automated gates for 0.3.0
 
 - [ ] One clean final commit is recorded; Node (at least 65% line/branch and 70% function coverage), validator, native-host Python 3.9/3.12, and packaged-extension Chrome jobs are green for that exact SHA.
 - [ ] CI builds extension/native archives once, verifies them with `scripts/verify_packages.py`, uploads those exact bytes, and every later test/release step downloads the same artifact set.
@@ -21,7 +21,7 @@ These entries are provenance only. They do not carry a checked state into 0.2.5.
 - [ ] The native ZIP link/entry/mode audit passes, its root wrapper rejects Python below 3.9, and source/ZIP install and uninstall commands are smoke-tested.
 - [ ] Perform and record a final archive inspection for secrets, private paths, signing material, profiles, and downloaded media before publishing.
 
-### 0.2.5 product-interface gate
+### 0.3.0 product-interface gate
 
 Phase B scope decision (Trinity): `autoEnrichSiteQuality` is intentionally
 enabled by default so the toolbar badge can be completed automatically after
@@ -55,7 +55,7 @@ links with:
 
 ```sh
 npm run verify:package
-unzip -p dist/fluxcatch-extension-0.2.5.zip lib/build-profile.js | grep -E 'commit:|buildTimestamp:'
+unzip -p dist/havre-extension-0.3.0.zip lib/build-profile.js | grep -E 'commit:|buildTimestamp:'
 ```
 
 Package timestamps and modes derive from `SOURCE_DATE_EPOCH`, or from the Git
@@ -116,7 +116,7 @@ review alone.
 ## Store gates
 
 - [ ] Official Item ID/public key is synchronized with native `allowed_origins`.
-- [x] Native Messaging uses the owned reverse-DNS name `io.github.blanchot_alice.fluxcatch` across release components.
+- [x] Native Messaging uses the owned reverse-DNS name `io.github.blanchot_alice.havre` across release components.
 - [ ] Privacy, permission, active-network behavior, and data-use declarations match the final code and test evidence.
 - [ ] Store-policy platform blocks are covered by tests.
 - [ ] Listing assets, support URL, privacy URL, publisher identity, and reviewer instructions are complete.

@@ -1,4 +1,4 @@
-/* FluxCatch Settings (design review §5, §6.13) on the v2 system.
+/* Havre Settings (design review §5, §6.13) on the v2 system.
    One 880 column, as on Downloads: the page title and the nav share the
    column edge; the setting rows start on the content column (nav 200 + gap 48)
    and end on the column's right edge. Three left edges in all: column edge,

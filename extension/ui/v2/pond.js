@@ -9,7 +9,9 @@
 // Seeded once per install, so the same seed gives the same layer on every
 // surface and across sessions.
 
-const SEED_KEY = "fluxcatch.pondSeed.v1";
+import { readWithLegacy } from "../../lib/legacy-storage.js";
+
+const SEED_KEY = "havre.pondSeed.v1";
 
 // ---------- PRNG: mulberry32, the same sequence as the reference's Rng ----------
 function mulberry32(seed) {
@@ -442,8 +444,7 @@ async function installSeed() {
   try {
     const store = globalThis.chrome?.storage?.local;
     if (store?.get) {
-      const stored = await store.get(SEED_KEY);
-      const value = Number(stored?.[SEED_KEY]);
+      const value = Number(await readWithLegacy(store, SEED_KEY));
       if (Number.isInteger(value) && value > 0) return value;
       const fresh = (crypto.getRandomValues(new Uint32Array(1))[0] || 1) >>> 0;
       await store.set({ [SEED_KEY]: fresh });

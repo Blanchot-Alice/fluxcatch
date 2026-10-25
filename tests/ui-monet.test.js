@@ -67,7 +67,7 @@ test("the designer defaults follow the v2 shape and the shared mark keeps the pa
   // tokens: water in pond, touches in lilac, celadon and rose, the dawn haze
   // in apricot. (Its arrow is the review's indigo #2B2E4A, one step off the
   // --text-primary token #2B2D49; the mark is used as delivered.)
-  const mark = read("icons/fluxcatch-mark.svg");
+  const mark = read("icons/havre-mark.svg");
   const morning = (name) => new RegExp(`${name}:\\s*(#[0-9A-Fa-f]{6})`).exec(tokensCss)?.[1];
   for (const colour of [morning("--pond"), morning("--celadon"), morning("--rose"), morning("--lilac"), morning("--apricot")]) {
     assert.ok(colour, "the token exists in Morning");
@@ -76,8 +76,8 @@ test("the designer defaults follow the v2 shape and the shared mark keeps the pa
   for (const feature of ["feGaussianBlur", "<mask", "linearGradient"]) assert.match(mark, new RegExp(feature), `the 128 mark keeps its ${feature}`);
   // The BrandMark shows the icon file itself; no colour literal and no copy of the drawing in code.
   const components = read("ui/v2/components.js");
-  assert.match(components, /icons\/fluxcatch-mark\.svg/);
-  assert.match(components, /size === "s" \? "\.\.\/icons\/fluxcatch-mark-16\.svg"/, "size s shows the 16 px mark (v3.2 §3.4)");
+  assert.match(components, /icons\/havre-mark\.svg/);
+  assert.match(components, /size === "s" \? "\.\.\/icons\/havre-mark-16\.svg"/, "size s shows the 16 px mark (v3.2 §3.4)");
   assert.doesNotMatch(components, /#[0-9A-Fa-f]{6}\b/);
 });
 

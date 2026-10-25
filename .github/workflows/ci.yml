@@ -94,8 +94,8 @@ jobs:
           python3 scripts/verify_packages.py --expected-commit "$(git rev-parse --short=12 HEAD)"
           cd dist
           sha256sum -c SHA256SUMS
-          extension_sha="$(awk '$2 ~ /^fluxcatch-extension-/ {print $1}' SHA256SUMS)"
-          native_sha="$(awk '$2 ~ /^fluxcatch-native-host-/ {print $1}' SHA256SUMS)"
+          extension_sha="$(awk '$2 ~ /^havre-extension-/ {print $1}' SHA256SUMS)"
+          native_sha="$(awk '$2 ~ /^havre-native-host-/ {print $1}' SHA256SUMS)"
           [[ "$extension_sha" =~ ^[0-9a-f]{64}$ && "$native_sha" =~ ^[0-9a-f]{64}$ ]] || {
             echo "package checksums were not available" >&2
             exit 1
@@ -104,10 +104,10 @@ jobs:
       - name: Upload exact candidate packages
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: fluxcatch-packages-${{ github.run_id }}
+          name: havre-packages-${{ github.run_id }}
           path: |
-            dist/fluxcatch-extension-*.zip
-            dist/fluxcatch-native-host-*.zip
+            dist/havre-extension-*.zip
+            dist/havre-native-host-*.zip
             dist/SHA256SUMS
           if-no-files-found: error
           overwrite: true
@@ -197,7 +197,7 @@ jobs:
       - name: Download exact candidate packages
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: fluxcatch-packages-${{ github.run_id }}
+          name: havre-packages-${{ github.run_id }}
           path: dist
       - name: Read bounded build metadata
         id: metadata
@@ -233,10 +233,10 @@ jobs:
           TESTED_COMMIT: ${{ steps.metadata.outputs.commit }}
         run: |
           python3 scripts/verify_packages.py --expected-commit "$TESTED_COMMIT"
-          mkdir -p "$RUNNER_TEMP/fluxcatch-packaged-extension"
-          unzip -q dist/fluxcatch-extension-*.zip -d "$RUNNER_TEMP/fluxcatch-packaged-extension"
-          export FLUXCATCH_EXTENSION_DIR="$RUNNER_TEMP/fluxcatch-packaged-extension"
-          export FLUXCATCH_EXPECTED_BUILD_COMMIT="$TESTED_COMMIT"
+          mkdir -p "$RUNNER_TEMP/havre-packaged-extension"
+          unzip -q dist/havre-extension-*.zip -d "$RUNNER_TEMP/havre-packaged-extension"
+          export HAVRE_EXTENSION_DIR="$RUNNER_TEMP/havre-packaged-extension"
+          export HAVRE_EXPECTED_BUILD_COMMIT="$TESTED_COMMIT"
           npm run test:e2e
           node <<'NODE'
           const fs = require("node:fs");
@@ -256,7 +256,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: fluxcatch-e2e-${{ github.run_id }}
+          name: havre-e2e-${{ github.run_id }}
           path: |
             e2e/artifacts/latest.json
             e2e/artifacts/screenshots/

@@ -17,7 +17,7 @@ const fixture = (name) => fs.readFileSync(new URL(`./fixtures/sites/${name}`, im
 function loadSiteExtract() {
   const context = vm.createContext({ URL });
   vm.runInContext(siteExtractSource, context, { filename: "site-extract.js" });
-  return context.__fluxcatchSiteExtract;
+  return context.__havreSiteExtract;
 }
 
 /** The inline <script> bodies, metas, heading and title of a fixture page. */

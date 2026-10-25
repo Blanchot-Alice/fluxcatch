@@ -1,13 +1,14 @@
 // UI editor overrides (a developer tool, Lab -> Developer in Settings).
-// Saved per Chrome profile under fluxcatch.uiCustomization.v1 and applied to
+// Saved per Chrome profile under havre.uiCustomization.v1 and applied to
 // the Settings page only while Developer tools is on. Overrides never carry a
 // colour literal of their own: an empty accent means "the theme's --pond".
 // Only layout values apply: copy saved by older editors (its fields are still
 // read and kept, per UI language) never replaces v2 copy, as the rename table
 // asks once the editor moved behind Lab -> Developer.
 
-export const UI_CUSTOMIZATION_STORAGE_KEY = "fluxcatch.uiCustomization.v1";
-export const DEVELOPER_TOOLS_STORAGE_KEY = "fluxcatch.developerTools.v1";
+export const UI_CUSTOMIZATION_STORAGE_KEY = "havre.uiCustomization.v1";
+export const DEVELOPER_TOOLS_STORAGE_KEY = "havre.developerTools.v1";
+import { readWithLegacy } from "../lib/legacy-storage.js";
 
 // Layout defaults equal the v2 tokens, so a default record changes nothing.
 export const DEFAULT_UI_CUSTOMIZATION = Object.freeze({
@@ -130,8 +131,7 @@ function storageApi(explicitStorage) {
 export async function loadUiCustomization(explicitStorage) {
   const storage = storageApi(explicitStorage);
   if (!storage?.get) return { ...DEFAULT_UI_CUSTOMIZATION };
-  const stored = await storage.get(UI_CUSTOMIZATION_STORAGE_KEY);
-  return normalizeUiCustomization(stored?.[UI_CUSTOMIZATION_STORAGE_KEY]);
+  return normalizeUiCustomization(await readWithLegacy(storage, UI_CUSTOMIZATION_STORAGE_KEY));
 }
 
 /** Save a record. Copy overrides are stamped with `language` (the UI language they were written in). */
@@ -147,8 +147,7 @@ export async function saveUiCustomization(value, explicitStorage, { language } =
 export async function loadDeveloperTools(explicitStorage) {
   const storage = storageApi(explicitStorage);
   if (!storage?.get) return false;
-  const stored = await storage.get(DEVELOPER_TOOLS_STORAGE_KEY);
-  return stored?.[DEVELOPER_TOOLS_STORAGE_KEY] === true;
+  return (await readWithLegacy(storage, DEVELOPER_TOOLS_STORAGE_KEY)) === true;
 }
 
 export async function saveDeveloperTools(enabled, explicitStorage) {

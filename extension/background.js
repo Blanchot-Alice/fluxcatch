@@ -1,3 +1,4 @@
+import { migrateLegacyStorage, readWithLegacy } from "./lib/legacy-storage.js";
 import {
   bilibiliDashAssetFamily,
   bilibiliDashTrackId,
@@ -37,7 +38,7 @@ import { BADGE_COLORS } from "./ui/v2/tokens.js";
 // ui/v2/messages/worker.js and failure reasons from lib/job-failure.js; the
 // page-side locale state (ui/v2/locale.js) is not loaded here. The storage key
 // is the one ui/v2/locale.js saves (tests/worker-i18n.test.js keeps the two in step).
-const UI_LANGUAGE_STORAGE_KEY = "fluxcatch.uiLanguage.v1";
+const UI_LANGUAGE_STORAGE_KEY = "havre.uiLanguage.v1";
 let workerLanguagePreference = "auto";
 let workerLanguageChanged = false;
 
@@ -87,9 +88,13 @@ async function isMacPlatform() {
   return /\bMac/.test(String(globalThis.navigator?.userAgent || ""));
 }
 
+// The 0.2.5 keys move to their new names once per worker start (v3.3 A6).
+const legacyStorageMigrated = migrateLegacyStorage().catch(() => null);
+
 const workerLanguageReady = (async () => {
+  await legacyStorageMigrated;
   try {
-    const stored = await chrome.storage?.local?.get?.(UI_LANGUAGE_STORAGE_KEY);
+    const stored = { [UI_LANGUAGE_STORAGE_KEY]: await readWithLegacy(chrome.storage?.local, UI_LANGUAGE_STORAGE_KEY) };
     // A change that arrived while this read was pending is newer.
     if (!workerLanguageChanged) workerLanguagePreference = normalizeLanguagePreference(stored?.[UI_LANGUAGE_STORAGE_KEY]);
   } catch { /* Auto until the preference is readable. */ }
@@ -141,13 +146,13 @@ function failureForError(error) {
   return classifyJobFailure({ text: typeof error === "string" ? error : String(error?.message || "") });
 }
 
-const HOST_NAME = "io.github.blanchot_alice.fluxcatch";
+const HOST_NAME = "io.github.blanchot_alice.havre";
 const NATIVE_API_BINDING_WAIT_MS = 500;
 const NATIVE_API_RECOVERY_KEY = "nativeApiRecovery";
 const NATIVE_API_RECOVERY_WAIT_MS = 35_000;
 const NATIVE_API_RECOVERY_TTL_MS = 2 * 60_000;
 const NATIVE_API_RECOVERY_RESUME_LIMIT = 2;
-const NATIVE_API_UNAVAILABLE_MESSAGE = "本地下载引擎权限已开启，Chrome 正在初始化连接接口。FluxCatch 将自动重试。";
+const NATIVE_API_UNAVAILABLE_MESSAGE = "本地下载引擎权限已开启，Chrome 正在初始化连接接口。Havre 将自动重试。";
 const NATIVE_API_RESTART_MESSAGE = "本地下载引擎权限已开启，但 Chrome 的连接接口长期未恢复。请完全退出并重新启动 Chrome，返回后点击“重新检查”。";
 // Self-heal: a worker that outlived the optional-permission grant never gets
 // the connectNative binding. One extension reload replaces it; the marker keeps
@@ -156,9 +161,9 @@ const NATIVE_API_SELF_HEAL_KEY = "nativeApiSelfHeal";
 const NATIVE_API_SELF_HEAL_COOLDOWN_MS = 5 * 60_000;
 const NATIVE_API_SELF_HEAL_RESTORE_TTL_MS = 2 * 60_000;
 const NATIVE_API_SELF_HEAL_RELOAD_DELAY_MS = 150;
-const NATIVE_API_SELF_HEAL_MESSAGE = "本地下载引擎权限已开启，FluxCatch 正在自动重新加载以完成连接，几秒后即可使用。";
+const NATIVE_API_SELF_HEAL_MESSAGE = "本地下载引擎权限已开启，Havre 正在自动重新加载以完成连接，几秒后即可使用。";
 const NATIVE_HOST_MISSING_MESSAGE = "本地下载引擎尚未安装或未注册。从源码使用时请运行 ./scripts/native-install-wrapper.sh；从 Native ZIP 使用时请运行 ./install-macos.sh。";
-const NATIVE_CONNECTION_FAILED_MESSAGE = "暂时未能连接本地引擎。请稍后点击“重新检查”；若持续失败，请在 chrome://extensions 中查看 FluxCatch 的错误。";
+const NATIVE_CONNECTION_FAILED_MESSAGE = "暂时未能连接本地引擎。请稍后点击“重新检查”；若持续失败，请在 chrome://extensions 中查看 Havre 的错误。";
 const EXTENSION_ORIGIN = chrome.runtime.getURL("");
 const MAX_ITEMS_PER_TAB = 160;
 const HEADER_TTL_MS = 5 * 60 * 1000;
@@ -189,7 +194,7 @@ const MAX_HISTORY_THUMBNAIL_CHARS = 70_000;
 const MAX_JOB_DETAILS = 600;
 const DOWNLOAD_BADGE_REFRESH_MS = 700;
 const FILE_ACTIONS = new Set(["reveal", "open", "trash"]);
-const NATIVE_COMPLETE_MESSAGE = "已保存到 FluxCatch 文件夹";
+const NATIVE_COMPLETE_MESSAGE = "已保存到 Havre 文件夹";
 const MAX_BATCH_DOWNLOADS = 50;
 const USER_URL_PROBE_TIMEOUT_MS = 10_000;
 const DOWNLOADS_PAGE_PATH = "downloads/downloads.html";
@@ -208,13 +213,13 @@ const GENERIC_STREAM_MIN_BYTES = 1_000_000;
 const GENERIC_STREAM_TTL_MS = 2 * 60_000;
 const GENERIC_STREAM_MAX_VIDEOS_PER_TAB = 8;
 const GENERIC_STREAM_PUBLISH_DELAY_MS = 300;
-const DASH_PAIR_SELECTOR_ORIGIN = "https://fluxcatch.invalid";
-const MANIFEST_SELECTOR_ORIGIN = "https://fluxcatch.invalid";
+const DASH_PAIR_SELECTOR_ORIGIN = "https://havre.invalid";
+const MANIFEST_SELECTOR_ORIGIN = "https://havre.invalid";
 // External tools (yt-dlp) run only behind the engine's loopback broker, which
 // the host reports as capabilities.ytdlp.networkDisabled === false; the
 // download gate re-checks that answer on every dispatch (ytdlpNetworkAllowed).
 const SENSITIVE_REQUEST_HEADERS = new Set(["authorization", "cookie", "origin", "referer"]);
-const UI_PORT_NAMES = new Set(["fluxcatch-popup", "fluxcatch-sidepanel", "fluxcatch-downloads"]);
+const UI_PORT_NAMES = new Set(["havre-popup", "havre-sidepanel", "havre-downloads"]);
 const JOB_STATUSES = new Set(["queued", "starting", "downloading", "remuxing", "pausing", "paused", "completed", "failed", "cancelled"]);
 const TERMINAL_JOB_STATUSES = new Set(["completed", "failed", "cancelled"]);
 // A paused job is neither active nor ended: its resumable state lives on
@@ -626,10 +631,10 @@ for (const event of [chrome.webRequest.onCompleted, chrome.webRequest.onErrorOcc
 chrome.runtime.onConnect.addListener((port) => {
   if (!UI_PORT_NAMES.has(port.name) || !isExtensionPage(port.sender)) return;
   hostClients.add(port);
-  if (port.name === "fluxcatch-popup") popupClients.add(port);
+  if (port.name === "havre-popup") popupClients.add(port);
   port.onDisconnect.addListener(() => {
     hostClients.delete(port);
-    if (port.name !== "fluxcatch-popup") return;
+    if (port.name !== "havre-popup") return;
     popupClients.delete(port);
     // Job history is shared with the persistent Side Panel. Closing a transient
     // popup must never mutate that shared state; ended jobs are removed only by
@@ -4134,8 +4139,8 @@ function hlsUnsupportedReason(probe) {
   // key; no license server), so it downloads like any other media playlist.
   // A master playlist has no EXT-X-ENDLIST of its own. Its selected media
   // playlist is revalidated by the native host before any segment is fetched.
-  if (probe.type === "media" && probe.live) return "FluxCatch 0.2.5 暂不支持 HLS 直播录制";
-  if (probe.discontinuity) return "FluxCatch 0.2.5 暂不支持包含时间线切换的 HLS 下载";
+  if (probe.type === "media" && probe.live) return "Havre 0.3.0 暂不支持 HLS 直播录制";
+  if (probe.discontinuity) return "Havre 0.3.0 暂不支持包含时间线切换的 HLS 下载";
   return null;
 }
 
@@ -4249,7 +4254,7 @@ async function startDownload(candidate, options, tabId, context = {}) {
     });
   }
   if (matchesBlockedDomain(url, settings.blockedDomains) || matchesBlockedDomain(candidate?.tabUrl, settings.blockedDomains)) {
-    throw codedError("site_ignored", "该域名已在 FluxCatch 设置中被忽略");
+    throw codedError("site_ignored", "该域名已在 Havre 设置中被忽略");
   }
   const opts = normalizeDownloadOptions(options, settings);
   if (candidate.kind === "hls" || candidate.kind === "dash") {
@@ -4310,7 +4315,7 @@ async function startDownload(candidate, options, tabId, context = {}) {
   // The YouTube quality choice is an upper bound on height for yt-dlp.
   const youtubeMaxHeight = candidate.kind === "youtube" ? resolveYoutubeQualitySelector(candidate, options.variantUrl) : 0;
   if (candidate.kind === "youtube" && candidate.youtubeInspection?.live) {
-    throw codedError("stream_live", "FluxCatch 0.2.5 暂不支持录制 YouTube 直播");
+    throw codedError("stream_live", "Havre 0.3.0 暂不支持录制 YouTube 直播");
   }
   const requestedDashRepresentationIndex = dashPair || candidate.kind !== "dash"
     ? null
@@ -4346,7 +4351,7 @@ async function startDownload(candidate, options, tabId, context = {}) {
   if (!advanced) {
     const id = await chrome.downloads.download({
       url,
-      filename: `FluxCatch/${filename}`,
+      filename: `Havre/${filename}`,
       saveAs: Boolean(opts.saveAs),
       conflictAction: "uniquify"
     });
@@ -4414,7 +4419,7 @@ async function startDownload(candidate, options, tabId, context = {}) {
     if (isPolicyBlocked(url, candidate?.tabUrl)
       || matchesBlockedDomain(url, settings.blockedDomains)
       || matchesBlockedDomain(candidate?.tabUrl, settings.blockedDomains)) {
-      throw codedError("site_ignored", "该域名已在 FluxCatch 设置中被忽略");
+      throw codedError("site_ignored", "该域名已在 Havre 设置中被忽略");
     }
   }
   // The native host receives the selected rendition playlist directly; a media
@@ -4435,7 +4440,7 @@ async function startDownload(candidate, options, tabId, context = {}) {
   if (hlsGroupPair && [nativeHlsUrl, nativeAudioUrl].some((trackUrl) =>
     isPolicyBlocked(trackUrl, candidate?.tabUrl)
     || matchesBlockedDomain(trackUrl, settings.blockedDomains))) {
-    throw codedError("site_ignored", "该域名已在 FluxCatch 设置中被忽略");
+    throw codedError("site_ignored", "该域名已在 Havre 设置中被忽略");
   }
   const jobId = crypto.randomUUID();
   rememberJobSource(jobId, { candidate, tabId, options, pageTitle });
@@ -5029,7 +5034,7 @@ async function notifySelfHealOutcome({ connected, resumed, pendingDownload }) {
         : "worker.notify.readyToDownload");
   try {
     // The ":setup" suffix routes a click (body or button) to Settings.
-    await chrome.notifications.create(`fluxcatch:self-heal:${Date.now()}${connected ? "" : ":setup"}`, {
+    await chrome.notifications.create(`havre:self-heal:${Date.now()}${connected ? "" : ":setup"}`, {
       type: "basic",
       iconUrl: chrome.runtime.getURL("icons/icon128.png"),
       title: workerText(connected
@@ -5314,7 +5319,7 @@ async function maybeNotifyJob(job) {
       ? [{ title: workerText("worker.notify.retry") }]
       : [];
   try {
-    await chrome.notifications.create(`fluxcatch:${job.jobId}:${status}`, {
+    await chrome.notifications.create(`havre:${job.jobId}:${status}`, {
       type: "basic",
       iconUrl: chrome.runtime.getURL("icons/icon128.png"),
       title: workerText(status === "completed" ? "worker.notify.completedTitle" : "worker.notify.failedTitle"),
@@ -5351,13 +5356,13 @@ function completionSummary(job, presentation = jobPresentation(job)) {
 const ENGINE_SETTINGS_PATH = "options/options.html#local-engine";
 
 async function handleNotificationClick(notificationId, buttonIndex) {
-  if (/^fluxcatch:self-heal:\d+:setup$/.test(String(notificationId || ""))) {
+  if (/^havre:self-heal:\d+:setup$/.test(String(notificationId || ""))) {
     // Every "Set up" opens Settings at the local engine section.
     try { await chrome.tabs.create({ url: chrome.runtime.getURL(ENGINE_SETTINGS_PATH) }); } catch { /* the browser refused a new tab */ }
     try { await chrome.notifications.clear(notificationId); } catch { /* already dismissed */ }
     return;
   }
-  const match = /^fluxcatch:(.+):(completed|failed)$/.exec(String(notificationId || ""));
+  const match = /^havre:(.+):(completed|failed)$/.exec(String(notificationId || ""));
   if (!match) return;
   const [, jobId, status] = match;
   try {
@@ -5448,6 +5453,9 @@ async function restoreSession() {
       for (const item of items.slice(0, MAX_ITEMS_PER_TAB)) {
         const url = canonicalizeUrl(item?.url);
         if (!url || isLikelySubtitleResource({ url, mime: item?.mime }) || !["video", "audio", "hls", "dash", "segment", "youtube"].includes(item?.kind)) continue;
+        // Selector candidates written by 0.2.5 carry the old opaque origin;
+        // the next manifest inspection regenerates them (v3.3 A7).
+        if (url.startsWith("https://fluxcatch.invalid/")) continue;
         // Heal session data written by older workers that treated Instagram's
         // query-addressed MediaSource fragments as complete MP4 candidates.
         // Keeping them hidden only in the UI would let the stale rows return on
@@ -6024,7 +6032,7 @@ function friendlyFileActionError(error) {
   if (FAILURE_CODE_SET.has(error?.failureCode) && /^engine_/.test(error.failureCode)) return error;
   const text = String(error?.message || error || "");
   if (/no longer exists/i.test(text)) return codedError("file_missing", "文件已不在下载文件夹中");
-  if (/outside the download folder|not a regular file|Unfinished files|not a file/i.test(text)) return codedError("file_outside_folder", "这个文件不在 FluxCatch 的下载文件夹里，请在 Finder 中打开");
+  if (/outside the download folder|not a regular file|Unfinished files|not a file/i.test(text)) return codedError("file_outside_folder", "这个文件不在 Havre 的下载文件夹里，请在 Finder 中打开");
   if (/Trash/i.test(text)) return codedError("trash_failed", "无法移到废纸篓，请在 Finder 中操作");
   if (/未连接|未授权|not found|connect|超时/i.test(text)) {
     const code = error?.failureCode === "engine_not_responding" || /超时/.test(text)
@@ -6476,7 +6484,7 @@ function normalizeSettings(value) {
     saveAs: Boolean(value.saveAs),
     useNativeForDirect: Boolean(value.useNativeForDirect),
     minimumBytes: boundedInt(value.minimumBytes, 0, 100 * 1024 * 1024, DEFAULT_SETTINGS.minimumBytes),
-    // Live capture is deliberately unavailable in 0.2.5 while external-tool
+    // Live capture is deliberately unavailable in 0.3.0 while external-tool
     // networking is fail-closed. Ignore stale pre-upgrade preferences.
     liveDuration: 0,
     blockedDomains: normalizeDomains(value.blockedDomains),

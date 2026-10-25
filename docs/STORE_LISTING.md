@@ -2,7 +2,7 @@
 
 ## Product name
 
-**FluxCatch — Media Stream Detector**
+**Havre — Media Stream Detector**
 
 Packaged manifest localization currently provides Simplified Chinese (`zh_CN`,
 default) and English (`en`) name/description catalogs. The Store dashboard text
@@ -34,7 +34,7 @@ same-site cookies to call the fixed `api.bilibili.com` page-list and
 playback-metadata APIs after the first trusted playback/preload request.
 Repeated Range signals are coalesced and cooldown-limited. Turning the setting
 off blocks every automatic metadata call; an explicit rescan remains available.
-Page completion and opening or closing FluxCatch only read current results.
+Page completion and opening or closing Havre only read current results.
 Page-provided URLs cannot select an arbitrary metadata endpoint.
 
 ## User-data disclosure
@@ -46,7 +46,7 @@ Disclose **web browsing activity**, **website content/resources**, and **authent
 Use:
 
 - local-first processing;
-- direct media, HLS, and DASH detection; the 0.2.5 native download path supports clear static HLS VOD, including local merging of separate audio renditions, and reports unsupported live, encrypted, discontinuous, or nested separate-audio playlists without downloading them;
+- direct media, HLS, and DASH detection; the 0.3.0 native download path supports clear static HLS VOD, including local merging of separate audio renditions, and reports unsupported live, encrypted, discontinuous, or nested separate-audio playlists without downloading them;
 - the stable build uses packaged media-type tiles instead of fetching page-derived remote thumbnails and exposes no YouTube, yt-dlp, or live-HLS controls;
 - local engine on macOS for most save actions and all advanced processing; detection itself does not require it;
 - DRM-protected media remains unavailable;

@@ -24,7 +24,7 @@ const read = (file) => readFileSync(new URL(file, EXTENSION), "utf8");
 const CJK = /[㐀-鿿　-〿＀-￯]/;
 
 test("the stored key is unchanged from v1, so a saved choice survives the update", () => {
-  assert.equal(UI_LANGUAGE_STORAGE_KEY, "fluxcatch.uiLanguage.v1");
+  assert.equal(UI_LANGUAGE_STORAGE_KEY, "havre.uiLanguage.v1");
   assert.equal(existsSync(new URL("ui/i18n.js", EXTENSION)), false, "the v1 translator is retired");
 });
 

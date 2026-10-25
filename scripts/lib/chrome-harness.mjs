@@ -16,13 +16,13 @@ export const START_TIMEOUT_MS = 25_000;
  * display sleeps because the user is idle, no frame arrives and
  * Page.captureScreenshot never resolves. The default launch flags below
  * (software compositing without vsync or a frame-rate limit) avoid that without
- * touching the display. FLUXCATCH_CAFFEINATE=1 additionally holds a
+ * touching the display. HAVRE_CAFFEINATE=1 additionally holds a
  * "user is active" power assertion for the lifetime of this process.
  */
 export const RENDER_FLAGS = ["--disable-gpu", "--disable-gpu-vsync", "--disable-frame-rate-limit"];
 
 export function keepDisplayAwake() {
-  if (process.platform !== "darwin" || !process.env.FLUXCATCH_CAFFEINATE) return null;
+  if (process.platform !== "darwin" || !process.env.HAVRE_CAFFEINATE) return null;
   try {
     const child = spawn("/usr/bin/caffeinate", ["-d", "-i", "-u", "-w", String(process.pid)], { stdio: "ignore", detached: false });
     child.on("error", () => {});
@@ -61,7 +61,7 @@ export function launch(executable, { profile, extensionDir, lang = "en-US", args
     "--no-first-run", "--no-default-browser-check", "--disable-background-networking", "--disable-component-update",
     "--disable-default-apps", "--disable-sync", "--metrics-recording-only", "--password-store=basic", "--use-mock-keychain",
     ...RENDER_FLAGS,
-    ...(process.env.FLUXCATCH_CHROME_FLAGS ? process.env.FLUXCATCH_CHROME_FLAGS.split(" ").filter(Boolean) : []),
+    ...(process.env.HAVRE_CHROME_FLAGS ? process.env.HAVRE_CHROME_FLAGS.split(" ").filter(Boolean) : []),
     ...extraArgs,
     "about:blank"
   ];

@@ -1,4 +1,4 @@
-/* FluxCatch toolbar popup (design review §6.14) on the v2 system.
+/* Havre toolbar popup (design review §6.14) on the v2 system.
    372 wide and as tall as its content, from 440 up to Chrome's 600 cap;
    gutter 16, lead 32, gap 12: text starts at x = 60. The top bar
    (BrandMark S, "Download a link", Settings) and the Media | Downloads row

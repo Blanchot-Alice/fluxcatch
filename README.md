@@ -1,20 +1,25 @@
 <div align="center">
 
-<img src="docs/assets/icon.png" width="110" alt="FluxCatch logo" />
+<img src="docs/assets/icon.png" width="110" alt="Havre logo" />
 
-# FluxCatch
+# Havre
 
 **Keep what you see.**
 
 *A local-first media downloader for Chrome on macOS*
 
-FluxCatch is a Manifest V3 extension with a small local engine. It notices the
+Havre (*ahv-ruh*) is Le Havre, the port Monet grew up in and the subject of
+*Impression, soleil levant*, the painting Impressionism is named after. The
+common noun *havre* is a harbour, a haven: a place where things come in off
+the water and are kept safe.
+
+Havre is a Manifest V3 extension with a small local engine. It notices the
 media a page is already playing (direct files, HLS, DASH), lists it with an
 honest quality ladder, and saves it on your Mac through a policy-controlled
 native host. No cloud, no relay, no account: the bytes travel between your
 machine and the site you are looking at, nowhere else.
 
-[![Version](https://img.shields.io/badge/version-0.2.5-007AFF?style=flat-square)](https://github.com/Blanchot-Alice/fluxcatch/releases)
+[![Version](https://img.shields.io/badge/version-0.3.0-007AFF?style=flat-square)](https://github.com/Blanchot-Alice/fluxcatch/releases)
 [![Chrome MV3](https://img.shields.io/badge/Chrome-Manifest_V3-8E82AD?style=flat-square&logo=googlechrome&logoColor=white)](https://developer.chrome.com/docs/extensions/develop/migrate)
 [![License: MIT](https://img.shields.io/badge/license-MIT-FF375F?style=flat-square)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS_%2B_Chrome-486D80?style=flat-square)](docs/INSTALL.md)
@@ -30,12 +35,12 @@ machine and the site you are looking at, nowhere else.
 
 | | |
 | --- | --- |
-| 🔍 **Passive detection** | FluxCatch reads what the page itself requested. Optional quality enrichment is rate-limited, single-site, and one switch away from off. |
+| 🔍 **Passive detection** | Havre reads what the page itself requested. Optional quality enrichment is rate-limited, single-site, and one switch away from off. |
 | 📺 **An honest quality ladder** | HLS variants and DASH representations are listed as they are, including the Bilibili ladder your signed-in account can actually play. |
 | 🎚 **Grouped renditions** | Players that never expose a master playlist still get one card with a resolution menu; video and audio are merged losslessly with FFmpeg. |
 | ⏯ **Pause, resume, queue** | Any job can be paused and picked up later: direct files resume from their checkpoint, HLS and DASH reuse every whole segment already on disk. |
 | 📥 **Batch and link downloads** | "Download all" for the page, a link field for any media address, and a save folder you choose through the engine. |
-| 🗂 **A real download history** | Files the engine saves never appear in `chrome://downloads`, so FluxCatch keeps its own day-by-day record with poster frames, search and Finder actions. |
+| 🗂 **A real download history** | Files the engine saves never appear in `chrome://downloads`, so Havre keeps its own day-by-day record with poster frames, search and Finder actions. |
 | ⚡ **Conditional acceleration** | Parallel Range transfers when the server supports them, claimed only where they hold. |
 | 🔒 **Local-first privacy** | No telemetry, no account, no relay. Cookies stay scoped to their origin and are stripped on cross-origin hops. |
 | 🛡️ **DRM stays DRM** | Protected content is detected and reported, never decrypted and never bypassed. |
@@ -71,9 +76,9 @@ Three surfaces and two pages share one design system, in **Morning** and
 | :---: | :---: | :---: |
 | <img src="docs/assets/en/popup.png" height="440" alt="Popup"> | <img src="docs/assets/en/sidepanel.png" height="440" alt="Side panel"> | <img src="docs/assets/en/download-dialog.png" height="440" alt="Download dialog"> |
 
-<p align="center"><img src="docs/assets/en/downloads.png" width="720" alt="FluxCatch downloads page"></p>
+<p align="center"><img src="docs/assets/en/downloads.png" width="720" alt="Havre downloads page"></p>
 
-<p align="center"><img src="docs/assets/en/options.png" width="720" alt="FluxCatch Settings"></p>
+<p align="center"><img src="docs/assets/en/options.png" width="720" alt="Havre Settings"></p>
 
 The ground is a still wash of colour, the **pond layer**: a few drifts of
 celadon, lilac, rose and apricot, seeded once per install, visible only in
@@ -110,8 +115,10 @@ and select `extension/`.
 ```
 
 It pins stable Homebrew paths, checks for Python 3.9 or newer and detects
-FFmpeg. The ready-made [`v0.2.5` packages](https://github.com/Blanchot-Alice/fluxcatch/releases/tag/v0.2.5)
+FFmpeg. The ready-made packages on the [Releases page](https://github.com/Blanchot-Alice/fluxcatch/releases)
 are the alternative: unzip the native bundle whole and run `./install-macos.sh`.
+The installer also carries a 0.2.5 install over: it keeps the save folder you
+chose, replaces the old engine registration and removes the old runtime copy.
 YouTube additionally needs the Mac's own yt-dlp (`brew install yt-dlp`);
 Settings shows that row as "Needs an extra component" until it is there.
 
@@ -175,5 +182,5 @@ Deep dives: [Architecture](docs/ARCHITECTURE.md) · [Design](DESIGN.md) ·
 
 ## License
 
-[MIT](LICENSE). FluxCatch is for media you own or are permitted to save. It
+[MIT](LICENSE). Havre is for media you own or are permitted to save. It
 does not decrypt DRM content or bypass access controls.

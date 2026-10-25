@@ -10,7 +10,7 @@ Use the repository's **Security → Report a vulnerability** form for confidenti
 
 ## Security model
 
-FluxCatch treats page messages, URLs, manifests, HTTP responses, filenames, native messages, and FFmpeg output as untrusted input. The extension layer validates URL schemes, URL userinfo, literal host/IP categories, request purpose, provenance, worker-derived origin allowlists, payload bounds, and required user gestures. Browser fetch APIs do not expose DNS answers or connected socket peers, so the extension does not claim DNS pinning, peer verification, or DNS-rebinding protection.
+Havre treats page messages, URLs, manifests, HTTP responses, filenames, native messages, and FFmpeg output as untrusted input. The extension layer validates URL schemes, URL userinfo, literal host/IP categories, request purpose, provenance, worker-derived origin allowlists, payload bounds, and required user gestures. Browser fetch APIs do not expose DNS answers or connected socket peers, so the extension does not claim DNS pinning, peer verification, or DNS-rebinding protection.
 
 The native client independently validates DNS answers, authorizes and pins the connected peer, rechecks every redirect and manifest child, and ensures sensitive headers removed at a cross-origin transition cannot later reappear. Public networks are the default; explicit local-network opt-in never permits cloud metadata or reserved ranges. The stable profile does not fetch page-derived remote thumbnails. FFmpeg receives local files only, and external-tool networking remains disabled.
 
