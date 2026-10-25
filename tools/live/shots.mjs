@@ -67,7 +67,7 @@ function record(id, status, filename, size, media, sourceUrl, sourceTitle, daysA
     finishedAt: endedAt,
     sourceHost: new URL(sourceUrl).hostname,
     elapsedMs: 118_000,
-    path: status === "completed" ? `/Users/you/Downloads/Havre/${filename}` : null,
+    path: status === "completed" ? `/Users/you/Downloads/${filename}` : null,
     message: message || null,
     error: status === "failed" ? message : null,
     retryable: status !== "completed"

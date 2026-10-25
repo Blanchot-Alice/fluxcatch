@@ -491,6 +491,29 @@ def is_stale_partial_name(name: str) -> bool:
     return name.endswith((".part", ".part.json")) or bool(_STAGING_FILE_NAME.match(name))
 
 
+def is_own_checkpoint(path: Path) -> bool:
+    """Whether a ``.part.json`` is a checkpoint this host wrote: a direct
+    transfer's schema 2 or a staged-segment pause marker, schema 3. It is
+    read without following symlinks and never modified, because the
+    download folder may be ~/Downloads, where other programs keep files of
+    their own with the same suffixes."""
+    if load_segment_checkpoint(path) is not None:
+        return True
+    try:
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > MAX_MESSAGE:
+            return False
+        raw = json.loads(path.read_text("utf-8"))
+    except (OSError, ValueError, UnicodeError):
+        return False
+    return (
+        isinstance(raw, dict)
+        and raw.get("schemaVersion") == 2
+        and isinstance(raw.get("urlSha256"), str)
+        and re.fullmatch(r"[0-9a-f]{64}", raw["urlSha256"]) is not None
+        and isinstance(raw.get("completed"), list)
+    )
+
+
 def cleanup_stale_workdirs(directory: Path, *, now: float | None = None) -> None:
     """Remove private crash remnants for every native temporary-work class.
 
@@ -498,6 +521,10 @@ def cleanup_stale_workdirs(directory: Path, *, now: float | None = None) -> None
     running yet. Partial files are kept for a week so a resumable direct
     download can still pick up its checkpoint, then collected so the user's
     folder does not silently accumulate ``.part`` leftovers after a crash.
+    Only files this host can show it wrote are collected: a staging name
+    with its random hex tag, or a ``.part``/``.part.json`` pair whose
+    checkpoint is one of this host's. A ``.part`` without such a checkpoint
+    may belong to a browser or another downloader and is left alone.
     """
     try:
         entries = list(directory.iterdir())
@@ -505,6 +532,11 @@ def cleanup_stale_workdirs(directory: Path, *, now: float | None = None) -> None
         return
     clock = time.time() if now is None else now
     keep_dirs = _paused_work_dirs(entries, clock)
+    own_checkpoints: dict[str, float] = {}
+    for entry in entries:
+        if entry.name.endswith(".part.json") and is_own_checkpoint(entry):
+            with contextlib.suppress(OSError):
+                own_checkpoints[entry.name] = entry.lstat().st_mtime
     for entry in entries:
         try:
             metadata = entry.lstat()
@@ -533,9 +565,22 @@ def cleanup_stale_workdirs(directory: Path, *, now: float | None = None) -> None
                 if placeholder.is_file() and not placeholder.is_symlink() and placeholder.stat().st_size == 0:
                     placeholder.unlink()
             continue
-        if not stat.S_ISREG(metadata.st_mode) or not is_stale_partial_name(entry.name):
+        if not stat.S_ISREG(metadata.st_mode):
             continue
-        if clock - metadata.st_mtime < STALE_PARTIAL_TTL_SECONDS:
+        if _STAGING_FILE_NAME.match(entry.name):
+            newest = metadata.st_mtime
+        else:
+            checkpoint_name = (
+                entry.name if entry.name.endswith(".part.json")
+                else f"{entry.name}.json" if entry.name.endswith(".part")
+                else ""
+            )
+            if checkpoint_name not in own_checkpoints:
+                continue
+            # A pair goes together: neither half is collected while the
+            # other was touched within the week.
+            newest = max(metadata.st_mtime, own_checkpoints[checkpoint_name])
+        if clock - newest < STALE_PARTIAL_TTL_SECONDS:
             continue
         with contextlib.suppress(OSError):
             entry.unlink()
@@ -1123,16 +1168,27 @@ def commit_file(source: Path, target: Path) -> Path:
     return target
 
 
+# Folders earlier versions created under ~/Downloads by default. Nothing is
+# moved out of them; they sit inside the new default, so their files stay
+# reachable, and the startup sweep still collects this host's leftovers there.
+LEGACY_DEFAULT_DIR_NAMES = ("FluxCatch", "Havre")
+
+
 def default_download_dir() -> Path:
-    """~/Downloads/Havre for a new install. An install that saved into
-    ~/Downloads/FluxCatch and never chose a folder keeps using it, so nothing
-    moves under the user (v3.3 A15)."""
-    home = Path.home()
-    current = home / "Downloads" / "Havre"
-    legacy = home / "Downloads" / "FluxCatch"
-    if legacy.is_dir() and not legacy.is_symlink() and not current.exists():
-        return legacy
-    return current
+    """~/Downloads itself: files are saved straight into the user's
+    Downloads folder and Havre creates no folder of its own there."""
+    return Path.home() / "Downloads"
+
+
+def legacy_default_download_dirs(current: Path) -> list[Path]:
+    """The old default folders that still exist, other than ``current``."""
+    base = default_download_dir()
+    found = []
+    for name in LEGACY_DEFAULT_DIR_NAMES:
+        candidate = base / name
+        if candidate.is_dir() and not candidate.is_symlink() and candidate != current:
+            found.append(candidate)
+    return found
 
 
 def load_host_config(path: Path = CONFIG_PATH, legacy_path: Path | None = None) -> dict[str, Any]:
@@ -1186,7 +1242,7 @@ def validate_download_dir(value: Any) -> Path:
 
 def resolve_download_dir(config: dict[str, Any] | None = None) -> Path:
     """Precedence: HAVRE_DOWNLOAD_DIR (tests, harnesses) > the folder the
-    user chose > ~/Downloads/Havre."""
+    user chose > ~/Downloads."""
     configured = env_setting("DOWNLOAD_DIR")
     if configured:
         directory = Path(configured).expanduser()
@@ -4692,6 +4748,11 @@ class Host:
         self.download_dir = resolve_download_dir(self.config)
         self.known_download_dirs = [path for path in known_download_dirs(self.config) if path != self.download_dir]
         cleanup_stale_workdirs(self.download_dir)
+        if env_setting("DOWNLOAD_DIR") is None:
+            # Only for a real install: a harness that pins the folder never
+            # reaches into the home directory's own Downloads.
+            for legacy_dir in legacy_default_download_dirs(self.download_dir):
+                cleanup_stale_workdirs(legacy_dir)
 
     def send(self, message: dict[str, Any]) -> None:
         payload = json.dumps(message, ensure_ascii=False, separators=(",", ":")).encode("utf-8")

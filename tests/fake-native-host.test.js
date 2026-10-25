@@ -312,7 +312,7 @@ function event() {
 test("the real worker runs DOWNLOAD_URL, pause, resume, cancel and file actions through the stand-in engine", async (t) => {
   const work = tempDir(t, "fake-host-worker");
   const extensionId = extensionIdFromKey(MANIFEST.key);
-  const downloadDir = "/Users/you/Downloads/Havre";
+  const downloadDir = "/Users/you/Downloads";
   const launcher = writeFakeHostLauncher(work, {
     // jobs[1] is a direct file with host.py's empty message; jobs[2] sets
     // its own message.

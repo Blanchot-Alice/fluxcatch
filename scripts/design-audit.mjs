@@ -128,7 +128,7 @@ export function historyFixture(now = Date.now()) {
       filename, size, bytes: size, total: size, media, sourceUrl, sourceTitle, pageTitle: sourceTitle,
       createdAt: endedAt - 120_000, startedAt: endedAt - 118_000, finishedAt: endedAt,
       sourceHost: new URL(sourceUrl).hostname, elapsedMs: 118_000,
-      path: status === "completed" ? `/Users/you/Downloads/Havre/${filename}` : null,
+      path: status === "completed" ? `/Users/you/Downloads/${filename}` : null,
       message: message || null, error: status === "failed" ? message : null, retryable: status !== "completed"
     };
   };
@@ -641,7 +641,7 @@ async function main() {
           // A copy with the engine permission granted, plus a stand-in engine registered in this profile only.
           extensionDir = prepareActiveExtension(EXTENSION_DIR, path.join(work, "extension"));
           const manifest = JSON.parse(fs.readFileSync(path.join(extensionDir, "manifest.json"), "utf8"));
-          const launcher = writeFakeHostLauncher(path.join(work, "host"), { scenario: ACTIVE_SCENARIO, extensionDir, downloadDir: "/Users/you/Downloads/Havre", logFile: path.join(work, "fake-host.log") });
+          const launcher = writeFakeHostLauncher(path.join(work, "host"), { scenario: ACTIVE_SCENARIO, extensionDir, downloadDir: "/Users/you/Downloads", logFile: path.join(work, "fake-host.log") });
           expectedId = extensionIdFromKey(manifest.key);
           registerFakeHost(profile, launcher, expectedId);
         }

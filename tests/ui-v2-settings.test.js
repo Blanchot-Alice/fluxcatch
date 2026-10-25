@@ -183,7 +183,7 @@ let recoverReply = null;
 let failSaves = false;
 let saveGate = null;
 let cancelFolder = false;
-const host = { connected: true, compatible: true, version: "0.3.0", protocolVersion: 1, capabilityProfileVersion: 1, downloadDir: "/Users/someone/Downloads/Havre", capabilities: { ffmpeg: { available: true } } };
+const host = { connected: true, compatible: true, version: "0.3.0", protocolVersion: 1, capabilityProfileVersion: 1, downloadDir: "/Users/someone/Downloads", capabilities: { ffmpeg: { available: true } } };
 const { buildDiagnostics } = await import("../extension/lib/build-profile.js");
 globalThis.chrome = {
   runtime: {
@@ -204,7 +204,7 @@ globalThis.chrome = {
         case "GET_DIAGNOSTICS": return { ok: true, diagnostics: buildDiagnostics({ extensionId: "abcdefghijklmnopabcdefghijklmnop", manifestVersion: "0.3.0", hostStatus: permissions.has("nativeMessaging") ? host : {} }) };
         case "CHOOSE_DOWNLOAD_FOLDER":
           if (cancelFolder) return { ok: false, error: "selection cancelled", code: "cancelled" };
-          return { ok: true, downloadDir: message.reset ? "/Users/someone/Downloads/Havre" : "/Users/someone/Movies/Saved" };
+          return { ok: true, downloadDir: message.reset ? "/Users/someone/Downloads" : "/Users/someone/Movies/Saved" };
         case "OPEN_DOWNLOAD_FOLDER": case "OPEN_DOWNLOADS_PAGE": return { ok: true };
         default: return { ok: false, error: "unknown" };
       }
@@ -435,7 +435,7 @@ test("the status rows: one engine row, merging, Instagram and X, local network; 
   assert.deepEqual(listed().map(([, value]) => value), ["Yes", "Yes", "Yes", "Not yet", "Yes", "Not yet", "Yes", "Needs an extra component", "Yes"], "no tool name in a status word (v3 §3.8)");
   assert.equal($("#row-capability-7 .row-status").dataset.tone, "cancelled");
   assert.equal($("#field-useNativeForDirect").disabled, false);
-  assert.equal($("#row-location .setting-description").textContent, "~/Downloads/Havre");
+  assert.equal($("#row-location .setting-description").textContent, "~/Downloads", "files go straight into Downloads");
   assert.equal($("#row-location .setting-description").hasAttribute("data-user-content"), true, "the path is user content");
   assert.ok(sent.some((message) => message.type === "PING_HOST"));
 });

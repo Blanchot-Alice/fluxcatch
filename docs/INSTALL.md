@@ -102,7 +102,7 @@ The native-host ZIP provides the equivalent root command
 
 The uninstaller removes the Havre runtime and its registered Native Messaging manifest. It removes only known host files and leaves every Downloads directory untouched.
 
-Downloaded files remain in `~/Downloads/Havre/` until the user deletes them. Uninstalling the native host never removes downloaded media.
+Downloaded files remain where they were saved (`~/Downloads` unless another folder was chosen in Settings; earlier versions used `~/Downloads/FluxCatch`) until the user deletes them. Uninstalling the native host never removes downloaded media.
 
 ## Chrome Web Store ID workflow
 
