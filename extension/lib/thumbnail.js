@@ -111,9 +111,9 @@ export function loadPrivacySafeThumbnail(value, fallback, {
   enabled = BUILD_PROFILE.features.remoteThumbnails,
   ...policy
 } = {}) {
-  // The stable profile renders the existing media-type tile without making a
-  // page-derived network request. The bounded raster implementation below is
-  // retained for a future profile that explicitly enables this capability.
+  // A profile without remoteThumbnails renders the media-type tile and makes
+  // no page-derived request; the GitHub profile fetches the bounded raster
+  // below (no credentials, no referrer, no redirects, allowlisted origins).
   if (!enabled) return fallback;
   const url = normalizeThumbnailUrl(value);
   if (!url) return fallback;

@@ -64,12 +64,12 @@ test("the designer defaults follow the v2 shape and the shared mark keeps the pa
   assert.equal(DEFAULT_UI_CUSTOMIZATION.radius, 10, "the v2 panel radius");
   assert.equal(DEFAULT_UI_CUSTOMIZATION.accentColor, "", "the accent defaults to the theme's own --pond");
   // The mark (design review v3.2, G brush arrow) is painted from the Morning
-  // tokens: water in pond, touches in lilac, celadon and rose, the dawn haze
-  // in apricot. (Its arrow is the review's indigo #2B2E4A, one step off the
-  // --text-primary token #2B2D49; the mark is used as delivered.)
+  // tokens: the arrow in the text indigo, water in pond, touches in lilac,
+  // celadon and rose, the dawn haze in apricot.
   const mark = read("icons/havre-mark.svg");
   const morning = (name) => new RegExp(`${name}:\\s*(#[0-9A-Fa-f]{6})`).exec(tokensCss)?.[1];
-  for (const colour of [morning("--pond"), morning("--celadon"), morning("--rose"), morning("--lilac"), morning("--apricot")]) {
+  assert.equal(morning("--text-primary"), "#2B2E4A", "the Morning text indigo is the brief's value, the mark's arrow");
+  for (const colour of [morning("--text-primary"), morning("--pond"), morning("--celadon"), morning("--rose"), morning("--lilac"), morning("--apricot")]) {
     assert.ok(colour, "the token exists in Morning");
     assert.match(mark, new RegExp(colour, "i"), `mark uses ${colour}`);
   }
