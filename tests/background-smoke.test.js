@@ -45,6 +45,9 @@ test("MV3 worker registers network and message listeners during module load", as
   let blockAutomaticTabRead = false;
   let automaticTabReadEntered = null;
   let releaseAutomaticTabRead = null;
+  // Tabs whose chrome.tabs.get answers a macrotask late, the way a busy
+  // browser does; used to interleave two writers of one candidate key.
+  const slowTabLookups = new Set();
   let revokeNativePermissionAfterRecoveryWrite = false;
   let cancelEmitsInterrupted = false;
   let cancelRejects = false;
@@ -183,6 +186,7 @@ test("MV3 worker registers network and message listeners during module load", as
     [43, { id: 43, title: "Document binding fixture", url: "https://page.example.test/document-binding" }],
     [44, { id: 44, title: "Fixture Clip: Studio Walk - Pornhub.com", url: "https://www.pornhub.com/view_video.php?viewkey=645ab8c01b680" }],
     [45, { id: 45, title: "Pasted link fixture", url: "https://page.example.test/paste" }],
+    [49, { id: 49, title: "Fixture Clip: Studio Walk - Pornhub.com", url: "https://www.pornhub.com/view_video.php?viewkey=645ab8c01b680" }],
     [146, { id: 146, title: "An interview with Fixture | The Economist Insider", url: "https://www.economist.com/insider/the-insider/an-interview-with-fixture" }]
   ]);
   // The Economist Insider: the episode API and the site-proxied playlists.
@@ -433,6 +437,7 @@ test("MV3 worker registers network and message listeners during module load", as
           automaticTabReadEntered?.();
           await new Promise((resolve) => { releaseAutomaticTabRead = resolve; });
         }
+        if (slowTabLookups.has(tabId)) await new Promise((resolve) => setTimeout(resolve, 20));
         return tabFixtures.get(tabId) || {};
       },
       sendMessage: async (tabId, message) => {
@@ -2776,6 +2781,44 @@ test("MV3 worker registers network and message listeners during module load", as
   assert.ok(forgedLadder, "the playlist itself is still a candidate");
   assert.deepEqual(forgedLadder.variants, [], "but it claims no ladder");
   assert.equal(forgedLadder.site, "", "and no adapter");
+  // The player's own request for a rendition and the payload scan that names
+  // it can describe the same playlist in the same instant. The observation
+  // carries no page title, so addCandidate looks the tab up after reading the
+  // (still empty) entry; the scan's rendition written during that lookup must
+  // be merged into, not overwritten, or it loses its ladder membership and
+  // shows as a twin card (seen on a slow CI runner).
+  const racedSender = {
+    id: extensionId,
+    url: "https://www.pornhub.com/view_video.php?viewkey=645ab8c01b680",
+    frameId: 0,
+    tab: { id: 49, url: "https://www.pornhub.com/view_video.php?viewkey=645ab8c01b680", title: "Fixture Clip: Studio Walk - Pornhub.com" }
+  };
+  slowTabLookups.add(49);
+  const racedScan = Promise.all([[phMaster1080, 1080, 1920], [phMaster480, 480, 854]].map(([url, height, width]) => sendRuntimeMessage({
+    type: "CONTENT_MEDIA",
+    data: { url, mime: "application/vnd.apple.mpegurl", source: "site-payload", width, height, duration: 4352, title: "Fixture Clip: Studio Walk", ladderKey: "pornhub:431238401", ladderRank: height }
+  }, racedSender)));
+  onBeforeSendHeaders.listeners[0].fn({
+    requestId: "ph-raced", tabId: 49, url: phMaster1080, type: "xmlhttprequest", documentId: "ph-raced-document", frameId: 0,
+    requestHeaders: [{ name: "Referer", value: "https://www.pornhub.com/" }, { name: "Origin", value: "https://www.pornhub.com" }]
+  });
+  onHeadersReceived.listeners[0].fn({
+    requestId: "ph-raced", tabId: 49, url: phMaster1080, type: "xmlhttprequest", documentId: "ph-raced-document", frameId: 0,
+    responseHeaders: [{ name: "content-type", value: "application/vnd.apple.mpegurl" }, { name: "content-length", value: "512" }]
+  });
+  assert.ok((await racedScan).every((response) => response.accepted === true), "both renditions of the scan are accepted");
+  let racedLadder = null;
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    racedLadder = await sendRuntimeMessage({ type: "GET_TAB_MEDIA", tabId: 49 });
+    if (racedLadder.items.length === 1 && (racedLadder.items[0].sources || []).includes("webRequest")) break;
+  }
+  slowTabLookups.delete(49);
+  assert.equal(racedLadder.items.length, 1, "the observed rendition merges into the entry the scan wrote during the tab lookup");
+  assert.deepEqual(racedLadder.items[0].sources.slice().sort(), ["site-payload", "webRequest"]);
+  assert.deepEqual(racedLadder.items[0].variants.map((variant) => variant.height), [1080, 480], "and keeps its ladder");
+  assert.equal(racedLadder.items[0].title, "Fixture Clip: Studio Walk");
+  assert.equal(racedLadder.items[0].provenance, "observed_response", "the player's own response is the stronger provenance");
 
   // ===== The Economist Insider: the session-authenticated episode API names
   // a site-proxied Brightcove master; the worker preloads what the engine

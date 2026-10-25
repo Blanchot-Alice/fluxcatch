@@ -7,6 +7,7 @@
 - Settings sections are separated by one mist line, `hr.section-rule`, the only rule the system allows (design review v3.1 §2.2); the design audit exempts that selector and nothing else.
 - The v3 design review landed: the pond layer (a still, seeded wash of colour in the margins and empty space, masked under every piece of content), state-coloured progress bars, the Downloads controls on the text column, lead frames on rows, a header that is the canvas at scroll 0, the error ring built like the focus ring, and an audit that measures the pond's chroma and lightness in the margins, text contrast against the composited background and the header at scroll 0, with an atlas that prints two runs side by side.
 - Site adapters for YouTube (through the engine's loopback broker and the Mac's own yt-dlp), Pornhub, MissAV, Jable and The Economist Insider, and card titles that rank their sources so a filename never becomes a title.
+- Fixed a lost update in the worker's candidate store: when the player's own request for a rendition and the page scan that names it arrived in the same instant, the request's description (which looks the tab up after reading the still-empty entry) overwrote the scan's entry instead of merging into it, so on a slow machine the rendition lost its ladder membership and showed as a second card beside the quality menu. The entry is re-read after the lookup.
 
 ## 0.2.5 — Unreleased
 

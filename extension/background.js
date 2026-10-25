@@ -2151,11 +2151,17 @@ async function addCandidate(tabId, input, commitGuard = null) {
     }
   }
   const key = `${kind}:${url}`;
-  const old = map.get(key);
+  let old = map.get(key);
   let tab = null;
   if (!old && (!input.pageTitle || !input.tabUrl)) {
     try { tab = await chrome.tabs.get(tabId); } catch { /* tab closed */ }
     if (commitGuard && !commitGuard()) return false;
+    // The same key may have been written while the tab was being looked up:
+    // the payload scan's rendition lands at the moment the player's own
+    // request for it is being described. Merge into that entry instead of
+    // overwriting it, or the rendition loses its ladder membership and its
+    // other sources and shows as a twin card.
+    old = map.get(key);
   }
   const now = Date.now();
   const sources = new Set([...(old?.sources || []), input.source || "unknown"]);
