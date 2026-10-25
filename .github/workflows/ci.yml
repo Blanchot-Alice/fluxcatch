@@ -102,7 +102,7 @@ jobs:
           }
           printf 'extension_sha=%s\nnative_sha=%s\n' "$extension_sha" "$native_sha" >> "$GITHUB_OUTPUT"
       - name: Upload exact candidate packages
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: havre-packages-${{ github.run_id }}
           path: |
@@ -254,7 +254,7 @@ jobs:
           NODE
       - name: Upload redacted E2E evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: havre-e2e-${{ github.run_id }}
           path: |
