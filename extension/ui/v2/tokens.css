@@ -98,6 +98,8 @@
   /* An invalid field's ring and halo (v3 §3.9): the focus ring's construction in vermilion. */
   --ring-invalid: color-mix(in srgb, var(--vermilion) 60%, transparent);
   --halo-invalid: color-mix(in srgb, var(--vermilion) 18%, transparent);
+  /* The Settings section rule (design review v3.1 §2.2): a translucent cool tint. */
+  --rule-section: rgba(43, 46, 74, 0.22);
 
   /* The pond layer's hue families (design review v3 §3.1), in order round
      the drift field: celadon, pond-soft, lilac, rose, apricot. Measured from
@@ -142,6 +144,7 @@
   --scrim: rgba(8, 10, 28, 0.55);
   --ring-invalid: color-mix(in srgb, var(--vermilion-text) 60%, transparent);
   --halo-invalid: color-mix(in srgb, var(--vermilion-text) 18%, transparent);
+  --rule-section: rgba(239, 233, 224, 0.18);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -181,6 +184,25 @@
     --scrim: rgba(8, 10, 28, 0.55);
     --ring-invalid: color-mix(in srgb, var(--vermilion-text) 60%, transparent);
     --halo-invalid: color-mix(in srgb, var(--vermilion-text) 18%, transparent);
+    --rule-section: rgba(239, 233, 224, 0.18);
+  }
+}
+
+/* The section rule under prefers-contrast: more (design review v3.1 §2.2). */
+@media (prefers-contrast: more) {
+  :root,
+  [data-theme="morning"] {
+    --rule-section: rgba(43, 46, 74, 0.36);
+  }
+
+  [data-theme="dusk"] {
+    --rule-section: rgba(239, 233, 224, 0.3);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="morning"]) {
+      --rule-section: rgba(239, 233, 224, 0.3);
+    }
   }
 }
 

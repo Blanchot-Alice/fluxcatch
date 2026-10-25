@@ -186,10 +186,6 @@ html[data-surface="popup"] {
   height: 20px;
 }
 
-.logo-cream { fill: var(--surface); }
-.logo-ring { fill: none; stroke: var(--pond); stroke-opacity: 0.35; }
-.logo-wave { fill: none; stroke: var(--pond); stroke-linecap: round; }
-.logo-pad { fill: var(--celadon); }
 .logo-bloom { fill: var(--rose); }
 
 /* ---------- buttons: primary · secondary · tertiary · destructive · icon ---------- */

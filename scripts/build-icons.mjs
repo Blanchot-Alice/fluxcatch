@@ -1,9 +1,15 @@
 #!/usr/bin/env node
 // Rasterise the extension icons from their SVG sources with Chrome for Testing
-// (the same renderer the extension runs in), transparent outside the disc.
-//   node scripts/build-icons.mjs [--sizes 16,32,48,128]
-// 16 px comes from icons/fluxcatch-mark-16.svg (the pad and the blossom only,
-// design review v3 §3.10); the other sizes from icons/fluxcatch-mark.svg.
+// (the same renderer the extension runs in), at exact size, no post-scaling:
+// the marks use feGaussianBlur filters and a mask, which only a browser engine
+// renders faithfully (design review v3.2 §3).
+//   node scripts/build-icons.mjs [--sizes 16,32,48,128] [--logo] [--sheet <png>]
+// 16 px comes from icons/fluxcatch-mark-16.svg (the dedicated 16 px mark); the
+// other sizes from icons/fluxcatch-mark.svg (the 128 mark). --logo also writes
+// docs/assets/icon.png (the README logo) from the 128 mark at 256 px. --sheet
+// writes a contact sheet of the rasters at 128/48/32/16 on Chrome's light and
+// dark toolbars and on both canvases, plus the in-app BrandMark sizes (24 and
+// 20 px) on both canvases, at device pixel ratio 2.
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -15,9 +21,13 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
 const ICONS = path.join(ROOT, "extension", "icons");
 const argv = process.argv.slice(2);
-const sizesArg = argv.indexOf("--sizes") >= 0 ? argv[argv.indexOf("--sizes") + 1] : "16,32,48,128";
-const SIZES = sizesArg.split(",").map((n) => Number(n.trim())).filter((n) => Number.isInteger(n) && n > 0);
+const option = (name, fallback) => { const index = argv.indexOf(`--${name}`); return index >= 0 ? argv[index + 1] : fallback; };
+const flag = (name) => argv.includes(`--${name}`);
+const SIZES = option("sizes", "16,32,48,128").split(",").map((n) => Number(n.trim())).filter((n) => Number.isInteger(n) && n > 0);
 const SOURCE = (size) => path.join(ICONS, size === 16 ? "fluxcatch-mark-16.svg" : "fluxcatch-mark.svg");
+const LOGO = flag("logo") ? path.join(ROOT, "docs", "assets", "icon.png") : null;
+const LOGO_SIZE = 256;
+const SHEET = option("sheet", null) ? path.resolve(option("sheet", null)) : null;
 
 function chromePath() {
   if (process.env.CHROME_PATH) return process.env.CHROME_PATH;
@@ -69,6 +79,16 @@ class Cdp {
   }
 }
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const dataUrl = (mime, buffer) => `data:${mime};base64,${Buffer.from(buffer).toString("base64")}`;
+
+// The sheet's contexts: Chrome's light and dark toolbars, and the two canvases
+// (the --canvas tokens of Morning and Dusk).
+const CONTEXTS = [
+  { label: "Chrome light toolbar", bg: "#FFFFFF", fg: "#202124" },
+  { label: "Chrome dark toolbar", bg: "#35363A", fg: "#E8EAED" },
+  { label: "Morning canvas", bg: "#F4F0E9", fg: "#2B2E4A" },
+  { label: "Dusk canvas", bg: "#1A1E3D", fg: "#EFE9E0" }
+];
 
 async function main() {
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), "fc-icons-"));
@@ -81,32 +101,85 @@ async function main() {
   const origin = `http://${new URL(wsUrl).host}`;
   const browser = new Cdp(wsUrl);
   await browser.open();
+  // One page per capture: a data: document, an exact viewport, a transparent background.
+  const capture = async (html, width, height, dpr = 1, transparent = true) => {
+    const { targetId } = await browser.send("Target.createTarget", { url: "data:text/html;charset=utf-8," + encodeURIComponent(html), background: true });
+    let target;
+    for (let i = 0; i < 100 && !target; i += 1) {
+      const list = await (await fetch(`${origin}/json/list`)).json();
+      target = list.find((candidate) => candidate.id === targetId && candidate.type === "page");
+      if (!target) await delay(100);
+    }
+    const page = new Cdp(target.webSocketDebuggerUrl);
+    await page.open();
+    await page.send("Page.enable");
+    await page.send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: dpr, mobile: false });
+    if (transparent) await page.send("Emulation.setDefaultBackgroundColorOverride", { color: { r: 0, g: 0, b: 0, a: 0 } });
+    await delay(400);
+    const shot = await page.send("Page.captureScreenshot", { format: "png", clip: { x: 0, y: 0, width, height, scale: 1 }, captureBeyondViewport: false });
+    await browser.send("Target.closeTarget", { targetId });
+    return Buffer.from(shot.data, "base64");
+  };
+  const rasterise = async (svgFile, size) => {
+    const svg = fs.readFileSync(svgFile, "utf8");
+    const html = `<!doctype html><meta charset="utf-8"><style>html,body{margin:0;background:transparent}img{display:block;width:${size}px;height:${size}px}</style><img src="${dataUrl("image/svg+xml", svg)}" width="${size}" height="${size}">`;
+    return capture(html, size, size, 1, true);
+  };
   try {
+    const rasters = new Map();
     for (const size of SIZES) {
-      const svg = fs.readFileSync(SOURCE(size), "utf8");
-      const html = `<!doctype html><meta charset="utf-8"><style>html,body{margin:0;background:transparent}img{display:block;width:${size}px;height:${size}px}</style><img src="data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}" width="${size}" height="${size}">`;
-      const { targetId } = await browser.send("Target.createTarget", { url: "data:text/html;charset=utf-8," + encodeURIComponent(html), background: true });
-      let target;
-      for (let i = 0; i < 100 && !target; i += 1) {
-        const list = await (await fetch(`${origin}/json/list`)).json();
-        target = list.find((candidate) => candidate.id === targetId && candidate.type === "page");
-        if (!target) await delay(100);
-      }
-      const page = new Cdp(target.webSocketDebuggerUrl);
-      await page.open();
-      await page.send("Page.enable");
-      await page.send("Emulation.setDeviceMetricsOverride", { width: size, height: size, deviceScaleFactor: 1, mobile: false });
-      await page.send("Emulation.setDefaultBackgroundColorOverride", { color: { r: 0, g: 0, b: 0, a: 0 } });
-      await delay(300);
-      const shot = await page.send("Page.captureScreenshot", { format: "png", clip: { x: 0, y: 0, width: size, height: size, scale: 1 }, captureBeyondViewport: false });
+      const png = await rasterise(SOURCE(size), size);
       const file = path.join(ICONS, `icon${size}.png`);
-      fs.writeFileSync(file, Buffer.from(shot.data, "base64"));
+      fs.writeFileSync(file, png);
+      rasters.set(size, png);
       console.log(`${path.relative(ROOT, file)} from ${path.basename(SOURCE(size))}`);
-      await browser.send("Target.closeTarget", { targetId });
+    }
+    if (LOGO) {
+      fs.mkdirSync(path.dirname(LOGO), { recursive: true });
+      fs.writeFileSync(LOGO, await rasterise(SOURCE(128), LOGO_SIZE));
+      console.log(`${path.relative(ROOT, LOGO)} from ${path.basename(SOURCE(128))} at ${LOGO_SIZE} px`);
+    }
+    if (SHEET) {
+      // Every raster the sheet shows is read back from disk at its exact size.
+      const icon = (size) => `<img src="${dataUrl("image/png", fs.readFileSync(path.join(ICONS, `icon${size}.png`)))}" width="${size}" height="${size}" alt="">`;
+      const mark128 = dataUrl("image/svg+xml", fs.readFileSync(SOURCE(128), "utf8"));
+      const mark16 = dataUrl("image/svg+xml", fs.readFileSync(SOURCE(16), "utf8"));
+      const rows = CONTEXTS.map((context) => `
+        <section style="background:${context.bg};color:${context.fg}">
+          <h2>${context.label}</h2>
+          <div class="sizes">${[128, 48, 32, 16].map((size) => `<figure>${icon(size)}<figcaption>${size}</figcaption></figure>`).join("")}</div>
+        </section>`).join("");
+      const brand = CONTEXTS.slice(2).map((context) => `
+        <section style="background:${context.bg};color:${context.fg}">
+          <h2>BrandMark on the ${context.label.toLowerCase()}</h2>
+          <div class="sizes">
+            <figure><img src="${mark128}" width="24" height="24" alt=""><figcaption>128 mark at 24</figcaption></figure>
+            <figure><img src="${mark128}" width="20" height="20" alt=""><figcaption>128 mark at 20</figcaption></figure>
+            <figure><img src="${mark16}" width="24" height="24" alt=""><figcaption>16 mark at 24</figcaption></figure>
+            <figure><img src="${mark16}" width="20" height="20" alt=""><figcaption>16 mark at 20</figcaption></figure>
+          </div>
+        </section>`).join("");
+      const html = `<!doctype html><meta charset="utf-8"><style>
+        html,body{margin:0;background:#FAF7F2;font:13px/1.4 -apple-system,"Helvetica Neue",sans-serif}
+        body{width:960px}
+        section{padding:18px 28px 22px}
+        h2{margin:0 0 12px;font-size:13px;font-weight:600;letter-spacing:.01em}
+        .sizes{display:flex;align-items:flex-end;gap:40px}
+        figure{margin:0;display:flex;flex-direction:column;align-items:center;gap:10px}
+        figcaption{font-size:11px;opacity:.8}
+        img{display:block}
+      </style>${rows}${brand}`;
+      const height = CONTEXTS.length * 230 + 2 * 120;
+      fs.mkdirSync(path.dirname(SHEET), { recursive: true });
+      fs.writeFileSync(SHEET, await capture(html, 960, height, 2, false));
+      console.log(`${path.relative(ROOT, SHEET)} (contact sheet, device pixel ratio 2)`);
     }
   } finally {
     child.kill("SIGKILL");
-    fs.rmSync(profile, { recursive: true, force: true });
+    await new Promise((resolve) => { const timer = setTimeout(resolve, 3000); child.once("exit", () => { clearTimeout(timer); resolve(); }); });
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      try { fs.rmSync(profile, { recursive: true, force: true }); break; } catch { await delay(300); }
+    }
   }
 }
 

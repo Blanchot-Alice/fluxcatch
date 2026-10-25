@@ -53,7 +53,9 @@ and the per-step notes).
    (`pond.js`) appears in empty space only, and text keeps its value contrast.
 5. Decentred, left-anchored composition; empty states sit in the upper third
    on the text column.
-6. Soft separation: spacing and value steps, never 1px rules. The top bar
+6. Soft separation: spacing and value steps, never 1px rules, with one
+   exception: `hr.section-rule`, the mist line between top-level sections of
+   the Settings page (design review v3.1 §2.2). The top bar
    gains a mist only once the page has scrolled.
 
 ## What the audit holds every screen to

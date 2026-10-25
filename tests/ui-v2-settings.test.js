@@ -327,6 +327,38 @@ test("the page: top bar with the BrandMark only, the display title on the nav ed
   assert.equal($("#sections").hasAttribute("inert"), false, "the page is live once loaded");
 });
 
+test("the section rule (v3.1 §2.2): one hr between consecutive top-level sections, nowhere else, built as a mist line", () => {
+  const children = $("#sections").childNodes.filter((node) => node.localName);
+  const kinds = children.map((node) => node.localName);
+  assert.deepEqual(kinds, kinds.map((kind, index) => (index % 2 ? "hr" : "section")), "sections and rules alternate");
+  assert.equal(kinds[0], "section", "no rule before the first section");
+  assert.equal(kinds.at(-1), "section", "no rule after the last section");
+  const rules = $$("#sections > hr");
+  assert.equal(rules.length, $$("#sections > section").length - 1, "one rule per pair of adjacent sections");
+  for (const rule of rules) assert.equal(rule.className, "section-rule");
+  assert.equal($$("#sections section hr").length, 0, "no rule inside a section");
+  assert.equal($$("#navSlot hr").length, 0, "no rule in the nav");
+  const css = read("extension/options/options.css");
+  const block = /\.section-rule \{([^}]*)\}/.exec(css)?.[1] || "";
+  assert.match(block, /height:\s*1px/);
+  assert.match(block, /margin:\s*28px 0 24px/);
+  assert.match(block, /border:\s*0/);
+  assert.match(block, /background:\s*linear-gradient\(90deg, transparent 0, var\(--rule-section\) 10%, var\(--rule-section\) 90%, transparent 100%\)/);
+  assert.doesNotMatch(block, /box-shadow|border-(top|bottom|left|right)/);
+  assert.match(css, /\.section-rule \+ \.settings-section \{\s*padding-top:\s*0;/, "the section after a rule drops its padding-top");
+  assert.match(css, /\.settings-section:nth-of-type\(2\)/, "the second-section gap counts sections, not rules");
+  const tokens = read("extension/ui/v2/tokens.css");
+  assert.match(tokens, /--rule-section:\s*rgba\(43, 46, 74, 0\.22\)/, "Morning");
+  assert.equal((tokens.match(/--rule-section:\s*rgba\(239, 233, 224, 0\.18\)/g) || []).length, 2, "Dusk, in both dark blocks");
+  const contrast = tokens.slice(tokens.indexOf("@media (prefers-contrast: more)"));
+  assert.match(contrast, /--rule-section:\s*rgba\(43, 46, 74, 0\.36\)/);
+  assert.equal((contrast.match(/--rule-section:\s*rgba\(239, 233, 224, 0\.3\)/g) || []).length, 2);
+  // Settings only: no other surface carries the rule.
+  for (const file of ["extension/popup/popup.js", "extension/sidepanel/sidepanel.js", "extension/downloads/downloads.js", "extension/preview/preview.js"]) {
+    assert.doesNotMatch(read(file), /section-rule/, `${file} has no section rule`);
+  }
+});
+
 test("legacy #localCapabilities opens #local-engine, where the engine is explained exactly once", () => {
   assert.ok(replaced.includes("#local-engine"), "the legacy hash is rewritten");
   // Every Set up elsewhere lands here: the page starts at Status, whose first row is the engine

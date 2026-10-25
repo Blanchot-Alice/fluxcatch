@@ -47,7 +47,7 @@ the failure codes and their sentences.
 - At most 3 left text edges per surface: the outer edge, the text column, one indent.
 - No element with its own background, border or shadow inside another such element. Controls and indicators are exempt (button, input, select, textarea, summary, `a[href]`, `[role=switch|tab|...]`, `.segmented`, `.switch`, `.progress`, `[data-indicator]`, `dialog > form`). A `.field` box counts as part of its control: see Fields in containers.
 - Text contrast at least 4.5:1 in Morning and Dusk; non-text control boundaries at least 3:1.
-- No 1px borders or rules (an inset 1px line on inputs under `prefers-contrast: more` only).
+- No 1px borders or rules (an inset 1px line on inputs under `prefers-contrast: more` only), with one exception: `hr.section-rule`, the mist line between consecutive top-level sections of Settings (v3.1 §2.2): 1px high, the content column wide, `margin: 28px 0 24px`, a background gradient of `--rule-section` fading over the outer 10% at each end, no border, no shadow; the audit's check g exempts that selector alone.
 - No colour literals outside the token files `tokens.css` and `tokens.js`. Use tokens and `color-mix()` of tokens.
 - No tracked caps, no italics, no monospace.
 - One primary button per view.
@@ -207,7 +207,7 @@ calls it with its own locale for notifications and quality labels.
 | Builder | Returns / classes | Notes |
 |---|---|---|
 | `icon(name)` | `svg.icon` | `settings link more search video audio stream folder source copy trash remove clear close chevron rescan workspace` |
-| `brandMark({ size: "s" \| "m" })` | `span.brandmark[data-brandmark]` > `svg.brandmark-logo` + `span.t-wordmark` | `display: contents`; place it inside a `.lead-grid`. S in popup and side panel, M on full pages. No subtitle. |
+| `brandMark({ size: "s" \| "m" })` | `span.brandmark[data-brandmark]` > `img.brandmark-logo` (icons/fluxcatch-mark.svg at m, icons/fluxcatch-mark-16.svg at s) + `span.t-wordmark` | `display: contents`; place it inside a `.lead-grid`. S in popup and side panel, M on full pages. No subtitle. |
 | `button({ kind, label, iconName, title, type, action, jobId })` | `button.btn.btn-{primary\|secondary\|tertiary\|destructive}` | `data-action`, `data-job-id`. Heights 36 (32 compact). Tertiary and destructive bleed 8px so text stays on the grid. One primary per view; destructive is always confirmed. |
 | `iconButton({ iconName, label, action, jobId, haspopup })` | `button.icon-button` 32 × 32 | `title` and `aria-label` from `label`. |
 | `status(tone, label)` | `span.status.t-meta[data-tone]` | 8px dot + word. Tones `progress paused queued complete warning failed cancelled`. Exceptions only. |

@@ -222,7 +222,18 @@ function build() {
     general: buildGeneral,
     lab: buildLab
   };
-  $("#sections").replaceChildren(...SECTIONS.map((section) => sectionNode(section, builders[section.id]())));
+  // One hairline between consecutive top-level sections (design review v3.1
+  // §2.2): never before the first, after the last, inside a section or in the nav.
+  const nodes = [];
+  SECTIONS.forEach((section, index) => {
+    if (index > 0) {
+      const rule = document.createElement("hr");
+      rule.className = "section-rule";
+      nodes.push(rule);
+    }
+    nodes.push(sectionNode(section, builders[section.id]()));
+  });
+  $("#sections").replaceChildren(...nodes);
   writeControls();
   renderEngine();
   renderLocation();

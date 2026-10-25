@@ -31,7 +31,8 @@
 //                   Chinese. User content is excluded.
 //  g  rules       = any visible border, outline, hairline box-shadow (blur 0,
 //                   ≤ 2 px), or element/pseudo-element ≤ 2 px thick and ≥ 16 px
-//                   long with a fill.
+//                   long with a fill. The one exemption is hr.section-rule, the
+//                   mist line between Settings sections (v3.1 §2.2, §3.2).
 //  header         = at scroll position 0 the .topbar is the canvas: its own
 //                   background alpha 0 and no box-shadow, and its ::before /
 //                   ::after band at opacity 0 (v3 §3.6). The driver also checks
@@ -527,7 +528,8 @@ export function pageAudit(cfg) {
     if (!el.matches('.field:has([aria-invalid="true"])')) checkShadow(el, s.boxShadow, "");
     const r = el.getBoundingClientRect();
     const filled = parseColor(s.backgroundColor).a > 0.05 || (s.backgroundImage && s.backgroundImage !== "none");
-    if (filled && ((r.height > 0 && r.height <= 2 && r.width >= 16) || (r.width > 0 && r.width <= 2 && r.height >= 16)) && !el.closest(cfg.indicatorSelector)) {
+    // hr.section-rule between Settings sections is the one allowed rule (v3.1 §3.2); the budget stays 0 for everything else.
+    if (filled && ((r.height > 0 && r.height <= 2 && r.width >= 16) || (r.width > 0 && r.width <= 2 && r.height >= 16)) && !el.closest(cfg.indicatorSelector) && !el.matches("hr.section-rule")) {
       rules.push({ where: describe(el), what: `thin filled element ${Math.round(r.width)}×${Math.round(r.height)}` });
     }
     for (const pseudo of ["::before", "::after"]) {
